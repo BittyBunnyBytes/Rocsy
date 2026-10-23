@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../BunnyBytes/gateway/static/icons/rocsy-v2.svg" alt="Rocsy logo" width="128" height="128">
+  <img src="https://raw.githubusercontent.com/BittyBunnyBytes/Rocsy/main/BunnyBytes/gateway/static/icons/rocsy-v2.svg" alt="Rocsy logo" width="128" height="128">
 </p>
 
 <h1 align="center">Rocsy</h1>
@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/BittyBunnyBytes/Rocsy/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/BittyBunnyBytes/Rocsy?style=flat-square&color=e9a04f"></a>
-  <a href="../LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
+  <a href="https://github.com/BittyBunnyBytes/Rocsy/blob/main/LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
   <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-informational?style=flat-square&logo=linux&logoColor=white">
   <img alt="GPU: AMD ROCm" src="https://img.shields.io/badge/GPU-AMD%20ROCm-ED1C24?style=flat-square&logo=amd&logoColor=white">
   <img alt="Docker Compose" src="https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white">
