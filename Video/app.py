@@ -2910,7 +2910,7 @@ async def _store_reference(content: bytes, original_filename: str | None, conten
     if count_limit is not None and sum(1 for item in same_pool if (item["mime_type"] or "").startswith(f"{category}/")) >= count_limit:
         target.unlink(missing_ok=True)  # the upload checks passed, but a parallel upload got there first
         if thumbnail_stored_name:
-            (settings.upload_dir / thumbnail_stored_name).unlink(missing_ok=True)
+            _unlink_upload(thumbnail_stored_name)
         raise APIError(422, "too_many_references", f"MiniMax H3 allows at most {count_limit} {category} references.")
     # Agentic's private pool can be used together with the user's Reference
     # pool. Keep those aliases distinct, without counting unrelated keyframe
@@ -3066,7 +3066,7 @@ async def update_reference(
                 old_thumbnail = item.get("thumbnail_stored_name")
                 changes["thumbnail_stored_name"] = candidate_name
                 if old_thumbnail:
-                    (settings.upload_dir / old_thumbnail).unlink(missing_ok=True)
+                    _unlink_upload(old_thumbnail)
     updated = store.update_reference(ref_id, **changes)
     await events.publish("references", [public_reference(ref) for ref in store.references()])
     return public_reference(updated)
@@ -3243,10 +3243,34 @@ async def reference_small(ref_id: str) -> FileResponse:
     return FileResponse(target, media_type="image/webp", headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
 
+# Files pinned in Rocsy's RAG & Cache (the gateway publishes their paths in this file in the
+# upload folder): deleting a reference keeps a pinned file on disk, so the pin still works.
+RAG_PINS_FILE = ".rag-pins.json"
+
+
+def _rag_pinned() -> set[str]:
+    try:
+        paths = json.loads((settings.upload_dir / RAG_PINS_FILE).read_text())
+    except (OSError, ValueError):
+        return set()
+    return {str(path) for path in paths} if isinstance(paths, list) else set()
+
+
+def _unlink_upload(name: str, pinned: set[str] | None = None) -> None:
+    """Delete one file from the upload folder, unless it is pinned in RAG & Cache."""
+    if not name:
+        return
+    if name in (_rag_pinned() if pinned is None else pinned):
+        log.info("Kept %s: it is pinned in RAG & Cache", name)
+        return
+    (settings.upload_dir / name).unlink(missing_ok=True)
+
+
 def _unlink_reference_files(item: dict[str, Any]) -> None:
+    pinned = _rag_pinned()
     for field in ("stored_name", "original_stored_name", "thumbnail_stored_name"):
         if item.get(field):
-            (settings.upload_dir / item[field]).unlink(missing_ok=True)
+            _unlink_upload(item[field], pinned)
     for field in ("stored_name", "thumbnail_stored_name"):
         if item.get(field):
             (settings.data_dir / "ref-small" / f"{Path(item[field]).stem}.webp").unlink(missing_ok=True)
@@ -4102,9 +4126,9 @@ async def _store_agentic_media(content: bytes, mime: str, suffix: str, kind: str
         if end - start < 1:
             removed = store.delete_reference(ref["id"])
             if removed:
-                (settings.upload_dir / removed["stored_name"]).unlink(missing_ok=True)
+                _unlink_upload(removed["stored_name"])
                 if removed.get("thumbnail_stored_name"):
-                    (settings.upload_dir / removed["thumbnail_stored_name"]).unlink(missing_ok=True)
+                    _unlink_upload(removed["thumbnail_stored_name"])
             raise ServiceError("The media needs at least one playable second")
         store.update_reference(ref["id"], trim_start=start, trim_end=end)
         item = store.reference(ref["id"]) or item
@@ -4527,9 +4551,9 @@ async def _agentic_research(job: dict[str, Any], config: dict[str, Any], request
                         # Same file again (another URL form of the same image): drop the copy, keep the slot free.
                         removed = store.delete_reference(asset["id"])
                         if removed:
-                            (settings.upload_dir / removed["stored_name"]).unlink(missing_ok=True)
+                            _unlink_upload(removed["stored_name"])
                             if removed.get("thumbnail_stored_name"):
-                                (settings.upload_dir / removed["thumbnail_stored_name"]).unlink(missing_ok=True)
+                                _unlink_upload(removed["thumbnail_stored_name"])
                         observations.append(f"{str(spec.get('url'))[:100]} is the same file as {downloaded_files[digest]}; reuse it")
                         downloaded[key] = downloaded_files[digest]
                         continue

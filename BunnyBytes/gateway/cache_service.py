@@ -42,6 +42,10 @@ def clean_note(note) -> str:
         raise HTTPException(422, "Context note must be 2,000 characters or less")
     return note
 
+# Pinned upload paths, published for Video (Video/app.py reads the same name).
+PINS_FILE = ".rag-pins.json"
+
+
 class UploadCache:
     """A conservative inventory over the explicitly mounted upload root.
 
@@ -64,6 +68,7 @@ class UploadCache:
         # One directory walk serves a whole gallery burst instead of one per image.
         self._scan_lock = Lock()
         self._scan: tuple[float, list[tuple[str, Path, os.stat_result]], dict[str, tuple[str, Path, os.stat_result]]] | None = None
+        self._publish_pins(self._load())
 
     def _load(self) -> dict[str, dict[str, str]]:
         try:
@@ -77,6 +82,19 @@ class UploadCache:
         tmp = self.metadata_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
         os.replace(tmp, self.metadata_path)
+        self._publish_pins(data)
+
+    def _publish_pins(self, data: dict[str, dict[str, str]]) -> None:
+        """PINS_FILE in the upload root: the pinned files' paths only (no aliases or notes), so
+        Video, which deletes reference files from this same folder, can leave pinned ones alone."""
+        paths = sorted({str(pin["path"]) for pin in data.values() if isinstance(pin, dict) and pin.get("pinned") and pin.get("path")})
+        try:
+            target = self.root / PINS_FILE
+            tmp = target.with_name(PINS_FILE + ".tmp")
+            tmp.write_text(json.dumps(paths) + "\n")
+            os.replace(tmp, target)
+        except OSError:
+            pass  # upload root not mounted (tests, a fresh install before the first upload)
 
     def _load_groups(self) -> dict[str, dict]:
         try:
