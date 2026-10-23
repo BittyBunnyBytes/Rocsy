@@ -1,9 +1,10 @@
-fastapi
+fastapi==0.143.5
 uvicorn[standard]
 httpx
 itsdangerous
 jinja2
-python-multipart
+python-multipart==0.0.32
 pywebpush
-pillow
+Pillow==13.0.0
 pyyaml
+starlette==1.7.0

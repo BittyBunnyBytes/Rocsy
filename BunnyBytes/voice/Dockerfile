@@ -16,8 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 \
 # pip does not substitute a CUDA wheel. This installs code, never model weights.
 RUN pip install --no-cache-dir torch==2.11.0 torchaudio==2.11.0 \
     --index-url https://download.pytorch.org/whl/rocm7.2
-RUN pip install --no-cache-dir fastapi==0.115.12 uvicorn==0.34.2 httpx==0.28.1 \
+RUN pip install --no-cache-dir fastapi==0.143.5 starlette==1.7.0 uvicorn==0.34.2 httpx==0.28.1 \
     qwen-tts==0.1.1 soundfile yt-dlp
+# Gradio currently caps Pillow below the release with the image-decoder fixes.
+# Rocsy calls qwen-tts directly and does not use the Gradio UI.
+RUN pip install --no-cache-dir --no-deps Pillow==13.0.0
 RUN apt-get update && apt-get install -y --no-install-recommends sox ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 

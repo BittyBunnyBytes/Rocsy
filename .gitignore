@@ -141,3 +141,15 @@ catalog_local.py
 
 # Compatibility link for host tools that still use the old folder name
 /H3Machine
+.git-credentials
+hosts.yml
+credentials.json
+byte.json
+id_rsa
+id_ed25519
+.ssh/
+.aws/
+.config/
+.npmrc
+.pypirc
+auth.json

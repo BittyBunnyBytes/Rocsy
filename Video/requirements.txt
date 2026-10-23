@@ -1,9 +1,9 @@
-fastapi==0.116.1
+fastapi==0.143.5
 httpx==0.28.1
 Jinja2==3.1.6
-Pillow==11.3.0
+Pillow==13.0.0
 pydantic==2.11.7
-python-multipart==0.0.20
+python-multipart==0.0.32
 uvicorn[standard]==0.35.0
 websockets==17.1
 pywebpush==2.0.3
@@ -12,3 +12,4 @@ edge-tts==7.2.8
 # yt-dlp releases, so every image build takes the newest. Deno is the JS runtime yt-dlp needs for YouTube.
 yt-dlp[default]
 deno
+starlette==1.7.0

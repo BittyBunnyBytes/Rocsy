@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN pip install --no-cache-dir fastapi==0.115.12 uvicorn==0.34.2 httpx==0.28.1
+RUN pip install --no-cache-dir fastapi==0.143.5 starlette==1.7.0 uvicorn==0.34.2 httpx==0.28.1
 WORKDIR /app
 COPY *.py ./
 COPY static ./static

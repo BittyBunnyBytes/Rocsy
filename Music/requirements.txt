@@ -1,7 +1,8 @@
-fastapi==0.116.1
+fastapi==0.143.5
 uvicorn[standard]==0.35.0
 httpx==0.28.1
 websockets==17.1
-python-multipart==0.0.20
+python-multipart==0.0.32
 pydantic==2.11.7
 Jinja2==3.1.6
+starlette==1.7.0
