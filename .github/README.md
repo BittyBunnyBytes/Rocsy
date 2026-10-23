@@ -23,6 +23,15 @@
   <a href="https://ko-fi.com/bittybunnybytes"><img alt="Support me on Ko-fi" src="https://img.shields.io/badge/Donate-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white"></a>
 </p>
 
+<p align="center">Or install from a terminal, no manual download (Linux):</p>
+
+```sh
+curl -fsSL https://rocsy.rocks/install.sh | sh
+```
+
+<p align="center"><sub>Fetches the latest installer, checks its SHA-256 and asks the setup questions in the terminal.
+Add <code>-s -- --defaults</code> after <code>sh</code> for the default install with no questions.</sub></p>
+
 A self-hosted, password-gated AI studio for one machine with an AMD GPU (ROCm). One gateway
 serves video, image, music and voice generation, LoRA training, a local LLM server and an
 agent that drives all of them, and every GPU job goes through one shared queue.
