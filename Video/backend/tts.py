@@ -394,7 +394,7 @@ async def _tiktok_chunk(client: httpx.AsyncClient, settings: dict[str, Any], tex
         try:
             response = await client.post(
                 settings["tiktok_public_url"], data={"service": "TikTok", "voice": voice, "text": text},
-                headers={"User-Agent": "Mozilla/5.0 (H3 Machine)"},
+                headers={"User-Agent": "Mozilla/5.0 (Video)"},
             )
             payload = response.json()
         except (httpx.HTTPError, ValueError) as exc:
@@ -402,7 +402,7 @@ async def _tiktok_chunk(client: httpx.AsyncClient, settings: dict[str, Any], tex
         if not payload.get("success") or not payload.get("audio_url"):
             raise TTSError(f"Public TikTok TTS error: {payload.get('error_msg') or 'no audio returned'}")
         try:
-            audio = await client.get(payload["audio_url"], headers={"User-Agent": "Mozilla/5.0 (H3 Machine)"})
+            audio = await client.get(payload["audio_url"], headers={"User-Agent": "Mozilla/5.0 (Video)"})
             audio.raise_for_status()
         except httpx.HTTPError as exc:
             raise TTSError(f"Couldn't fetch the generated TikTok audio ({type(exc).__name__}).") from exc

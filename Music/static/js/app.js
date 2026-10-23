@@ -308,7 +308,7 @@ $("#jobs-list").addEventListener("click", async (event) => {
   }
 });
 
-// Like H3 Machine's Retry: the job's exact settings, reference and seed go back
+// Like Video's Retry: the job's exact settings, reference and seed go back
 // into the form for review instead of being queued straight away.
 function retryJob(jobId) {
   const job = state.jobs.find((item) => item.id === jobId);

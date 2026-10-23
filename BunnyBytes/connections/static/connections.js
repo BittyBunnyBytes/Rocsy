@@ -153,7 +153,7 @@
       const s = await api("/api/status");
       const toggle = $("toggle");
       pill($("state"), s.running ? "Running" : s.enabled ? "Starting" : "Paused", s.running ? "ok" : s.enabled ? "warn" : "");
-      $("detail").textContent = (!s.configured ? "The bot isn't configured yet. " : s.outputs_available ? "Watching ComfyUI and H3 Machine outputs. "
+      $("detail").textContent = (!s.configured ? "The bot isn't configured yet. " : s.outputs_available ? "Watching ComfyUI and Video outputs. "
         : "An output folder is unavailable. ") + (s.last_error || "");
       toggle.textContent = s.enabled ? "Pause watcher" : "Start watcher";
       toggle.disabled = !s.enabled && (!s.configured || !s.outputs_available);

@@ -9,7 +9,7 @@ start ComfyUI on demand.
 
 Unlike qwen_supervisor.py, ComfyUI is NOT torn down between attempts or
 cycles - it's shared, long-lived infrastructure used concurrently by
-H3 Machine, Music and Krea (see BunnyBytes/docker-compose.yml).
+Video, Music and Krea (see BunnyBytes/docker-compose.yml).
 So /start here is "ensure running, start if not" and is idempotent; there is
 no per-attempt /stop dance, and this supervisor's own shutdown does NOT stop
 ComfyUI (the child is started with start_new_session=True precisely so it
@@ -60,15 +60,15 @@ COMFY_ARGS_LTX = [
     "--enable-dynamic-vram", "--disable-smart-memory", "--async-offload", "2",
     "--cache-ram", "8", "16", "--use-flash-attention",
 ]
-# H3 Machine's MiniMax H3 Reference mode loads a Qwen3-VL-32B text encoder
+# Video's MiniMax H3 Reference mode loads a Qwen3-VL-32B text encoder
 # (comfy_extras/nodes_minimax_h3.py) that the LTX profile's --enable-dynamic-vram
 # staging tries to pre-allocate as one ~27GB buffer, which doesn't fit a 24GB
 # card outright (confirmed 2026-09-22: "Model MiniMaxH3TEModel_ prepared for
 # dynamic VRAM loading. 25882MB Staged" immediately preceded a CUDA OOM,
 # with PyTorch's own allocator holding under 1GB at the time - not
 # fragmentation, the staging buffer itself is just larger than the card).
-# This profile instead matches H3 Machine's own bare-metal/local-mode launch
-# command (AI/H3Machine/.env's H3_COMFY_COMMAND), which uses ComfyUI's
+# This profile instead matches Video's own bare-metal/local-mode launch
+# command (AI/Video/.env's H3_COMFY_COMMAND), which uses ComfyUI's
 # classic per-layer smart-memory offloading instead of a single staging
 # buffer, and is what that command was apparently tuned to avoid this with.
 COMFY_ARGS_H3 = [
@@ -283,7 +283,7 @@ def _gemm_env() -> dict[str, str]:
 # Which GPUs each profile's ComfyUI can see (ROCR_VISIBLE_DEVICES, so the
 # other card doesn't exist for that process at all). ROCm enumerates by PCI
 # bus: 0 = RX 7900 XTX (0a:00.0, main card, drives the desktop), 1 = RX 7800 XT
-# (0d:00.0). Only H3 Machine's multi-GPU settings (Conditioning / Conditioning
+# (0d:00.0). Only Video's multi-GPU settings (Conditioning / Conditioning
 # and VAEs on GPU 1 -> h3_multi, Split weights -> h3_split, Parallel split ->
 # h3_parallel) get both cards; everything else runs on the XTX alone.
 PRIMARY_GPUS = os.environ.get("COMFYUI_PRIMARY_GPUS", "0")
@@ -578,7 +578,7 @@ class ComfyProcess:
             return {"status": "starting", "pid": process.pid, "profile": resolved}
 
     def stop(self) -> dict:
-        """Manual/admin use (and H3 Machine's idle-only NaN-recovery restart) -
+        """Manual/admin use (and Video's idle-only NaN-recovery restart) -
         see module docstring. Stops only this checkout's ComfyUI on
         COMFY_PORT, whether this supervisor spawned it or adopted it."""
         with self._lock:

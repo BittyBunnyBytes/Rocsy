@@ -1,7 +1,7 @@
 """Where downloads go after they land on disk.
 
 - LoRAs for a studio's base model go into that studio's custom LoRA folder and
-  are registered in its LoRA gallery (H3 Machine: MiniMax H3 + LTX; Krea: Krea 2
+  are registered in its LoRA gallery (Video: MiniMax H3 + LTX; Krea: Krea 2
   + Qwen 2.1) with the metadata Civitai / Hugging Face already gave us.
 - GGUF LLMs get a llama-swap entry in ~/AI/Llama/config.yaml. llama-swap only
   reads its config on start, so it is restarted (through hostctl) once no model
@@ -21,8 +21,8 @@ from pathlib import Path
 import httpx
 
 SECRET = os.getenv("QUEUE_INTERNAL_SECRET", "")
-VID = os.getenv("MODELHUB_VID_URL", "http://127.0.0.1:8000/Vid")
-KREA = os.getenv("MODELHUB_KREA_URL", "http://127.0.0.1:8300/Krea")
+VID = os.getenv("MODELHUB_VID_URL", "http://127.0.0.1:8000/Video")
+KREA = os.getenv("MODELHUB_KREA_URL", "http://127.0.0.1:8300/Image")
 LLAMA = os.getenv("MODELHUB_LLAMA_URL", "http://127.0.0.1:8400")
 LLAMA_KEY = os.getenv("LLAMA_API_KEY", "")
 LLAMA_CONFIG = Path(os.getenv("MODELHUB_LLAMA_CONFIG", "/llama-config.yaml"))

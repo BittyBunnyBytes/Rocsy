@@ -46,7 +46,7 @@ MODEL_ROOT = Path(os.getenv("TRAINER_MODEL_ROOT", "/models")).resolve()
 TRAINER_ROOT = Path(os.getenv("TRAINER_REPO", "/opt/trainers")).resolve()
 FIZGIG_LATEST = TRAINER_ROOT / "vendor" / "Fizgig-latest"  # up-to-date checkout (v8.7.9) for MOSS-Image and Qwen Image 2.1
 QUEUE_URL = os.getenv("TRAINER_QUEUE_URL", "http://127.0.0.1:8600").rstrip("/")
-H3_GALLERY_URL = os.getenv("TRAINER_H3_GALLERY_URL", "http://127.0.0.1:8000/Vid").rstrip("/")
+H3_GALLERY_URL = os.getenv("TRAINER_H3_GALLERY_URL", "http://127.0.0.1:8000/Video").rstrip("/")
 QUEUE_SECRET = os.getenv("TRAINER_QUEUE_INTERNAL_SECRET", "")
 LOCK_HEADERS = {"X-Queue-Internal-Secret": QUEUE_SECRET}
 BASE_DIR = Path(__file__).resolve().parent
@@ -869,7 +869,7 @@ async def _publish_final_lora(job_id: str) -> bool:
                 response = await client.post(H3_GALLERY_URL + "/api/internal/trainer/lora", json=payload,
                     headers=LOCK_HEADERS)
                 response.raise_for_status()
-            store.append_log(job_id, f"\n[Gallery] Final LoRA {final.name} added to the H3 Machine gallery.\n")
+            store.append_log(job_id, f"\n[Gallery] Final LoRA {final.name} added to the Video gallery.\n")
             store.update(job_id, stage="Complete · In gallery")
             return True
         except Exception as exc:
@@ -883,7 +883,7 @@ async def _publish_final_lora(job_id: str) -> bool:
 
 # Image families the Image studio's custom LoRA gallery can use -> its model names there.
 IMAGE_GALLERY = {"krea2": "krea", "qwen_image_21": "qwen", "moss_image": "moss", "anima": "anima"}
-KREA_URL = os.getenv("TRAINER_KREA_URL", "http://127.0.0.1:8300/Krea").rstrip("/")
+KREA_URL = os.getenv("TRAINER_KREA_URL", "http://127.0.0.1:8300/Image").rstrip("/")
 
 
 def _copy_for_gallery(source: Path, target: Path) -> None:

@@ -1,7 +1,7 @@
 // Rocsy Settings: Sub-agents tab - every agentic mode's AI in one place. Each card reads and
 // writes that service's own settings API, so this tab and the service's page always agree:
 //   Master Agent  /Agent/api/config            (Hermes provider + model, reasoning)
-//   Video         /Vid/api/enhancement         (H3 Agentic: llama model, thinking, sampling, checks)
+//   Video         /Video/api/enhancement         (H3 Agentic: llama model, thinking, sampling, checks)
 //   Image/Music/Voice  /<studio>/api/agentic/settings  (shared framework)
 //   REA           /REA/api/settings            (Hermes model + thinking for every REA task)
 //   Vibe Coding   /Code/api/settings           (Hermes model + thinking for project sessions)
@@ -37,8 +37,8 @@
       kind: "hermes", url: "/Agent/api/config",
       read: (c) => ({ model: c.model || "", provider: c.provider || "", reasoning: c.reasoning || "default" }),
       write: (m) => ("reasoning" in m ? { reasoning: m.reasoning } : { model: m.model, provider: m.model ? m.provider : "" }) },
-    { key: "video", name: "Video Agentic", sub: "H3, LTX and Wan sessions: plans clips, reviews and fixes them", tint: "var(--bb-blue)", open: ["/Vid/", "Open Video"],
-      ...llama("/Vid/api/enhancement"),
+    { key: "video", name: "Video Agentic", sub: "H3, LTX and Wan sessions: plans clips, reviews and fixes them", tint: "var(--bb-blue)", open: ["/Video/", "Open Video"],
+      ...llama("/Video/api/enhancement"),
       switches: [
         ["agentic_stage_enabled", "Staging previews", "Render every clip with a fast preset first, before the final renders"],
         ["agentic_stage_review", "Hermes reviews the previews", "Sampled frames are checked and failed clips get revised prompts (needs a vision model)"],
@@ -63,13 +63,13 @@
       ],
       numbers: [["agentic_review_rounds", "Max review rounds", 0, 10, 1]],
       primary: ["agentic_stage_enabled", "agentic_stage_review", "agentic_stage_approval", "agentic_final_review"] },
-    { key: "image", name: "Image Agentic", sub: "Krea 2, Qwen Image and Anima planner", tint: "var(--bb-green)", open: ["/Krea/", "Open Image"],
-      ...llama("/Krea/api/agentic/settings"),
+    { key: "image", name: "Image Agentic", sub: "Krea 2, Qwen Image and Anima planner", tint: "var(--bb-green)", open: ["/Image/", "Open Image"],
+      ...llama("/Image/api/agentic/settings"),
       switches: [...PLANNER, ["output_review", "Review the image", "Checks each render against your request and retries clear errors"],
         ["suggest_loras", "Look for relevant LoRAs", "Hermes may enable one gallery LoRA that fits the request"]],
       numbers: [["max_attempts", "Attempts per image", 1, 3, 1]], primary: ["plan_review", "approve_plan", "output_review"] },
-    { key: "music", name: "Music Agentic", sub: "YuE2 and MiniMax Music 3: style and lyrics", tint: "var(--bb-amber)", open: ["/Mus/", "Open Music"],
-      ...llama("/Mus/api/agentic/settings"), switches: PLANNER, numbers: [["max_attempts", "Attempts", 1, 3, 1]], primary: ["plan_review", "approve_plan"] },
+    { key: "music", name: "Music Agentic", sub: "YuE2 and MiniMax Music 3: style and lyrics", tint: "var(--bb-amber)", open: ["/Music/", "Open Music"],
+      ...llama("/Music/api/agentic/settings"), switches: PLANNER, numbers: [["max_attempts", "Attempts", 1, 3, 1]], primary: ["plan_review", "approve_plan"] },
     { key: "voice", name: "Voice Agentic", sub: "Qwen3-TTS, IndexTTS2 and Fish: the spoken text", tint: "var(--bb-red)", open: ["/Voice/", "Open Voice"],
       ...llama("/Voice/api/agentic/settings"), switches: PLANNER, numbers: [["max_attempts", "Attempts", 1, 3, 1]], primary: ["plan_review", "approve_plan"] },
     { key: "rea", name: "REA", sub: "Plans, builds and refines mods; maps games", tint: "#d58cf0", open: ["/REA/", "Open REA"],
@@ -297,7 +297,7 @@
     loaded = true;
     $("sa-grid").replaceChildren(el("p", "sa-note", "Loading the sub-agents…"));
     const [lm, opts] = await Promise.all([
-      call("/Krea/api/agentic/models").catch(() => call("/Vid/api/enhancement/models")).catch(() => ({ models: [] })),
+      call("/Image/api/agentic/models").catch(() => call("/Video/api/enhancement/models")).catch(() => ({ models: [] })),
       call("/Agent/api/options").catch(() => ({})),
     ]);
     llamaModels = { default: lm.default || "", models: lm.models || [] };

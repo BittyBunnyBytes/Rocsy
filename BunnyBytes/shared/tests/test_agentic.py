@@ -39,18 +39,18 @@ class AgenticFlowTest(unittest.IsolatedAsyncioTestCase):
             plan = {'prompt': 'A red bicycle on a wet street at dusk'}
             with patch.object(agentic, 'hermes', new=AsyncMock(side_effect=[plan, {'pass': True}])) as llm, \
                  patch.object(agentic, 'studio_call', new=AsyncMock(return_value={'id': 'abcdefgh1234'})) as studio, \
-                 patch.object(agentic, 'wait_job', new=AsyncMock(return_value={'id': 'abcdefgh1234', 'images': [{'url': '/Krea/image.png'}]})), \
+                 patch.object(agentic, 'wait_job', new=AsyncMock(return_value={'id': 'abcdefgh1234', 'images': [{'url': '/Image/image.png'}]})), \
                  patch.object(agentic, 'review', new=AsyncMock(return_value=(True, 'Image matches request'))):
                 row = agentic.start('image', agentic.AgenticRequest(request='A red bicycle at dusk', settings={'model': 'krea2'}))
                 await agentic.TASKS[row['id']]
             self.assertEqual(row['state'], 'awaiting_feedback')
-            self.assertEqual(row['outputs'], ['/Krea/image.png'])
+            self.assertEqual(row['outputs'], ['/Image/image.png'])
             self.assertEqual(studio.await_args.args[3]['prompt'], plan['prompt'])
             self.assertEqual(llm.await_count, 2)
             self.assertEqual(__import__('json').loads((Path(tmp) / 'agentic-sessions.json').read_text())[0]['state'], 'awaiting_feedback')
             agentic.decide_output(row, agentic.OutputFeedback(action='keep'))
             self.assertEqual(row['state'], 'complete')
-            self.assertEqual(row['kept'], ['/Krea/image.png'])
+            self.assertEqual(row['kept'], ['/Image/image.png'])
             self.assertNotIn(row['id'], agentic.TASKS)
 
     async def test_image_feedback_disapprove_then_approve_then_keep(self):
@@ -59,7 +59,7 @@ class AgenticFlowTest(unittest.IsolatedAsyncioTestCase):
             import agentic
             agentic = importlib.reload(agentic)
             plans = [{'prompt': 'a cat'}, {'pass': True}, {'prompt': 'a black cat'}, {'pass': True}, {'prompt': 'a black cat, rim light'}, {'pass': True}]
-            images = [{'images': [{'url': f'/Krea/{n}.png'}]} for n in (1, 2, 3)]
+            images = [{'images': [{'url': f'/Image/{n}.png'}]} for n in (1, 2, 3)]
             with patch.object(agentic, 'hermes', new=AsyncMock(side_effect=plans)) as llm, \
                  patch.object(agentic, 'studio_call', new=AsyncMock(return_value={'id': 'abcdefgh1234'})) as studio, \
                  patch.object(agentic, 'wait_job', new=AsyncMock(side_effect=images)), \
@@ -79,7 +79,7 @@ class AgenticFlowTest(unittest.IsolatedAsyncioTestCase):
                 agentic.steer(row, '/keep')
             self.assertEqual(row['state'], 'complete')
             self.assertEqual([r['verdict'] for r in row['rounds']], ['disapproved', 'approved', 'kept'])
-            self.assertEqual(row['kept'], ['/Krea/2.png', '/Krea/3.png'])
+            self.assertEqual(row['kept'], ['/Image/2.png', '/Image/3.png'])
             self.assertEqual(studio.await_count, 3)
             with self.assertRaises(ValueError):  # finished: no more verdicts
                 agentic.decide_output(row, agentic.OutputFeedback(action='keep'))
@@ -105,7 +105,7 @@ class AgenticFlowTest(unittest.IsolatedAsyncioTestCase):
             revised = {'style': 'bright piano and drums', 'lyrics': 'different invented words'}
             with patch.object(agentic, 'hermes', new=AsyncMock(side_effect=[first, {'pass': True}, revised, {'pass': True}])), \
                  patch.object(agentic, 'studio_call', new=AsyncMock(return_value={'id': 'abcdefgh1234'})) as studio, \
-                 patch.object(agentic, 'wait_job', new=AsyncMock(return_value={'output_url': '/Mus/api/outputs/abcdefgh1234/stream'})), \
+                 patch.object(agentic, 'wait_job', new=AsyncMock(return_value={'output_url': '/Music/api/outputs/abcdefgh1234/stream'})), \
                  patch.object(agentic, 'review', new=AsyncMock(return_value=(True, 'Audio verified'))):
                 row = agentic.start('music', agentic.AgenticRequest(
                     request='A hopeful piano song', settings={'model': 'minimax_music3', 'duration': 30},
@@ -131,11 +131,11 @@ class AgenticFlowTest(unittest.IsolatedAsyncioTestCase):
             agentic = importlib.reload(agentic)
             prior = {'id': 'prior-session', 'studio': 'music', 'state': 'complete', 'request': 'Warm acoustic song',
                      'guide': '', 'plan': {'style': 'warm guitar', 'lyrics': ''}, 'feedback': 'Audio verified',
-                     'outputs': ['/Mus/api/outputs/abcdefgh1234/stream']}
+                     'outputs': ['/Music/api/outputs/abcdefgh1234/stream']}
             agentic.SESSIONS[prior['id']] = prior
             with patch.object(agentic, 'hermes', new=AsyncMock(side_effect=[{'style': 'warm guitar and strings', 'lyrics': ''}, {'pass': True}])) as llm, \
                  patch.object(agentic, 'studio_call', new=AsyncMock(return_value={'id': 'newjob123456'})), \
-                 patch.object(agentic, 'wait_job', new=AsyncMock(return_value={'output_url': '/Mus/api/outputs/newjob123456/stream'})), \
+                 patch.object(agentic, 'wait_job', new=AsyncMock(return_value={'output_url': '/Music/api/outputs/newjob123456/stream'})), \
                  patch.object(agentic, 'review', new=AsyncMock(return_value=(True, 'Audio verified'))):
                 row = agentic.start('music', agentic.AgenticRequest(
                     request='Warm acoustic song', guide='Add strings', settings={'model': 'minimax_music3'},
@@ -243,7 +243,7 @@ class ParityTest(unittest.IsolatedAsyncioTestCase):
             plans = [{'prompt': 'first'}, {'pass': True}, {'prompt': 'second'}, {'pass': True}]
             with patch.object(agentic, 'hermes', new=AsyncMock(side_effect=plans)) as llm, \
                  patch.object(agentic, 'studio_call', new=AsyncMock(return_value={'id': 'abcdefgh1234'})) as studio, \
-                 patch.object(agentic, 'wait_job', new=AsyncMock(return_value={'images': [{'url': '/Krea/a.png'}]})), \
+                 patch.object(agentic, 'wait_job', new=AsyncMock(return_value={'images': [{'url': '/Image/a.png'}]})), \
                  patch.object(agentic, 'review', new=AsyncMock(return_value=(True, 'ok'))):
                 row = agentic.start('image', agentic.AgenticRequest(request='a bike', settings={'model': 'anima'}, approve_plan=True))
                 await agentic.TASKS[row['id']]
@@ -313,7 +313,7 @@ class ParityTest(unittest.IsolatedAsyncioTestCase):
             plan = {'prompt': 'a woman in a garden, film photo', 'lora': 4}
             with patch.object(agentic, 'hermes', new=AsyncMock(side_effect=[plan, {'pass': True}])), \
                  patch.object(agentic, 'studio_call', new=AsyncMock(side_effect=fake_studio)) as studio, \
-                 patch.object(agentic, 'wait_job', new=AsyncMock(return_value={'images': [{'url': '/Krea/i.png'}]})), \
+                 patch.object(agentic, 'wait_job', new=AsyncMock(return_value={'images': [{'url': '/Image/i.png'}]})), \
                  patch.object(agentic, 'review', new=AsyncMock(return_value=(True, 'ok'))):
                 row = agentic.start('image', agentic.AgenticRequest(request='garden portrait', settings=settings))
                 await agentic.TASKS[row['id']]

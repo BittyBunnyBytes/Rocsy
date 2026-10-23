@@ -183,7 +183,7 @@ async def proxy_request(
 ) -> Response:
     """Generic streaming reverse-proxy for one upstream app.
 
-    `prefix` (e.g. "/Vid") is NOT stripped from the forwarded path by default
+    `prefix` (e.g. "/Video") is NOT stripped from the forwarded path by default
     -- downstream apps are built prefix-aware (root_path / APP_PREFIX) and
     expect to see the full prefixed path, per the plan's root_path finding.
 
@@ -213,7 +213,7 @@ async def proxy_request(
     `lite_images` (mobile data saver, see datasaver.py) sends big images shown
     in <img> tags as smaller WebP copies.
     """
-    full_path = request.url.path  # already includes the prefix, e.g. /Vid/api/generate
+    full_path = request.url.path  # already includes the prefix, e.g. /Video/api/generate
     if strip_prefix and full_path.startswith(prefix):
         full_path = full_path[len(prefix):] or "/"
     raw_query = request.scope.get("query_string", b"")  # preserve exact encoding

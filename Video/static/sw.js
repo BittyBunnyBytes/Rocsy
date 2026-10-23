@@ -1,4 +1,4 @@
-// H3 Machine service worker: shows Web Push notifications (sent by the
+// Video service worker: shows Web Push notifications (sent by the
 // server when a render finishes) even when no tab is open, and focuses the
 // app on the finished job when one is tapped.
 self.addEventListener("install", () => self.skipWaiting());
@@ -9,7 +9,7 @@ const scopeUrl = new URL(self.registration.scope);
 self.addEventListener("push", (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = { body: event.data?.text() }; }
-  event.waitUntil(self.registration.showNotification(data.title || "H3 Machine", {
+  event.waitUntil(self.registration.showNotification(data.title || "Video", {
     body: data.body || "",
     tag: data.tag || "h3-machine",
     renotify: true,

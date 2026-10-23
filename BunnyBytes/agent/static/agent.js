@@ -13,7 +13,8 @@
                   complete: "Complete", completed: "Complete", queued: "Queued", preparing: "Preparing",
                   running: "Running", training: "Training", finalizing: "Finalizing", cancelled: "Cancelled", canceled: "Cancelled" };
   const FINAL = new Set(["complete", "completed", "failed", "cancelled", "canceled", "error", "interrupted"]);
-  const SERVICE = { Vid: "Video", Krea: "Image", Mus: "Music", Motion: "Motion" };   // ids stay Vid/Krea/Mus in data and URLs
+  const SERVICE = { Vid: "Video", Krea: "Image", Mus: "Music", Motion: "Motion" };   // ids stay Vid/Krea/Mus in data
+  const PAGE = { Vid: "Video", Krea: "Image", Mus: "Music" };   // their pages: /Video, /Image, /Music
   const service = (id) => SERVICE[id] || id;
   const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();   // /schedule times
   const cache = new Map();          // id -> {snap, events[], last}
@@ -660,8 +661,8 @@
     ini: [/^\s*\[[\w. -]+\]\s*$/m, /^\s*[\w.-]+\s*=\s*\S/m],
     yaml: [/^\s*[\w.-]+:\s*$/m, /^\s+- \S/m, /^\s{2,}[\w.-]+:\s+\S{1,60}$/m],
   };
-  // MiniMax H3 prompts get H3 Machine's own prompt colours (its PROMPT_SYNTAX / highlightPrompt in
-  // H3Machine/static/js/app.js, without the LoRA triggers and aliases, which need its live LoRA list).
+  // MiniMax H3 prompts get Video's own prompt colours (its PROMPT_SYNTAX / highlightPrompt in
+  // Video/static/js/app.js, without the LoRA triggers and aliases, which need its live LoRA list).
   const H3_TELLS = /\b(integrated_multimodal_description|overall_soundscape|non_diegetic_music|subject_definitions|retention_analysis|detailed_description)\s*:|<(Subject|Picture|Video|Audio) \d+>|\[Shot \d+\]|<d>\s*\[/i;
   const H3_TASK_TYPES = ["keyframe completion", "reference generation", "video editing", "video continuation", "audio reuse", "audio reference"];
   const H3_RETENTION_MARKERS = ["fully_preserved", "partially_preserved", "attribute_transfer", "weak_reference", "fully_copy", "partially_copy"];
@@ -735,7 +736,7 @@
   function codeBlock(source, named) {
     const pre = el("pre", "a-md-code"), code = el("code");
     const want = (named || "").toLowerCase();
-    // An H3 prompt (labelled h3/minimax, or plain/unlabelled with H3 syntax in it): H3 Machine's colours, wrapped.
+    // An H3 prompt (labelled h3/minimax, or plain/unlabelled with H3 syntax in it): Video's colours, wrapped.
     if (["h3", "minimax", "minimax-h3", "hailuo"].includes(want) || (PLAIN_LANGS.has(want) && H3_TELLS.test(source))) {
       highlightH3(code, source);
       pre.classList.add("is-plain", "is-h3"); pre.append(code);
@@ -971,7 +972,7 @@
     $(".a-state", card).textContent = stateText(job.state) + (job.progress != null && !done ? ` ${job.progress}%` : "");
     $(".a-job-label", card).textContent = job.label;
     $(".a-job-err", card).textContent = job.error || "";
-    const open = job.outputs?.at(-1)?.open || (job.service === "Motion" ? "" : `/${job.service}/`);   // Motion has no page of its own
+    const open = job.outputs?.at(-1)?.open || (job.service === "Motion" ? "" : `/${PAGE[job.service] || job.service}/`);   // Motion has no page of its own
     $(".a-open", card).hidden = !open;
     if (open) $(".a-open", card).href = open;
     $(".a-cancel", card).hidden = done;
@@ -1962,7 +1963,7 @@
     { s: "vid", t: "Generate me a video about birds" },
     { s: "vid", t: "Make a 30-second cinematic clip of a storm rolling in over the ocean" },
     { s: "vid", t: "Create a vertical video of a rainy neon city at night" },
-    // Image: Krea / Lustify / Qwen Image, alone and feeding Vid
+    // Image: Krea / MOSS-Image / Qwen Image, alone and feeding Vid
     { s: "img", t: "Make an image of fruit mascot and use that to create a video" },
     { s: "img", t: "Design a cyberpunk poster for a synthwave party" },
     { s: "img", t: "Paint a watercolor mountain landscape at sunrise" },
@@ -2049,7 +2050,7 @@
       caption: `${a.ref} · ${a.name} · ${kb(a.size)}`, open: a.url, name: a.name }));
     return (snap.jobs || []).flatMap((j) => (j.outputs || []).filter((o) => o.url).map((o, i) => ({
       key: `${j.ref}:${i}`, kind: o.kind, url: o.url, thumb: o.thumb || (o.kind === "image" ? o.url : ""),
-      caption: `${j.ref} · ${j.label}`, open: o.open || `/${j.service}/`, name: o.name || "" })));
+      caption: `${j.ref} · ${j.label}`, open: o.open || `/${PAGE[j.service] || j.service}/`, name: o.name || "" })));
   }
   function thumbNode(item) {
     if (item.kind === "image" || item.thumb) { const img = el("img"); img.src = item.thumb || item.url; img.alt = ""; img.loading = "lazy"; img.decoding = "async"; return img; }

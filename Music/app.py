@@ -56,7 +56,7 @@ heartbeat_tasks: dict[str, tuple[asyncio.Task[None], asyncio.Event]] = {}
 # proceed endpoint once the coordinator calls back.
 pending_submissions: dict[str, dict[str, Any]] = {}
 
-PREFIX = settings.mount_prefix  # e.g. "" standalone, "/Mus" behind the BunnyBytes gateway
+PREFIX = settings.mount_prefix  # e.g. "" standalone, "/Music" behind the BunnyBytes gateway
 
 
 def _workflow_model_seeds() -> dict[str, dict[str, Any]]:

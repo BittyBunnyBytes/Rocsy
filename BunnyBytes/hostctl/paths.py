@@ -1,6 +1,6 @@
 """Where Rocsy's folders are on this machine - one place, no hardcoded home directory.
 
-ROOT is the folder that holds BunnyBytes/, H3Machine/, Llama/ ... (hostctl lives in
+ROOT is the folder that holds BunnyBytes/, Video/, Llama/ ... (hostctl lives in
 ROOT/BunnyBytes/hostctl, so it is found from this file). The other folders come from the
 environment, then BunnyBytes/.env (the same values docker compose uses), then a default.
 """

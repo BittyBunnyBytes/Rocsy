@@ -91,7 +91,7 @@ details.agentic-card:not([open]) { gap: 0; }
 .agentic-tab-edited { color: var(--amber, #e5ac48); font-weight: 800; }
 .agentic-preview { max-height: 480px; overflow: auto; margin: 0; padding: 10px; border-radius: 8px; background: var(--field, #0d1419); }
 
-/* Hermes terminal (H3 Machine's enhance log) */
+/* Hermes terminal (Video's enhance log) */
 .agentic-term { position: sticky; top: 0; height: calc(100vh - 120px); min-height: 420px; display: flex; flex-direction: column; overflow: hidden; background: #1e1e1e; border: 1px solid #cd7f32; border-radius: 10px; color: #fff8dc; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; box-shadow: 0 10px 30px #0005; }
 .agentic-term-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid #cd7f32; background: #171717; }
 .agentic-term-head strong { color: #ffd700; }

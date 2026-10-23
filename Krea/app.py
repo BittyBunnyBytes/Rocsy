@@ -99,7 +99,7 @@ heartbeat_tasks: dict[str, tuple[asyncio.Task[None], asyncio.Event]] = {}
 # proceed endpoint once the coordinator calls back.
 pending_submissions: dict[str, dict[str, Any]] = {}
 
-PREFIX = settings.mount_prefix  # e.g. "" standalone, "/Krea" behind the BunnyBytes gateway
+PREFIX = settings.mount_prefix  # e.g. "" standalone, "/Image" behind the BunnyBytes gateway
 
 MODEL_LABELS = {"krea2": "Krea 2", MODEL_LUSTIFY: "Lustify (Krea 2)", MODEL_QWEN_IMAGE_21: "Qwen Image 2.1", MODEL_ANIMA: "Anima", MODEL_MOSS: "MOSS-Image"}
 

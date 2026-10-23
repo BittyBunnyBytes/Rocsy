@@ -132,7 +132,7 @@ service_status: dict[str, Any] = {
     "qwen": {"online": False, "starting": False, "managed": settings.qwen_mode == "local"},
 }
 
-PREFIX = settings.mount_prefix  # e.g. "" for standalone, "/Vid" behind the BunnyBytes gateway
+PREFIX = settings.mount_prefix  # e.g. "" for standalone, "/Video" behind the BunnyBytes gateway
 
 
 def _workflow_model_seeds() -> dict[str, dict[str, Any]]:
@@ -1251,7 +1251,7 @@ async def lifespan(_: FastAPI):
     if backfilled:
         log.info("Timed %d finished job(s) into render_times", backfilled)
     log.info(
-        "H3 Machine starting; workflows=%s,%s; removed_unfinished_jobs=%d",
+        "Video starting; workflows=%s,%s; removed_unfinished_jobs=%d",
         settings.workflow_path.name, settings.ltx_workflow_path.name,
         removed,
     )
@@ -1331,7 +1331,7 @@ async def lifespan(_: FastAPI):
         if removed:
             log.info("Removed %d unfinished generation job(s) during shutdown", removed)
         store.close()
-        log.info("H3 Machine stopped")
+        log.info("Video stopped")
 
 
 # docs_url/redoc_url/openapi_url disabled: not internet-facing on its own
@@ -1355,7 +1355,7 @@ def asset_version() -> str:
         version = f"3.30.0-{newest}"
         _asset_version_cache = (time.monotonic(), version)
     return version
-app = FastAPI(title="H3 Machine", version="3.30.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Video", version="3.30.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.mount(p("/static"), StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 
@@ -1489,7 +1489,7 @@ async def service_worker() -> FileResponse:
 async def web_manifest() -> JSONResponse:
     """Lets phones install the app to the Home Screen - which iOS requires before a site may send notifications."""
     return JSONResponse({
-        "name": "H3 Machine", "short_name": "H3 Machine", "id": f"{PREFIX}/", "start_url": f"{PREFIX}/", "scope": f"{PREFIX}/",
+        "name": "Video", "short_name": "Video", "id": f"{PREFIX}/", "start_url": f"{PREFIX}/", "scope": f"{PREFIX}/",
         "display": "standalone", "background_color": "#0f1418", "theme_color": "#12191e",
         "icons": [
             {"src": f"{PREFIX}/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
@@ -1535,7 +1535,7 @@ async def push_test(body: dict[str, Any]) -> dict[str, bool]:
     if not subscription:
         raise APIError(404, "not_subscribed", "This device isn't subscribed to notifications.")
     sent = await asyncio.to_thread(push.send, subscription, {
-        "title": "H3 Machine notifications are on", "body": "You'll get one of these when a video finishes.",
+        "title": "Video notifications are on", "body": "You'll get one of these when a video finishes.",
         "tag": "h3-test", "url": f"{PREFIX}/",
     })
     return {"ok": sent}
@@ -3950,7 +3950,7 @@ async def _hermes_chat(job: dict[str, Any], config: dict[str, Any], messages: li
 AGENTIC_MAX_ACQUIRED = 24  # one per plan clip at most
 AGENTIC_RESEARCH_ROUNDS = 12
 SCAN_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-KREA_URL = os.getenv("H3_KREA_URL", "http://127.0.0.1:8300/Krea").rstrip("/")
+KREA_URL = os.getenv("H3_KREA_URL", "http://127.0.0.1:8300/Image").rstrip("/")
 AGENTIC_IMAGE_MODELS = {  # named in the prompt/guide -> Krea service model id
     "krea2": re.compile(r"(?i)\bkrea\b"),
     "lustify": re.compile(r"(?i)\blustify\b"),
@@ -4296,7 +4296,7 @@ async def _krea_generate(job: dict[str, Any], spec: dict[str, Any], models: list
                 link = (images[0].get("download_url") if images else None) or state.get("download_url")
                 if not link:
                     raise ServiceError("The image service finished without an image")
-                origin = KREA_URL.split("/Krea")[0]
+                origin = KREA_URL.split("/Image")[0]
                 picture = await client.get(origin + link if link.startswith("/") else link)
                 picture.raise_for_status()
                 mime = picture.headers.get("content-type", "image/png").split(";")[0]
@@ -6540,7 +6540,7 @@ async def _agentic_finish(job: dict[str, Any], request: AgenticRequest, clips: l
               for name, field in PostEditRequest.model_fields.items() if name not in POSTEDIT_AGENT_HIDDEN}
     transitions = ", ".join(sorted(_STITCH_TRANSITION_VALUES))
     instruction = (
-        "You are the Agentic finishing editor in H3 Machine. The final clips are rendered. Apply ONLY the finishing the user asked for, "
+        "You are the Agentic finishing editor in Video. The final clips are rendered. Apply ONLY the finishing the user asked for, "
         f"with these tools: {', '.join(AGENTIC_FINISH_LABELS[t] for t in tools)}. Never propose, inspect, or edit application code.\n"
         'Return ONLY one JSON object {"steps":[...]} with 1-' + str(AGENTIC_FINISH_STEPS) + " steps, run in order. "
         'Refer to a rendered clip by its number (1) and to an earlier step\'s output as "step:N". The LAST step is the result the user gets.\n'

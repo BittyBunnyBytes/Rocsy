@@ -1,6 +1,6 @@
 """Advanced workflow config: per-workflow model-file overrides.
 
-Each studio (Image/Krea, Video/H3 Machine, Music) lists the fixed model files
+Each studio (Image/Krea, Video, Music) lists the fixed model files
 its workflows load - VAE, text encoder, upscalers, built-in LoRAs, ... - as
 "slots". The user can point any slot at another file ComfyUI offers for that
 loader; the override is swapped into the API graph right before it is queued.

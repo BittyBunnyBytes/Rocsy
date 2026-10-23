@@ -49,7 +49,7 @@ class QwenService:
         if (await self.status())["online"]:
             return
         if self.config.qwen_mode != "local":
-            raise ServiceError("Qwen is configured as an external service and cannot be started by H3 Machine.")
+            raise ServiceError("Qwen is configured as an external service and cannot be started by Video.")
         if not self.config.qwen_command_path.is_file():
             raise ServiceError("The configured Qwen command file was not found.")
         comfy_status = await self.comfy.status()

@@ -1,9 +1,9 @@
 """Per-model llama.cpp parameters for the Llama "Parameters" page.
 
 config.yaml (mounted read-only) holds each model's defaults; this page writes
-overrides next to H3 Machine's context file in the shared overrides folder:
+overrides next to Video's context file in the shared overrides folder:
 
-    <model id>.ctx   context size (same file H3 Machine's "Agent context" uses)
+    <model id>.ctx   context size (same file Video's "Agent context" uses)
     <model id>.args  one "--flag value" per line, appended by llama-launch
 
 llama-launch reads both on every model load, so a save applies the next time
@@ -42,7 +42,7 @@ PARAMS = [
     ("--build", "llama.cpp build", "Load", "choice", [], "Which installed llama.cpp runs this model. Core Backend's choice follows Models → Manager → Core Backend → Use this build."),
     ("--backend", "GPU backend", "Load", "choice", BACKENDS, "rocm: ROCm/HIP (where RDNA Boost's kernels are). vulkan: llama.cpp's Vulkan backend (RADV)."),
     ("--flash-attn", "Attention type", "Load", "choice", ATTENTION_TYPES, "on: flash attention (default, fastest, less VRAM). off: standard attention. auto: llama.cpp decides per model."),
-    ("--ctx-size", "Context size", "Load", "int", (4096, 262144), "Tokens of context. Shared with H3 Machine's Agent context."),
+    ("--ctx-size", "Context size", "Load", "int", (4096, 262144), "Tokens of context. Shared with Video's Agent context."),
     ("--batch-size", "Batch size", "Load", "int", (32, 8192), "Logical batch for prompt processing (-b)."),
     ("--ubatch-size", "Micro-batch size", "Load", "int", (32, 4096), "Physical batch (-ub). Larger is faster but uses more VRAM."),
     ("--threads", "Threads", "Load", "int", (1, 64), "CPU threads for generation (-t)."),
@@ -307,7 +307,7 @@ def save(model_id: str, params: dict) -> dict[str, str]:
 
 def _save_strata(model_id: str, params: dict) -> dict[str, str]:
     """A Strata model's choices; a value equal to its default is not stored. The
-    .ctx file is left alone (H3 Machine's Agent context reads it for this model)."""
+    .ctx file is left alone (Video's Agent context reads it for this model)."""
     cleaned: dict[str, str] = {}
     for flag, raw in (params or {}).items():
         if flag not in _STRATA_BY_FLAG:

@@ -12,7 +12,7 @@ The overview and the route table are in the [repo README](../.github/README.md).
 2. **`.env`:** `cp .env.example .env`, then fill in `MASTER_PASSWORD`, `COOKIE_SECRET`,
    `QUEUE_INTERNAL_SECRET`, `LLAMA_API_KEY` and `HOSTCTL_SECRET` (the comments in the file show
    how to generate each one), plus the folders `ROCSY_ROOT` and `ROCSY_COMFY_ROOT`. Compose
-   refuses to start while a required value is empty. The studios (`../H3Machine`, `../Krea`,
+   refuses to start while a required value is empty. The studios (`../Video`, `../Krea`,
    `../Music`) each have their own `.env.example` too.
 3. **Llama config:** `cp ../Llama/config.example.yaml ../Llama/config.yaml`.
 4. **Host services:** `./install-units.sh` installs `bunny-hostctl` (the host helper behind
@@ -46,7 +46,7 @@ for the Trainer, a hand-made Cloudflare tunnel. REA's game folders are written i
 ## Verify locally
 
 - `curl -sI http://127.0.0.1:8080/` redirects to `/login` when you have no cookie.
-- After you log in, `/Vid`, `/Krea`, `/Mus`, `/Voice`, `/Agent` and `/Models` each load with
+- After you log in, `/Video`, `/Image`, `/Music`, `/Voice`, `/Agent` and `/Models` each load with
   no 404s in the browser console.
 - Two GPU jobs from different studios queue one after the other: check `/Queue`.
 - `ss -tlnp`: every Rocsy port is bound to `127.0.0.1`, never `0.0.0.0`.

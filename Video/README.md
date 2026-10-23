@@ -1,8 +1,8 @@
-# H3 Machine
+# Video
 
-H3 Machine is a browser-based control surface for local or remote MiniMax H3 video generation. A FastAPI server owns uploads, prompt enhancement, ComfyUI workflow creation, queue monitoring, persisted job history, and safe output delivery. The frontend is semantic HTML, CSS, and vanilla JavaScript; it has no desktop GUI or filesystem assumptions.
+Video is a browser-based control surface for local or remote MiniMax H3 video generation. A FastAPI server owns uploads, prompt enhancement, ComfyUI workflow creation, queue monitoring, persisted job history, and safe output delivery. The frontend is semantic HTML, CSS, and vanilla JavaScript; it has no desktop GUI or filesystem assumptions.
 
-Run `./run.sh` to start both H3 Machine and its existing Cloudflare tunnel. The
+Run `./run.sh` to start both Video and its existing Cloudflare tunnel. The
 app is then available at `https://rocsy.example.com` and locally at
 `http://localhost:8000`.
 
@@ -40,10 +40,10 @@ must be the same ComfyUI input root, or a shared/mounted equivalent visible to
 ComfyUI. Generated media under `H3_OUTPUT_DIR` is served only when it is
 associated with a recorded job.
 
-Job and reference metadata is stored in SQLite at `H3_DATA_DIR/h3-machine.sqlite3`, so history survives browser refreshes and backend restarts. H3 Machine consumes ComfyUI's WebSocket progress events and persists each rendering job's percentage; live service, percentage, and generation changes are delivered to browsers with Server-Sent Events at `/api/events`.
+Job and reference metadata is stored in SQLite at `H3_DATA_DIR/h3-machine.sqlite3`, so history survives browser refreshes and backend restarts. Video consumes ComfyUI's WebSocket progress events and persists each rendering job's percentage; live service, percentage, and generation changes are delivered to browsers with Server-Sent Events at `/api/events`.
 
 Completed, failed, and cancelled history survives restarts. Jobs still marked as
-preparing, queued, rendering, or cancelling are removed whenever H3 Machine
+preparing, queued, rendering, or cancelling are removed whenever Video
 starts or shuts down so stale queue entries are not restored in the browser.
 
 The browser plays a short two-tone ping when a video completes. Use the
@@ -53,9 +53,9 @@ alerts when the page loads or reconnects.
 
 ## Service modes
 
-ComfyUI and Qwen default to `external` mode. In that mode H3 Machine only checks and calls their HTTP APIs. It never sends process signals to an external service.
+ComfyUI and Qwen default to `external` mode. In that mode Video only checks and calls their HTTP APIs. It never sends process signals to an external service.
 
-For a bare-metal service that H3 Machine may launch itself, set the corresponding mode to `local`:
+For a bare-metal service that Video may launch itself, set the corresponding mode to `local`:
 
 ```bash
 export H3_COMFY_MODE=local
@@ -64,7 +64,7 @@ export H3_QWEN_MODE=local
 export H3_QWEN_COMMAND=/etc/h3-machine/qwen-command.txt
 ```
 
-Only a process started by this H3 Machine process is eligible for termination. Before a render, a locally managed Qwen process is stopped to release GPU memory. Remote services are never killed. H3 Machine remains GPU-agnostic; CUDA/ROCm dependencies belong to ComfyUI and Qwen.
+Only a process started by this Video process is eligible for termination. Before a render, a locally managed Qwen process is stopped to release GPU memory. Remote services are never killed. Video remains GPU-agnostic; CUDA/ROCm dependencies belong to ComfyUI and Qwen.
 
 ## Docker
 
@@ -73,7 +73,7 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-The Compose file runs H3 Machine only. It does not bundle ComfyUI or Qwen. On Linux, `host.docker.internal` is mapped to the host gateway, so the default Compose URLs can reach host-side services. For another container, set the URL to that service name on a shared Docker network. For another machine, use its reachable HTTP address.
+The Compose file runs Video only. It does not bundle ComfyUI or Qwen. On Linux, `host.docker.internal` is mapped to the host gateway, so the default Compose URLs can reach host-side services. For another container, set the URL to that service name on a shared Docker network. For another machine, use its reachable HTTP address.
 
 Mounted storage:
 
@@ -86,7 +86,7 @@ Mounted storage:
 | `./logs` | `/data/logs` | Managed-service logs |
 | `./workflows` | `/app/workflows` | MiniMax H3 workflow (read-only) |
 
-When ComfyUI is outside the H3 Machine container, both processes must see compatible input and output mounts. Point their input/output directories at the same host directories or shared volumes.
+When ComfyUI is outside the Video container, both processes must see compatible input and output mounts. Point their input/output directories at the same host directories or shared volumes.
 
 ## Main API
 

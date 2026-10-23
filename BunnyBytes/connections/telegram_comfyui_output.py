@@ -38,9 +38,9 @@ DEFAULT_OUTPUT_DIR = Path(os.path.expanduser(os.getenv("ROCSY_COMFY_SHARED") or 
 DEFAULT_CONFIG = SCRIPT_DIR / ".telegram-comfyui.json"
 DEFAULT_STATE = SCRIPT_DIR / ".telegram-comfyui-state.json"
 DEFAULT_COMFY_URL = "http://127.0.0.1:8189"
-# H3 Machine renders through ComfyUI Desktop's Bunny instance (port 8189 per
+# Video renders through ComfyUI Desktop's Bunny instance (port 8189 per
 # its .env), which writes to its own install's output dir, not the shared
-# one above -- see H3Machine's docker-compose.yml for why that path is stale.
+# one above -- see Video's docker-compose.yml for why that path is stale.
 DEFAULT_H3_OUTPUT_DIR = Path(os.path.expanduser(os.getenv("ROCSY_COMFY_ROOT") or "~/ComfyUI")) / "output"
 DEFAULT_H3_COMFY_URL = "http://127.0.0.1:8189"
 DEFAULT_H3_STATE = SCRIPT_DIR / ".telegram-comfyui-state-h3.json"
@@ -271,7 +271,7 @@ def output_files(output_dir: Path) -> dict[Path, tuple[int, int]]:
 
 def is_h3_intermediate(source: Source, path: Path) -> bool:
     """H3's numbered jobs create a preview and silent video before the final -audio.mp4."""
-    return source.label == "H3 Machine" and bool(H3_INTERMEDIATE.fullmatch(path.name))
+    return source.label == "Video" and bool(H3_INTERMEDIATE.fullmatch(path.name))
 
 
 def load_state(state_path: Path, output_dir: Path) -> dict[Path, tuple[int, int]] | None:
@@ -678,7 +678,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE)
     parser.add_argument("--comfy-url", default=DEFAULT_COMFY_URL)
     parser.add_argument(
-        "--no-h3", action="store_true", help="don't also watch H3 Machine's output directory"
+        "--no-h3", action="store_true", help="don't also watch Video's output directory"
     )
     parser.add_argument("--h3-output-dir", type=Path, default=DEFAULT_H3_OUTPUT_DIR)
     parser.add_argument("--h3-state", type=Path, default=DEFAULT_H3_STATE)
@@ -715,7 +715,7 @@ def main() -> None:
         if not args.no_h3:
             sources.append(
                 Source(
-                    "H3 Machine",
+                    "Video",
                     args.h3_output_dir.expanduser().resolve(),
                     args.h3_comfy_url,
                     args.h3_state.expanduser().resolve(),

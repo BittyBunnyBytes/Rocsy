@@ -971,7 +971,7 @@ def _storage_file_is_safe(label: str, path: Path, root: Path, cache: dict[Path, 
     ComfyUI's mounted output root is already an output-only boundary. The
     agent workspace is mixed-use: only media a chat session made is eligible
     (<session id>/..., not in a project folder or a protected directory).
-    The uploads folder is H3 Machine's reference library too: only files put
+    The uploads folder is Video's reference library too: only files put
     there through the Cache page (top level, own names, not pinned) are eligible.
     """
     if label == "ComfyUI outputs":
@@ -982,7 +982,7 @@ def _storage_file_is_safe(label: str, path: Path, root: Path, cache: dict[Path, 
         return False
     if label == "User uploads":
         # Sub-folders (agentic-sessions/, .retry-cache/) and <uuid hex>.<ext> names belong to
-        # H3 Machine, whose database still points at them; H3 sweeps its own unused ones.
+        # Video, whose database still points at them; H3 sweeps its own unused ones.
         return (len(relative.parts) == 1 and not path.name.startswith(".")
                 and not _H3_STORED_NAME.fullmatch(path.name) and relative.as_posix() not in pinned)
     if len(relative.parts) < 2 or not _SESSION_DIR.fullmatch(relative.parts[0]):
@@ -1059,7 +1059,7 @@ async def _delete_cards_for_files(selected: set[Path]) -> tuple[int, int]:
     async with httpx.AsyncClient(timeout=8.0) as client:
         for service in ("Vid", "Krea", "Mus"):
             try:
-                response = await client.get(f"{UPSTREAMS[service]}/{service}/api/jobs")
+                response = await client.get(f"{UPSTREAMS[service]}{APP_PATHS[service]}/api/jobs")
                 response.raise_for_status()
                 jobs = response.json()
                 if not isinstance(jobs, list):
@@ -1082,7 +1082,7 @@ async def _delete_cards_for_files(selected: set[Path]) -> tuple[int, int]:
                 if not linked.intersection(selected):
                     continue
                 try:
-                    removed = await client.delete(f"{UPSTREAMS[service]}/{service}/api/jobs/{job.get('id')}")
+                    removed = await client.delete(f"{UPSTREAMS[service]}{APP_PATHS[service]}/api/jobs/{job.get('id')}")
                     if removed.status_code == 200:
                         deleted += 1
                     elif removed.status_code != 404:
@@ -1628,7 +1628,7 @@ async def test_notification(request: Request):
 
 @app.post("/internal/notify")
 async def internal_notify(request: Request):
-    """Events from the apps (H3 Machine, Trainer) on loopback. Cloudflare's
+    """Events from the apps (Video, Trainer) on loopback. Cloudflare's
     tunnel also arrives on loopback, so the shared secret is what counts;
     anything that came through the tunnel is refused outright."""
     secret = settings.queue_internal_secret
@@ -1801,7 +1801,7 @@ def _has_valid_llama_bearer(request: Request) -> bool:
 
 async def _handle_app_proxy(request: Request, app_name: str, path: str, *, strip_prefix: bool = False) -> Response:
     upstream_base = UPSTREAMS[app_name]
-    full_path = request.url.path  # e.g. /Vid/api/generate -- includes prefix, not stripped
+    full_path = request.url.path  # e.g. /Video/api/generate -- includes prefix, not stripped
 
     authorized = _has_valid_session(request) or (app_name == "Llama" and _has_valid_llama_bearer(request))
     if not authorized:
@@ -1822,7 +1822,7 @@ async def _handle_app_proxy(request: Request, app_name: str, path: str, *, strip
         # know this same value to get past _has_valid_llama_bearer.
         extra_headers = {"authorization": f"Bearer {settings.llama_api_key}"}
     return await proxy_request(
-        request, upstream_base, f"/{app_name}", extra_headers=extra_headers, strip_prefix=strip_prefix,
+        request, upstream_base, APP_PATHS.get(app_name, f"/{app_name}"), extra_headers=extra_headers, strip_prefix=strip_prefix,
         head_inject=theme_link(app_name) + rocsy_bar_link() + data_saver_script() if app_name in THEMED_APPS else "",
         restyle_css=app_name in THEMED_APPS,
         html_transform=lambda html: favicons.apply(
@@ -1832,17 +1832,43 @@ async def _handle_app_proxy(request: Request, app_name: str, path: str, *, strip
     )
 
 
-@app.api_route("/Vid/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+# Studio ids stay Vid/Krea/Mus internally (queue, settings, agent data); their pages moved to
+# /Video, /Image and /Music. The old paths redirect (308 keeps the method), so saved links,
+# chat history and job URLs from before the move still open.
+APP_PATHS = {"Vid": "/Video", "Krea": "/Image", "Mus": "/Music"}
+LEGACY_APP_PATHS = {"/Vid": "/Video", "/Krea": "/Image", "/Mus": "/Music"}
+
+
+@app.api_route("/Vid/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"], include_in_schema=False)
+@app.api_route("/Krea/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"], include_in_schema=False)
+@app.api_route("/Mus/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"], include_in_schema=False)
+@app.get("/Vid", include_in_schema=False)
+@app.get("/Krea", include_in_schema=False)
+@app.get("/Mus", include_in_schema=False)
+async def legacy_app_redirect(request: Request, path: str = ""):
+    target = LEGACY_APP_PATHS["/" + request.url.path.strip("/").split("/")[0]]
+    query = f"?{request.url.query}" if request.url.query else ""
+    return RedirectResponse(url=f"{target}/{path}{query}", status_code=308)
+
+
+@app.get("/Video", include_in_schema=False)
+@app.get("/Image", include_in_schema=False)
+@app.get("/Music", include_in_schema=False)
+async def app_root_redirect(request: Request):
+    return RedirectResponse(url=f"{request.url.path}/", status_code=308)
+
+
+@app.api_route("/Video/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
 async def proxy_vid(request: Request, path: str):
     return await _handle_app_proxy(request, "Vid", path)
 
 
-@app.api_route("/Mus/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+@app.api_route("/Music/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
 async def proxy_mus(request: Request, path: str):
     return await _handle_app_proxy(request, "Mus", path)
 
 
-@app.api_route("/Krea/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+@app.api_route("/Image/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
 async def proxy_krea(request: Request, path: str):
     return await _handle_app_proxy(request, "Krea", path)
 

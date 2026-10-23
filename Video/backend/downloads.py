@@ -34,17 +34,17 @@ DEFAULTS: dict[str, Any] = {
     "enabled": False,
     "apply_to_frames": True,
     "filename_pattern": "{model}_{date}_{id}",
-    "text": {"enabled": False, "text": "© H3 Machine", "position": "bottom-right", "size": 4.0, "opacity": 0.7,
+    "text": {"enabled": False, "text": "© Video", "position": "bottom-right", "size": 4.0, "opacity": 0.7,
              "color": "#ffffff", "outline": True, "box": False, "margin": 3.0, "speed": 1.0, "interval": 3.0},
     "logo": {"enabled": False, "position": "top-right", "width": 12.0, "opacity": 0.8, "margin": 3.0, "speed": 1.0, "interval": 3.0},
     "tiled": {"enabled": False, "text": "H3 MACHINE", "opacity": 0.08, "size": 3.5, "angle": -30, "spacing": 2.2, "color": "#ffffff"},
     # source: "tts" = the phrase spoken by an Edge TTS voice, "file" = an uploaded sound
     # (data/watermark/audio-tag.<ext>). where: start / middle / end / random (seeded by the job).
-    "audio_tag": {"enabled": False, "source": "tts", "text": "Made with H3 Machine", "voice": "en-US-AriaNeural", "volume": 0.8, "where": "end"},
+    "audio_tag": {"enabled": False, "source": "tts", "text": "Made with Rocsy", "voice": "en-US-AriaNeural", "volume": 0.8, "where": "end"},
     "audio_marker": {"enabled": False, "frequency": 19000, "volume": 0.01},
     # fit: letterbox the outro into the frame; fill: crop it to fill the frame.
     "outro": {"enabled": False, "fit": "fit", "keep_audio": True, "volume": 1.0, "fade": 0.3},
-    "metadata": {"strip": True, "title": "", "artist": "", "copyright": "", "comment": "Downloaded from H3 Machine", "description": ""},
+    "metadata": {"strip": True, "title": "", "artist": "", "copyright": "", "comment": "Downloaded from Video", "description": ""},
 }
 LIMITS = {"text": 200, "field": 500, "pattern": 120}
 TAG_WHERE = ("start", "middle", "end", "random")

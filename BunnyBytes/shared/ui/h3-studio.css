@@ -1,5 +1,5 @@
-/* Shared H3 Machine studio shell for Music and Image.
-   H3 Machine remains the visual source; app-specific controls stay in app.css. */
+/* Shared Video studio shell for Music and Image.
+   Video remains the visual source; app-specific controls stay in app.css. */
 body.h3-studio-ui {
   --bg: #0a0f13;
   --panel: #111920;
@@ -271,7 +271,7 @@ body.h3-studio-ui .mobile-tabs { display: none; }
   body.h3-studio-ui .composer-footer { top: 66px; }
 }
 
-/* Phone gallery controls shared by H3 Machine and Image. */
+/* Phone gallery controls shared by Video and Image. */
 .gallery-mobile-options-toggle { display: none !important; }
 @media (max-width: 700px) {
   html:has(#lora-gallery:not([hidden])),
@@ -349,7 +349,7 @@ body.h3-studio-ui .mobile-tabs { display: none; }
   body.h3-studio-ui .composer-footer .primary-button { width: 100%; }
 }
 
-/* H3 Machine's collapsible cards + References card (BunnyReferences in h3-studio.js). */
+/* Video's collapsible cards + References card (BunnyReferences in h3-studio.js). */
 body.h3-studio-ui .card { margin: 0 0 12px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); overflow: clip; }
 body.h3-studio-ui .card-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; list-style: none; cursor: pointer; user-select: none; }
 body.h3-studio-ui .card-head::-webkit-details-marker { display: none; }

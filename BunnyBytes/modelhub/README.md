@@ -56,7 +56,7 @@ Later additions (2026-10-09):
 
 Integrations (2026-10-09, `integrations.py`):
 - **LoRAs → studio galleries.** A LoRA whose base is MiniMax H3 / LTX 2.5 / LTX 2.3 goes to
-  `loras/H3MachineCustom` and is registered in H3 Machine's gallery; Krea 2 / Qwen 2.1 go to
+  `loras/H3MachineCustom` and is registered in Video's gallery; Krea 2 / Qwen 2.1 go to
   `loras/KreaCustom` and Krea's gallery. Registration = `POST <studio>/api/internal/lora-gallery/register`
   (QUEUE_INTERNAL_SECRET; `custom_loras.register()` in both apps, no copy) with name, triggers,
   description, creator, version, source URL, author-stated strength, a matching existing category and
@@ -142,8 +142,8 @@ validates the generated table header, and saves it under Strata's `tools/hip` di
 Stop Strata before calibrating; the next Strata start exports the matching table path.
 
 Supported only (2026-10-13, `support.py`): each search result gets `supported` = what can run it
-here, or "". Sources: studio templates (`support.STUDIOS`: MiniMax H3, LTX 2.5/2.3, Krea 2/Lustify,
-Qwen Image 2.1, Anima, YuE2, MiniMax Music 3), any ComfyUI workflow saved under
+here, or "". Sources: studio templates (`support.STUDIOS`: MiniMax H3, LTX 2.5/2.3, Krea 2,
+MOSS-Image, Qwen Image 2.1, Anima, YuE2, MiniMax Music 3), any ComfyUI workflow saved under
 `user/default/workflows/<Category>/<Family>/` (mounted ro at `/comfy-workflows`, rescanned every
 60 s, Archive/Imports skipped; the folder name is matched to the base model), llama.cpp for GGUF
 LLMs, and upscalers. Matched by base model (Civitai base / HF base_model tag), else by the family

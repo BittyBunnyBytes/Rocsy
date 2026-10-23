@@ -37,7 +37,7 @@ VAAPI = ["-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128", "-hwacce
 ORIGINALS = "_originals"
 INCOMING = ".incoming"          # YouTube downloads waiting to be trimmed (hidden from training)
 H3_MAX_TRIM = 124 / 24          # longest H3 training clip
-MAX_TRIM, MIN_TRIM = 15.0, 1.0  # same limits as H3 Machine's reference trimmer
+MAX_TRIM, MIN_TRIM = 15.0, 1.0  # same limits as Video's reference trimmer
 
 
 class TrimSegment(BaseModel):

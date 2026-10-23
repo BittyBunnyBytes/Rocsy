@@ -326,10 +326,10 @@
     return api_;
   }
 
-  // ---- trimmer: H3 Machine's reference trimmer (renderTrimTimeline), extended to many trims ----
-  const MAX_TRIM_SECONDS = 15;          // H3 Machine's reference limit
+  // ---- trimmer: Video's reference trimmer (renderTrimTimeline), extended to many trims ----
+  const MAX_TRIM_SECONDS = 15;          // Video's reference limit
   const H3_MAX_TRIM_SECONDS = 124 / 24; // longest H3 training clip (124 frames)
-  const MIN_TRIM_SECONDS = 1;           // same minimum as H3 Machine
+  const MIN_TRIM_SECONDS = 1;           // same minimum as Video
   const H3_GRID = [22, 39, 56, 73, 90, 107, 124];
   const LANE_COLORS = ["#79add3", "#e4b460", "#91ca7c", "#b6a0e1", "#dd8585", "#6fd0c4", "#e08fc4", "#c9c46b"];
   // ---- one trimmer at a time: every way of opening it goes through this queue ----
@@ -432,7 +432,7 @@
         onLoopToggle: (on) => { q("#tr-loop").checked = on; }});
       player.setLoop(true);
       const mediaEl = player.video, lanesHost = q("#trim-lanes"), readout = q("#trim-readout");
-      // Zoomed view window shared by all lanes (Full = H3 Machine's whole-clip timeline).
+      // Zoomed view window shared by all lanes (Full = Video's whole-clip timeline).
       let zoom = 0, view = {start: 0, span: duration};   // start on the full clip
       const zoomSel = q("#tr-zoom"); zoomSel.value = String(zoom);
       [...zoomSel.options].forEach((o) => { if (+o.value && +o.value >= duration) o.disabled = true; });
@@ -446,7 +446,7 @@
       const color = (i) => LANE_COLORS[i % LANE_COLORS.length];
 
       // One timeline ("lane") per trim, each in its own colour. The selected lane carries
-      // H3 Machine's handles: start/end edges and the dotted middle to move the whole window.
+      // Video's handles: start/end edges and the dotted middle to move the whole window.
       function buildLanes() {
         lanesHost.replaceChildren();
         segs.forEach((sg, i) => {
@@ -526,7 +526,7 @@
       recenter();
       buildLanes();
 
-      // Same drag rules as H3 Machine's renderTrimTimeline, via delegation on the lanes.
+      // Same drag rules as Video's renderTrimTimeline, via delegation on the lanes.
       const timeAt = (tl, event) => {
         const rect = tl.getBoundingClientRect();
         return view.start + Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) * view.span;

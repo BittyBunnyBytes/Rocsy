@@ -1,6 +1,6 @@
 """Shared, bounded agentic generation sessions for the non-video studios.
 
-H3 Machine parity: per-studio Hermes settings (model, thinking, sampling, task and
+Video parity: per-studio Hermes settings (model, thinking, sampling, task and
 review prompts, review/approval switches), a streamed Hermes log with steering and
 slash commands, plan approval and continuation for every studio, and per-model
 prompting guides (guides/<studio>/<model>.md) that follow the model selected in
@@ -27,8 +27,8 @@ import httpx
 from pydantic import BaseModel, Field
 
 STUDIOS = {
-    "image": ("KREA_UPSTREAM", "http://127.0.0.1:8300", "/Krea"),
-    "music": ("MUS_UPSTREAM", "http://127.0.0.1:8200", "/Mus"),
+    "image": ("KREA_UPSTREAM", "http://127.0.0.1:8300", "/Image"),
+    "music": ("MUS_UPSTREAM", "http://127.0.0.1:8200", "/Music"),
     "voice": ("VOICE_UPSTREAM", "http://127.0.0.1:8950", "/Voice"),
 }
 BASE = {name: os.getenv(env, default).rstrip("/") + prefix for name, (env, default, prefix) in STUDIOS.items()}
@@ -665,7 +665,7 @@ def output(row: dict, job: dict) -> list[str]:
 async def image_data_url(url: str) -> str:
     absolute = urljoin(BASE["image"] + "/", url)
     parsed, own = urlparse(absolute), urlparse(BASE["image"])
-    if parsed.scheme != own.scheme or parsed.netloc != own.netloc or not parsed.path.startswith("/Krea/"):
+    if parsed.scheme != own.scheme or parsed.netloc != own.netloc or not parsed.path.startswith("/Image/"):
         return ""
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.get(absolute)
@@ -695,7 +695,7 @@ def _audio_probe(path: str) -> tuple[float, float | None]:
 async def review_music_audio(url: str) -> tuple[bool, str]:
     absolute = urljoin(BASE["music"] + "/", url)
     parsed, own = urlparse(absolute), urlparse(BASE["music"])
-    if parsed.scheme != own.scheme or parsed.netloc != own.netloc or not parsed.path.startswith("/Mus/api/outputs/"):
+    if parsed.scheme != own.scheme or parsed.netloc != own.netloc or not parsed.path.startswith("/Music/api/outputs/"):
         return False, "The Music output URL is outside the studio"
     path = ""
     try:

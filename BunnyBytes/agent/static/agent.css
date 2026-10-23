@@ -904,7 +904,7 @@ body.a-code-full { overflow: hidden; }
 .a-md-code .hljs-meta, .a-md-code .hljs-doctag { color: #9aa7b0; }
 .a-md-code .hljs-deletion { color: #ff8a80; }
 .a-md-code .hljs-emphasis { font-style: italic; } .a-md-code .hljs-strong { font-weight: 700; }
-/* H3 prompts in code blocks: H3 Machine's prompt colours (H3Machine/static/css/app.css .hl-*) */
+/* H3 prompts in code blocks: Video's prompt colours (Video/static/css/app.css .hl-*) */
 .a-md-code.is-h3 .hl-key { color: #c49be0; }
 .a-md-code.is-h3 .hl-shot, .a-md-code.is-h3 .hl-time { color: #6cc3b5; }
 .a-md-code.is-h3 .hl-speaker-id { color: #c49be0; }

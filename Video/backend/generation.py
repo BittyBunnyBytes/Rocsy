@@ -310,7 +310,7 @@ def _wire_minimax_h3_loras(
             "model": [model_node, 0], "clip": [clip_node, 0],
             "stack_data": _minimax_h3_lora_stack_data(loras), "model_type": "Basic",
         },
-        "_meta": {"title": "H3 Machine LoRA stack"},
+        "_meta": {"title": "Video LoRA stack"},
     }
     for node_id, input_key in consumers:
         workflow[node_id]["inputs"][input_key] = [loader_id, 0]
@@ -1732,7 +1732,7 @@ def translate_seedhunter_aliases(text: str, references: list[dict[str, Any]], vi
 
 def _maybe_insert_live_preview(workflow: dict[str, Any], enabled: bool, next_id: int) -> tuple[str, int]:
     """Optionally inserts Kijai's ModelPreviewOverrideKJ (live low-res preview
-    during sampling; ComfyUI's own UI shows it, H3 Machine does not - it's
+    during sampling; ComfyUI's own UI shows it, Video does not - it's
     purely for anyone watching the ComfyUI window directly. ~6-16% slower.).
     Rewires the scheduler to source `model` from it when enabled. Returns
     (model_source_node_id, next_free_id) for guiders to read `model` from."""
@@ -2020,7 +2020,7 @@ def _wire_seedhunter_references(
                     "resize_method": "maintain aspect ratio", "custom_width": 0, "custom_height": 0,
                     "frame_rate": 24, "display_mode": "seconds",
                     # Full frame, no crop - this node's own crop_x/y/w/h feature
-                    # isn't exposed anywhere in H3 Machine's UI, so it must stay
+                    # isn't exposed anywhere in Video's UI, so it must stay
                     # a no-op (crop_w/crop_h=0 would crop everything down to a
                     # sliver, since they're fractions of the frame, not pixels).
                     "crop_x": 0.0, "crop_y": 0.0, "crop_w": 1.0, "crop_h": 1.0,

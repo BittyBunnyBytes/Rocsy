@@ -3,7 +3,7 @@ gateway's root-scope service worker, /sw.js) for every service, with
 per-service, per-event switches on the Settings page's Notifications tab.
 
 Event sources:
-- Vid (H3 Machine) and Trainer send their own events to POST /internal/notify
+- Vid (Video) and Trainer send their own events to POST /internal/notify
   (signed with QUEUE_INTERNAL_SECRET) - they know their job semantics best,
   e.g. Agentic staging approval.
 - Krea, Mus and Queue are watched here (`watch_services`): their job lists
@@ -32,8 +32,15 @@ log = logging.getLogger("gateway.notify")
 VAPID_SUBJECT = os.getenv("ROCSY_PUBLIC_URL") or "mailto:rocsy@users.noreply.github.com"
 
 # service -> (label, icon, {event: (label, default_on)})
+# Studio ids stay Vid/Krea/Mus; their pages are /Video, /Image and /Music.
+PAGE_PATHS = {"Vid": "Video", "Krea": "Image", "Mus": "Music"}
+
+
+def page_url(service: str) -> str:
+    return f"/{PAGE_PATHS.get(service, service)}/"
+
 CATALOG: dict[str, dict[str, Any]] = {
-    "Vid": {"label": "Video", "note": "Video generation (H3 Machine)", "events": {
+    "Vid": {"label": "Video", "note": "Video generation (MiniMax H3, LTX 2.5, Wan 2.2)", "events": {
         "complete": ("Video ready", True), "failed": ("Generation failed", True),
         "candidates": ("Candidates ready to pick", True),
         "agentic_previews": ("Agentic previews ready", True), "agentic_approval": ("Agentic previews need approval", True),
@@ -185,7 +192,7 @@ class NotificationHub:
         if not self.prefs()[service][event]:
             return 0
         payload = {"title": title[:120], "body": body[:300], "tag": tag[:120] or f"bb-{service}-{event}-{time.time():.0f}",
-                   "url": url if url.startswith("/") else f"/{service}/", "icon": icon or DEFAULT_ICON,
+                   "url": url if url.startswith("/") else page_url(service), "icon": icon or DEFAULT_ICON,
                    "badge": badge or DEFAULT_BADGE, "service": service}
         return await asyncio.to_thread(self.broadcast, payload)
 
@@ -220,7 +227,7 @@ async def watch_services(hub: NotificationHub, upstreams: dict[str, str], interv
         while True:
             for service, labels in (("Krea", ("Image ready", "Image generation failed")),
                                     ("Mus", ("Track ready", "Music generation failed"))):
-                jobs = await _poll_jobs(client, f"{upstreams[service]}/{service}/api/jobs")
+                jobs = await _poll_jobs(client, f"{upstreams[service]}{page_url(service).rstrip('/')}/api/jobs")
                 if jobs is None:
                     continue
                 seen = states[service]
@@ -234,7 +241,7 @@ async def watch_services(hub: NotificationHub, upstreams: dict[str, str], interv
                         detail = job.get("error") if state == "failed" else (job.get("prompt") or job.get("style"))
                         try:
                             await hub.notify(service, state, labels[state == "failed"], _summary(detail),
-                                             url=f"/{service}/", tag=f"bb-{service}-{job_id}")
+                                             url=page_url(service), tag=f"bb-{service}-{job_id}")
                         except Exception:  # noqa: BLE001
                             log.exception("%s notification failed", service)
                 live = {str(job.get("id")) for job in jobs}
@@ -252,7 +259,7 @@ async def watch_services(hub: NotificationHub, upstreams: dict[str, str], interv
                         try:
                             await hub.notify("Queue", "started", "Your queued job got the GPU",
                                              f"{app}: {_summary(entry.get('label'))}".strip(": "),
-                                             url=f"/{app}/" if app in CATALOG else "/Queue/", tag=f"bb-queue-{entry_id}")
+                                             url=page_url(app) if app in CATALOG else "/Queue/", tag=f"bb-queue-{entry_id}")
                         except Exception:  # noqa: BLE001
                             log.exception("Queue notification failed")
                     seen[entry_id] = state

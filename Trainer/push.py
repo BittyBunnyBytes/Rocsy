@@ -1,5 +1,5 @@
 """Web Push: "training finished" notifications that reach a phone even when the
-Trainer page is closed or the screen is locked (ported from H3 Machine's push.py).
+Trainer page is closed or the screen is locked (ported from Video's push.py).
 
 The VAPID key pair is generated on first use and kept in the data dir, so
 existing subscriptions stay valid across rebuilds. Subscriptions live in

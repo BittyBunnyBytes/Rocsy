@@ -6,7 +6,7 @@
   const nsfw = document.querySelector("#shared-lora-nsfw");
   let catalogs = null;
   const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  const studios = { h3: {label:"H3 Machine", path:"/Vid"}, krea: {label:"Krea Image", path:"/Krea"} };
+  const studios = { h3: {label:"Video", path:"/Video"}, krea: {label:"Krea Image", path:"/Image"} };
   function render() {
     if (!catalogs) return;
     const query = search.value.trim().toLowerCase();

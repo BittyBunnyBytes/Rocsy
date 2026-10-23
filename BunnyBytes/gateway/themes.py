@@ -67,8 +67,8 @@ DATA_SAVER_MODES = ("auto", "phone", "off")
 # name (home cards carry their own "experimental" flag in templates/home.html).
 MODULES: dict[str, dict[str, str]] = {
     "Agent": {"group": "Tools", "note": "Master Agent (agentic mode) and the home prompt box"},
-    "Vid": {"group": "Create", "label": "Video", "note": "Video generation (H3 Machine)"},
-    "Krea": {"group": "Create", "label": "Image", "note": "Images with Krea 2, Lustify and Qwen Image"},
+    "Vid": {"group": "Create", "label": "Video", "note": "Video generation (MiniMax H3, LTX 2.5, Wan 2.2)"},
+    "Krea": {"group": "Create", "label": "Image", "note": "Images with Krea 2, MOSS-Image and Qwen Image"},
     "Mus": {"group": "Create", "label": "Music", "note": "Music generation"},
     "Voice": {"group": "Create", "note": "Local text to speech"},
     "Code": {"group": "Create", "label": "Vibe Coding", "note": "Coding projects", "tag": "Experimental"},
@@ -115,7 +115,7 @@ def _studio_vars(p: dict[str, str]) -> dict[str, str]:
         # shared names (Vid, Krea, Mus, Trainer, Queue)
         "--bg": p["bg"], "--panel": p["panel"], "--border": p["border"], "--text": p["text"],
         "--muted": p["muted"], "--faint": p["faint"], "--green": p["green"], "--amber": p["amber"], "--red": p["red"],
-        # Vid (H3 Machine)
+        # Vid (Video)
         "--card": _mix(p["panel"], p["raised"], 0.4), "--field": p["soft"], "--raised": p["raised"],
         "--raised-hover": _mix(p["raised"], p["text"], 0.07), "--border-strong": _mix(p["border"], p["text"], 0.12),
         "--blue": p["accent"], "--blue-deep": p["accent2"], "--violet": p["violet"],

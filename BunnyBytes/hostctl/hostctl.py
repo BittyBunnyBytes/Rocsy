@@ -82,8 +82,8 @@ ITEMS: dict[str, dict[str, Any]] = {
                            "note": "Starts ComfyUI on demand and switches its profile; ComfyUI keeps running if it stops"},
     "hostctl": {"kind": "unit", "unit": "bunny-hostctl.service", "group": "Host", "name": "Services helper",
                 "note": "This page's link to the host (bunny-hostctl)", "locked": "all"},
-    "h3-machine": {"kind": "container", "group": "Containers", "name": "Video", "note": "H3 Machine (Vid)", "busy": "vid", "stop_timeout": 40},
-    "krea": {"kind": "container", "group": "Containers", "name": "Image", "note": "Krea, Lustify and Qwen Image", "busy": "krea"},
+    "video": {"kind": "container", "group": "Containers", "name": "Video", "note": "MiniMax H3, LTX 2.5 and Wan 2.2", "busy": "vid", "stop_timeout": 40},
+    "krea": {"kind": "container", "group": "Containers", "name": "Image", "note": "Krea 2, MOSS-Image and Qwen Image", "busy": "krea"},
     "music": {"kind": "container", "group": "Containers", "name": "Music", "note": "Song generation (Mus)", "busy": "mus"},
     "bunny-trainer": {"kind": "container", "group": "Containers", "name": "Trainer", "note": "LoRA training", "busy": "trainer"},
     "bunny-agent": {"kind": "container", "group": "Containers", "name": "Agent", "note": "Master Agent (agentic mode)", "busy": "agent"},
@@ -154,14 +154,14 @@ def _jobs(url: str) -> list[dict[str, Any]]:
 def busy_check(kind: str) -> tuple[bool, str]:
     if kind == "vid":
         live = {"waiting_for_gpu", "preparing", "queued", "rendering", "finalizing", "cancelling"}
-        jobs = [job for job in _jobs("http://127.0.0.1:8000/Vid/api/jobs") if job.get("state") in live]
-        agentic = [job for job in http_json("http://127.0.0.1:8000/Vid/api/enhancement/jobs").get("jobs", [])
+        jobs = [job for job in _jobs("http://127.0.0.1:8000/Video/api/jobs") if job.get("state") in live]
+        agentic = [job for job in http_json("http://127.0.0.1:8000/Video/api/enhancement/jobs").get("jobs", [])
                    if job.get("agentic") and job.get("state") in {"waiting_for_gpu", "running", "queuing", "rendering",
                                                                    "reviewing", "awaiting_approval", "preparing"}]
         parts = [f"{len(jobs)} render(s)"] * bool(jobs) + [f"{len(agentic)} Agentic session(s)"] * bool(agentic)
         return bool(parts), " and ".join(parts)
     if kind in ("krea", "mus"):
-        port, prefix = {"krea": (8300, "Krea"), "mus": (8200, "Mus")}[kind]
+        port, prefix = {"krea": (8300, "Image"), "mus": (8200, "Music")}[kind]
         jobs = [job for job in _jobs(f"http://127.0.0.1:{port}/{prefix}/api/jobs")
                 if job.get("state") not in {"complete", "failed", "cancelled"}]
         return bool(jobs), f"{len(jobs)} job(s) in progress"

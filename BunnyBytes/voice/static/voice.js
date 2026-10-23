@@ -66,7 +66,7 @@ function avatar(voice, className) {
   return box;
 }
 
-// ---- Views: Studio | Characters | Add character (H3 Machine style tabs) ----
+// ---- Views: Studio | Characters | Add character (Video style tabs) ----
 const VIEWS = ['studio', 'characters', 'add', 'settings'];
 function setView(view, {focus = false, keepHash = false} = {}) {
   if (!VIEWS.includes(view)) view = 'studio';

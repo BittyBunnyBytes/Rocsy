@@ -151,7 +151,7 @@ class ComfyService:
         """Bring the shared ComfyUI onto the memory profile this model is fastest on
         (see the supervisor's COMFY_ARGS_KREA / COMFY_ARGS_QWEN). The supervisor only
         switches while ComfyUI is idle and answers "busy" otherwise, so keep asking
-        until it runs `profile` and answers again (same approach as H3 Machine)."""
+        until it runs `profile` and answers again (same approach as Video)."""
         loop = asyncio.get_event_loop()
         deadline = loop.time() + timeout
         while True:

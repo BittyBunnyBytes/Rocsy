@@ -155,7 +155,7 @@
     const note = document.createElement("span");
     note.className = "bb-module-note";
     const link = document.createElement("a");
-    const href = { Llama: "/Llama/ui/", Hermes: "/Hermes/", Voice: "/Voice" }[module.id] || `/${module.id}/`;
+    const href = { Llama: "/Llama/ui/", Hermes: "/Hermes/", Voice: "/Voice", Vid: "/Video/", Krea: "/Image/", Mus: "/Music/" }[module.id] || `/${module.id}/`;
     link.href = href;
     link.textContent = href;
     note.append(`${module.note} · `, link);

@@ -54,13 +54,13 @@ CHUNK = 16 * 1024 * 1024
 # Compose service -> (container, hostctl busy kind, writable). Everything that reads model files.
 CONSUMERS: dict[str, tuple[str, str, bool]] = {
     "modelhub": ("bunny-models", "models", True),   # downloads into locations, uninstall removes there
-    "h3-machine": ("h3-machine", "vid", False),
+    "video": ("video", "vid", False),
     "krea": ("krea", "krea", False),
     "music": ("music", "mus", False),
     "trainer": ("bunny-trainer", "trainer", False),
     "llama": ("llama", "llama", False),
 }
-NAMES = {"modelhub": "Models", "h3-machine": "Video", "krea": "Image", "music": "Music", "trainer": "Trainer", "llama": "Llama"}
+NAMES = {"modelhub": "Models", "video": "Video", "krea": "Image", "music": "Music", "trainer": "Trainer", "llama": "Llama"}
 SHARD = re.compile(r"-00001-of-(\d{5})\.(gguf|safetensors)$")
 WEIGHT = re.compile(r"\.(safetensors|sft|gguf|ckpt|pt|pth|bin|pkl|onnx)$", re.I)
 

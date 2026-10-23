@@ -33,7 +33,7 @@ class Store:
                 );
                 """
             )
-            # Manual additive migration, matching H3 Machine's store.py idiom.
+            # Manual additive migration, matching Video's store.py idiom.
             columns = {row[1] for row in self._conn.execute("PRAGMA table_info(jobs)").fetchall()}
             if "lock_token" not in columns:
                 self._conn.execute("ALTER TABLE jobs ADD COLUMN lock_token TEXT")

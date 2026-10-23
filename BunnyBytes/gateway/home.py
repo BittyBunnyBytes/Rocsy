@@ -104,9 +104,9 @@ async def _snapshot(upstreams: dict[str, str], llama_key: str, hidden: set[str] 
                     art_exclude: frozenset[str] = frozenset()) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=3.0) as client:
         vid, krea, mus, trainer, queue, llama, connections, agent, voice, voice_show, models, rea = await asyncio.gather(
-            _get(client, f"{upstreams['Vid']}/Vid/api/jobs"),
-            _get(client, f"{upstreams['Krea']}/Krea/api/jobs"),
-            _get(client, f"{upstreams['Mus']}/Mus/api/jobs"),
+            _get(client, f"{upstreams['Vid']}/Video/api/jobs"),
+            _get(client, f"{upstreams['Krea']}/Image/api/jobs"),
+            _get(client, f"{upstreams['Mus']}/Music/api/jobs"),
             _get(client, f"{upstreams['Trainer']}/Trainer/api/jobs"),
             _get(client, f"{upstreams['Queue']}/Queue/api/queue"),
             _get(client, f"{upstreams['Llama']}/running", {"authorization": f"Bearer {llama_key}"}),
@@ -199,12 +199,12 @@ async def _snapshot(upstreams: dict[str, str], llama_key: str, hidden: set[str] 
     recent: list[dict[str, Any]] = []
     for job in (vid_jobs or [])[:40]:
         if job.get("state") == "complete" and job.get("poster_url"):
-            recent.append({"studio": "Vid", "kind": "video", "thumb": job["poster_url"], "url": f"/Vid/?job={job['id']}",
+            recent.append({"studio": "Vid", "kind": "video", "thumb": job["poster_url"], "url": f"/Video/?job={job['id']}",
                            "title": _short(job.get("prompt"), 70), "meta": f"{job.get('model_label', '')} · {job.get('mode_label', '')}".strip(" ·"),
                            "at": job.get("completed_at") or ""})
     krea_done = [job for job in (krea_jobs or []) if job.get("state") == "complete" and job.get("images")]
     for job in krea_done[:2]:  # full-size PNGs: keep the home page light
-        recent.append({"studio": "Krea", "kind": "image", "thumb": thumb_url(job["images"][0]["url"]), "url": "/Krea/",
+        recent.append({"studio": "Krea", "kind": "image", "thumb": thumb_url(job["images"][0]["url"]), "url": "/Image/",
                        "title": _short(job.get("prompt"), 70), "meta": job.get("model_label", ""), "at": job.get("completed_at") or ""})
     recent = [item for item in recent if item["studio"] not in hidden]  # Settings -> Modules
     recent.sort(key=lambda item: item["at"], reverse=True)

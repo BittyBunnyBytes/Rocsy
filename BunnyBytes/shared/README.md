@@ -6,7 +6,7 @@ operations already needed across the studios: probe, trim, crop, extract audio,
 and thumbnail. Add new capabilities
 as versioned `/v1/...` routes and list them in `CAPABILITIES` in `app.py`.
 
-The merged LoRA gallery metadata for H3 Machine and Krea Image is exposed at
+The merged LoRA gallery metadata for Video and Krea Image is exposed at
 `GET /v1/lora-gallery/h3`, `/v1/lora-gallery/krea`, and
 `/v1/lora-gallery/all` (the latter returns both keyed catalogs). The framework
 reads built-in indexes from read-only mounts and merges each studio's uploaded
@@ -18,7 +18,7 @@ Built-in entries remain available while a studio is restarting.
 
 ## Shared studio UI
 
-`ui/h3-studio.css` and `ui/h3-studio.js` hold the common H3 Machine look and
+`ui/h3-studio.css` and `ui/h3-studio.js` hold the common Video look and
 mobile Create/Generations navigation used by Music and Krea Image. On desktop,
 the generation panel scrolls within the viewport, with 12-card batches loaded
 as the list nears its end; phones scroll with the page. Compose
@@ -32,7 +32,7 @@ button as a keyboard-accessible fallback.
 ### References card
 
 `window.BunnyReferences` in `ui/h3-studio.js` (styles in `ui/h3-studio.css`,
-scoped to `body.h3-studio-ui`) is H3 Machine's References card as a shared
+scoped to `body.h3-studio-ui`) is Video's References card as a shared
 component: `render(list, items)` draws H3's rows (thumbnail, token chip, meta
 line, studio extras, remove), `renderTotals`, `bindList` (insert token / view /
 remove), `bindDropZone` and `insertToken`. The studio keeps its own state and
@@ -40,7 +40,7 @@ uploads. Image (Krea) uses it for a `details.card.card-inputs#reference-panel`
 placed directly under the prompt, the same spot as H3. Load `h3-studio.js`
 before the studio's module script so the component exists at startup.
 
-H3 Machine also mounts `ui/h3-studio.js` for the shared LoRA gallery media
+Video also mounts `ui/h3-studio.js` for the shared LoRA gallery media
 loader. H3 and Krea Image use it to fetch card previews near the viewport,
 load the selected detail preview immediately, and draw repeated play icons
 from one inline SVG symbol. This keeps the gallery responsive without eagerly
@@ -87,7 +87,7 @@ is H.264/AAC MP4, audio output AAC M4A, cropped images PNG, thumbnails JPEG.
 The maximum upload is 250 MiB by default (`FRAMEWORK_MAX_UPLOAD_MB`); at most
 2 operations run concurrently (`FRAMEWORK_MAX_PARALLEL`).
 
-Service-specific rules remain in the calling app. For example, H3Machine's
+Service-specific rules remain in the calling app. For example, Video's
 15-second reference limit and its GPU render pipeline are domain policy, not
 generic trim behavior. Call this service for new general media tools instead
 of adding another ffmpeg wrapper in a studio. Existing specialized pipelines
@@ -109,7 +109,7 @@ Run tests with `python3 -m unittest discover -s tests` in this directory (needs
 ## Agentic generation sessions
 
 Image, Music, and Voice expose **Agentic mode** beside their ordinary Generate control,
-with the same controls as H3 Machine's Hermes settings. The studio proxies one guarded
+with the same controls as Video's Hermes settings. The studio proxies one guarded
 route (`/api/agentic/{models|settings|guides|preview|sessions…}`) to this internal
 service, so the browser never receives `QUEUE_INTERNAL_SECRET`. All UI lives in
 `agentic-ui.js` / `agentic-ui.css` (mounted read-only into each studio):
@@ -118,8 +118,8 @@ service, so the browser never receives `QUEUE_INTERNAL_SECRET`. All UI lives in
   sessions with inline Approve / Revise, and a gear that opens the settings tab.
 - **Prompt syntax** box under the studio prompt (Image prompt, Music lyrics, Voice
   script): the "Quick syntax" bullets of the guide for the model currently loaded.
-  It switches as soon as the model changes (Krea 2 — any checkpoint, Lustify included —
-  / Qwen Image 2.1 / Anima; YuE2 / MiniMax Music 3; Qwen3-TTS / IndexTTS2 / Fish S2 Pro / Fish 1.5).
+  It switches as soon as the model changes (Krea 2 — any checkpoint, finetunes included —
+  / MOSS-Image / Qwen Image 2.1 / Anima; YuE2 / MiniMax Music 3; Qwen3-TTS / IndexTTS2 / Fish S2 Pro / Fish 1.5).
 - **Hermes settings tab** (gear, or `#hermes`): Llama model, thinking level, context
   size (read-only; shared with H3 via `~/AI/Llama/overrides/<model>.ctx`), sampling and
   extra llama JSON; run switches (plan review, approval default, output review, model
@@ -161,4 +161,4 @@ The authenticated internal API (`X-Queue-Internal-Secret`):
 `agentic.sessions` is listed in `/v1/capabilities`. Sessions (with their log) and
 settings persist in the `framework-agentic-data` volume. In-flight runs are marked
 `interrupted` after a framework restart; completed results remain browseable.
-`FRAMEWORK_AGENTIC_MODEL` sets the default Hermes model (matches H3 Machine).
+`FRAMEWORK_AGENTIC_MODEL` sets the default Hermes model (matches Video).

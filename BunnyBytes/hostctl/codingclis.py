@@ -50,7 +50,7 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MAX_RUN_SECONDS = 4 * 3600
 ARG_LIMIT = 96_000          # one argv string must stay under Linux's 128 KiB MAX_ARG_STRLEN
 # Hermes container paths in briefs and session folders -> this host (see the hermes-agent mounts).
-PATH_MAP = [("/opt/data/rocsy-pinned", str(ROOT / "H3Machine" / "uploads")), ("/opt/data", str(HERMES_HOME))]
+PATH_MAP = [("/opt/data/rocsy-pinned", str(ROOT / "Video" / "uploads")), ("/opt/data", str(HERMES_HOME))]
 
 
 # ----------------------------------------------------------------- detection --

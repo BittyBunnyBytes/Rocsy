@@ -76,7 +76,7 @@ def lora_family(model: str) -> str:
 
 # Per LoRA slot: display name, source page, recommended strength and trigger
 # words - shown in the LoRA list and the LoRA gallery (static/lora-gallery,
-# built by H3 Machine's tools/fetch_lora_gallery.py --root ~/AI/Krea).
+# built by Video's tools/fetch_lora_gallery.py --root ~/AI/Krea).
 # Source pages were found by the files' SHA-256 (Civitai by-hash API).
 LORA_INFO = _local.LORA_INFO if _local else {}
 

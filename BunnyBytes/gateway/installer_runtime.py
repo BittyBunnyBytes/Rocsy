@@ -222,7 +222,7 @@ def prepare_bind_mount_permissions(compose_dir, use_group, progress):
         ('connections', 'connections', ('/data',)),
         ('agent', 'agent', ('/data', '/attachments', '/workspace')),
         ('modelhub', f'{os.getuid()}:{os.getgid()}', ('/data',)),
-        ('h3-machine', 'h3web', ('/data/app', '/data/logs', '/data/uploads', '/llama-overrides')),
+        ('video', 'h3web', ('/data/app', '/data/logs', '/data/uploads', '/llama-overrides')),
         ('music', 'music', ('/data/app', '/data/logs')),
         ('krea', 'krea', ('/data/app', '/data/logs')),
     )
@@ -235,7 +235,7 @@ def prepare_bind_mount_permissions(compose_dir, use_group, progress):
     # This mount contains another bind mount for ComfyUI references. Change
     # only the top-level H3 input folder, not the external ComfyUI files.
     command = ['docker', 'compose', 'run', '--rm', '--no-deps', '--user', '0',
-               '--entrypoint', 'chown', 'h3-machine', 'h3web:h3web', '/data/input']
+               '--entrypoint', 'chown', 'video', 'h3web:h3web', '/data/input']
     run_command(docker_command(command, use_group), progress, 93,
                 'Preparing H3 input folder…', cwd=compose_dir)
 
@@ -990,7 +990,7 @@ def install(payload, progress=lambda _percent, _message: None):
     progress(27, 'Preparing destination…')
     dest.mkdir(parents=True, exist_ok=True)
     start_log_file(dest)
-    sources = ('BunnyBytes', 'H3Machine', 'Music', 'Krea', 'Llama', 'Trainer')
+    sources = ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer')
     total = sum(len(files) for name in sources for _, _, files in os.walk(BUNDLE / name)) or 1
     copied = 0
     for name in sources:

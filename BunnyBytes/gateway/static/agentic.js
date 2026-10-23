@@ -10,7 +10,7 @@
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
   const SWITCHES = [
     ["svc:Vid", "Video", "Make videos (MiniMax H3)"],
-    ["svc:Krea", "Image", "Make images (Krea 2, Lustify, Qwen Image)"],
+    ["svc:Krea", "Image", "Make images (Krea 2, MOSS-Image, Qwen Image)"],
     ["svc:Mus", "Music", "Make songs"],
     ["svc:Voice", "Voice", "Make speech with a saved voice"],
     ["svc:Trainer", "Trainer", "Start LoRA training runs"],

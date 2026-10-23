@@ -57,7 +57,7 @@ services:
       TRAINER_UPSTREAM: http://127.0.0.1:${TRAINER_PORT:-8500}
       CONNECTIONS_UPSTREAM: http://127.0.0.1:${CONNECTIONS_PORT:-8800}
     volumes:
-      - ../H3Machine/static/lora-gallery:/catalogs/h3:ro
+      - ../Video/static/lora-gallery:/catalogs/h3:ro
       - ../Krea/static/lora-gallery:/catalogs/krea:ro
       - ./shared/guides:/app/guides:ro
       - ../Llama/overrides:/llama-overrides:ro
@@ -113,7 +113,7 @@ services:
     restart: unless-stopped
     network_mode: host
     # The GPU's media engine (VA-API) for video frames on the Agent page's video boards: decodes
-    # never use the CPU. DRM access rule (like h3-machine) so it still starts without renderD128.
+    # never use the CPU. DRM access rule (like video) so it still starts without renderD128.
     device_cgroup_rules:
       - "c 226:* rmw"
     environment:
@@ -147,7 +147,7 @@ services:
       - ./agent/data:/data
       # Attachments sent to the Master Agent; Hermes reads the same folder at /opt/data/rocsy-attachments.
       - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/rocsy-attachments:/attachments
-      - ../H3Machine/uploads:/pinned-uploads:ro
+      - ../Video/uploads:/pinned-uploads:ro
       - ./gateway/data:/pinned-cache-data:ro
       # The agent's workspace (Hermes: /opt/data/rocsy-workspace): `share` reads it, `fetch` copies job outputs into it.
       - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/rocsy-workspace:/workspace
@@ -310,7 +310,7 @@ services:
     depends_on:
       - lock
       - connections
-      - h3-machine
+      - video
       - music
       - krea
       - llama
@@ -337,7 +337,7 @@ services:
       MODELS_UPSTREAM: http://127.0.0.1:${MODELHUB_PORT:-8960}
       REA_UPSTREAM: http://127.0.0.1:${REA_WEB_PORT:-8976}
       LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
-      # Signs H3 Machine / Trainer events to the notification hub (/internal/notify).
+      # Signs Video / Trainer events to the notification hub (/internal/notify).
       QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
       # Settings -> Services talks to bunny-hostctl (host user service, see hostctl/).
       HOSTCTL_URL: http://127.0.0.1:${HOSTCTL_PORT:-8899}
@@ -357,9 +357,9 @@ services:
       - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/output:/storage/comfy-output
       - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/rocsy-workspace:/storage/agent-workspace
       - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/workspace:/storage/hermes-workspace
-      - ../H3Machine/uploads:/storage/user-uploads
+      - ../Video/uploads:/storage/user-uploads
       # Identify H3 continuation frames and generated thumbnails in the Cache view.
-      - ../H3Machine/data:/storage/h3-data:ro
+      - ../Video/data:/storage/h3-data:ro
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${GATEWAY_PORT:-8080}/health', timeout=3)"]
       interval: 30s
@@ -367,13 +367,13 @@ services:
       retries: 3
       start_period: 10s
 
-  h3-machine:
-    # The ONLY definition of this container (2026-10-13): ../H3Machine/docker-compose.yml
+  video:
+    # The ONLY definition of this container (2026-10-13): ../Video/docker-compose.yml
     # used to define it too (project "h3machine"), so `up` here died on a container-name
     # conflict and `down` here missed it. Deploy from this folder:
-    #   docker compose up -d --build --no-deps h3-machine
-    build: ../H3Machine
-    container_name: h3-machine
+    #   docker compose up -d --build --no-deps video
+    build: ../Video
+    container_name: video
     restart: unless-stopped
     network_mode: host
     # The GPU's media engine for ffmpeg (VA-API h264_vaapi, backend/gpu.py):
@@ -387,7 +387,7 @@ services:
       BUNNY_FRAMEWORK_URL: http://127.0.0.1:8700
       H3_HOST: 127.0.0.1
       H3_PORT: ${H3_PORT:-8000}
-      H3_MOUNT_PREFIX: /Vid
+      H3_MOUNT_PREFIX: /Video
       H3_COMFY_URL: ${COMFY_URL:-http://127.0.0.1:8188}
       H3_COMFY_MODE: external
       H3_QWEN_URL: ${QWEN_BASE_URL:-http://127.0.0.1:8081/v1}
@@ -418,28 +418,28 @@ services:
       - ./shared/ui/missing-files.js:/app/static/js/missing-files.js:ro
       - ./shared/ui/missing-files.css:/app/static/css/missing-files.css:ro
       - /dev/dri:/dev/dri
-      - ../H3Machine/uploads:/data/uploads
+      - ../Video/uploads:/data/uploads
       # llama-swap context overrides (Hermes settings -> Agent context); see ../Llama/llama-launch.
       - ../Llama/overrides:/llama-overrides
-      - ../H3Machine/input:/data/input
+      - ../Video/input:/data/input
       # ComfyUI validates "image" inputs with realpath(), so H3MachineRefs must be a
       # genuine bind mount into ComfyUI's own input dir, not a symlink (2026-09-22).
-      # Mounted after ../H3Machine/input so it overrides just this one subpath.
+      # Mounted after ../Video/input so it overrides just this one subpath.
       - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/input/H3MachineRefs:/data/input/H3MachineRefs
       # The REAL ComfyUI output directory (ComfyUI-Shared/output is stale). Writable
       # so a generation's delete button can remove its own files (delete_job_files,
       # 2026-09-28); otherwise only paths from ComfyUI's /history are read.
       - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/output:/data/output
-      - ../H3Machine/data:/data/app
+      - ../Video/data:/data/app
       - ../Trainer/data/output:/trainer-output:ro
       - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/loras/H3MachineCustom:/models/loras/H3MachineCustom
-      - ../H3Machine/logs:/data/logs
-      - ../H3Machine/workflows:/app/workflows:ro
+      - ../Video/logs:/data/logs
+      - ../Video/workflows:/app/workflows:ro
       # Read-only: the checkpoint scanner (backend/checkpoints.py) finds H3
       # models here and fingerprints their weights to tell which support Ref2V.
       - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/diffusion_models:/models/diffusion_models:ro
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${H3_PORT:-8000}/Vid/api/health', timeout=3)"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${H3_PORT:-8000}/Video/api/health', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -454,7 +454,7 @@ services:
       BUNNY_FRAMEWORK_URL: http://127.0.0.1:8700
       MUS_HOST: 127.0.0.1
       MUS_PORT: ${MUS_PORT:-8200}
-      MUS_MOUNT_PREFIX: /Mus
+      MUS_MOUNT_PREFIX: /Music
       MUS_COMFY_URL: ${COMFY_URL:-http://127.0.0.1:8189}
       MUS_LOCK_URL: http://127.0.0.1:${LOCK_PORT:-8600}
       MUS_QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
@@ -475,7 +475,7 @@ services:
       - ./shared/ui/missing-files.css:/app/static/css/missing-files.css:ro
       - ./shared/agentic-ui.js:/app/static/js/agentic-ui.js:ro
       - ./shared/agentic-ui.css:/app/static/css/agentic-ui.css:ro
-      # See the h3-machine volume above -- same fix, same reason: Music only
+      # See the video volume above -- same fix, same reason: Music only
       # reads paths ComfyUI's own /history response points it at, it never
       # writes here itself.
       - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/output:/data/output:ro
@@ -484,7 +484,7 @@ services:
       - ../Music/workflows:/app/workflows:ro
       - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models:/models:ro
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${MUS_PORT:-8200}/Mus/api/health', timeout=3)"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${MUS_PORT:-8200}/Music/api/health', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -499,7 +499,7 @@ services:
       BUNNY_FRAMEWORK_URL: http://127.0.0.1:8700
       KREA_HOST: 127.0.0.1
       KREA_PORT: ${KREA_PORT:-8300}
-      KREA_MOUNT_PREFIX: /Krea
+      KREA_MOUNT_PREFIX: /Image
       KREA_COMFY_URL: ${COMFY_URL:-http://127.0.0.1:8189}
       KREA_COMFY_MODE: external
       KREA_LOCK_URL: http://127.0.0.1:${LOCK_PORT:-8600}
@@ -530,7 +530,7 @@ services:
       - ../Krea/logs:/data/logs
       - ../Krea/workflows:/app/workflows:ro
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${KREA_PORT:-8300}/Krea/api/health', timeout=3)"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${KREA_PORT:-8300}/Image/api/health', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -565,7 +565,7 @@ services:
       # ROCm userspace runtime -- bind-mounted rather than installed in the
       # image so it always matches this host's kernel driver exactly.
       - /opt/rocm:/opt/rocm:ro
-      # Per-model context overrides (<model id>.ctx) written by H3 Machine's
+      # Per-model context overrides (<model id>.ctx) written by Video's
       # "Agent context" setting; llama-launch applies them on the next load.
       - ../Llama/overrides:/app/overrides:ro
       # The custom RDNA-boost llama.cpp ROCm build (see
@@ -580,6 +580,8 @@ services:
       # Models -> Manager -> Core Backend: newer llama.cpp releases converted to RDNA Boost
       # (hostctl/corebackend.py). llama-launch follows its "active" link on each model load.
       - ${ROCSY_ROOT:?Set ROCSY_ROOT in .env}/llama.cpp-builds:${ROCSY_ROOT:?Set ROCSY_ROOT in .env}/llama.cpp-builds:ro
+      # Builds compiled against a Rocsy ROCm (Core Backend) link to it by absolute path.
+      - ${ROCSY_ROOT:?Set ROCSY_ROOT in .env}/rocm-versions:${ROCSY_ROOT:?Set ROCSY_ROOT in .env}/rocm-versions:ro
       # Versioned llama-swap binaries built with the Rocsy Addons patch.
       - ../llama-swap-builds:/opt/rocsy-llama-swap:ro
       # GGUF model files, same reasoning -- mounted at matching host paths so
@@ -617,7 +619,7 @@ services:
       - /dev/dri/renderD128
     volumes:
       - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}:/opt/data
-      - ../H3Machine/uploads:/opt/data/rocsy-pinned:ro
+      - ../Video/uploads:/opt/data/rocsy-pinned:ro
       # yt-dlp managed in Models -> Manager -> Core Backend (one copy for Hermes and the Agent; `yt-dlp` on PATH)
       - ../core-backend-extras/yt-dlp:/opt/rocsy-tools/yt-dlp:ro
     environment:
@@ -687,7 +689,7 @@ services:
       TRAINER_REPO: /opt/trainers
       TRAINER_QUEUE_URL: http://127.0.0.1:${LOCK_PORT:-8600}
       TRAINER_QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
-      TRAINER_H3_GALLERY_URL: http://127.0.0.1:${H3_PORT:-8000}/Vid
+      TRAINER_H3_GALLERY_URL: http://127.0.0.1:${H3_PORT:-8000}/Video
       HF_HOME: /data/hf-cache
       # Auto-tagging: vision models served by the llama service (llama-swap).
       LLAMA_URL: http://127.0.0.1:${LLAMA_PORT:-8400}

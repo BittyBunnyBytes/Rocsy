@@ -119,7 +119,7 @@ function useLoraSet(model) {
 const loraLabel = (index) => LORA_INFO[index]?.label || LORA_SLOTS[index].replace(/\.safetensors$/, "");
 const loraDefaultStrength = (index) => LORA_INFO[index]?.strength ?? 0.8;
 
-// One LoRA row, as in H3 Machine: "!" (LoRAs with trigger words) shows them on
+// One LoRA row, as in Video: "!" (LoRAs with trigger words) shows them on
 // hover/focus, "i" opens the source page (its tooltip has the recommended
 // strength). An enabled LoRA with a trigger is tinted amber as a reminder to
 // put the trigger in the prompt. Strength starts at the recommended value.
@@ -186,7 +186,7 @@ function collectLoras() {
 }
 
 /* -------------------------------------------------------------- icons -- */
-// Inline SVG icons, the same set and stroke style as H3 Machine's.
+// Inline SVG icons, the same set and stroke style as Video's.
 const ICON_PATHS = {
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/>',
   download: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>',
@@ -251,7 +251,7 @@ function openViewer(src, caption = "", actions = "", checkerboard = false) {
 }
 
 /* --------------------------------------------------------- references -- */
-// H3 Machine-style upload rows: a thumbnail (or an Upload box when empty), the
+// Video-style upload rows: a thumbnail (or an Upload box when empty), the
 // slot's name/token, its strength, an on/off switch and a remove button.
 // Images can be dropped onto a row (or anywhere on the list: first empty slot).
 // The uploaded filenames are kept in this browser, so references survive a
@@ -279,7 +279,7 @@ function saveReferences() {
   try { localStorage.setItem(REFERENCE_STORAGE_KEY, JSON.stringify(slots)); } catch { /* storage blocked */ }
 }
 
-// Rows come from the shared BunnyReferences component (H3 Machine's
+// Rows come from the shared BunnyReferences component (Video's
 // References card): thumbnail, token chip, size line, then Krea's own extras
 // (strength, Replace) and the on/off switch. Only attached slots are listed,
 // in slot order; removing one moves the later ones up, like H3.
@@ -449,7 +449,7 @@ function collectReferences() {
 }
 
 /* --------------------------------------------------------------- crop -- */
-// Same crop tool as H3 Machine: drag the box or its corners, Save crop. It is
+// Same crop tool as Video: drag the box or its corners, Save crop. It is
 // non-destructive - the slot remembers the original upload (ref.original) and
 // the box (ref.crop, normalized), so cropping again starts from the original
 // with the box where it was left. The crop is uploaded as a new reference file.
@@ -625,7 +625,7 @@ async function resetCrop(index) {
 }
 
 /* ------------------------------------------------------------ estimate -- */
-// "Estimated time to complete" above the prompt, like H3 Machine: the average
+// "Estimated time to complete" above the prompt, like Video: the average
 // of the last 5 finished generations with the same render-relevant settings
 // (from the generation history; there is no separate timing table here).
 
@@ -1025,7 +1025,7 @@ function buildPayload() {
 
 /* ------------------------------------------------------------ presets -- */
 // Named settings per model, saved on the server (shared by every browser), like
-// H3 Machine's. Picking a preset never changes the model, prompt, seed or
+// Video's. Picking a preset never changes the model, prompt, seed or
 // reference images. The selected preset per model is remembered in this browser.
 
 const PRESET_EXCLUDED_FIELDS = ["model", "prompt", "seed", "references"];
@@ -1268,7 +1268,7 @@ function bindForm() {
 }
 
 /* -------------------------------------------------------------- jobs -- */
-// Cards match H3 Machine's: meta chips, a progress bar with a time-left
+// Cards match Video's: meta chips, a progress bar with a time-left
 // estimate, icon buttons, All / Running / Complete tabs, prompt search and
 // "Show more" paging. While an image renders, a placeholder of the output's
 // shape holds its place, so the list doesn't jump when the image arrives.
@@ -1486,7 +1486,7 @@ async function jobAction(action, jobId) {
     if (action === "cancel") await Api.request(`/api/jobs/${jobId}/cancel`, { method: "POST" });
     else if (action === "remove") await Api.request(`/api/jobs/${jobId}`, { method: "DELETE" });
     else if (action === "retry") {
-      // Like H3 Machine's Retry: everything (including the seed this job actually used) goes back into the form for review.
+      // Like Video's Retry: everything (including the seed this job actually used) goes back into the form for review.
       applySettings({ ...job.request, seed: job.seed ?? job.request.seed ?? null }, { withModel: true });
       renderPresetBar();
       $("#generate-form").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1589,7 +1589,7 @@ function bindJobs() {
 }
 
 /* ------------------------------------------------------------- hotbar -- */
-// Under the prompt, like H3 Machine's hotbar, but only what is relevant right
+// Under the prompt, like Video's hotbar, but only what is relevant right
 // now: the trigger words of the enabled LoRAs (Krea 2 / Lustify) and the
 // <imageN> tags of the attached, enabled references (Qwen). Hidden when empty.
 // A chip inserts its text at the cursor; hovering shows what it is.
@@ -1601,7 +1601,7 @@ function hotbarGroups() {
   const triggers = LORA_SLOTS.flatMap((_, index) => {
     const row = $(`#lora-list [data-lora-index="${index}"]`);
     if (!row?.querySelector(".lora-enabled").checked) return [];
-    // "word (note)" -> only the word gets typed, as in H3 Machine.
+    // "word (note)" -> only the word gets typed, as in Video.
     return (LORA_INFO[index]?.triggers || []).map((trigger) => ({
       label: trigger.replace(/\s*\(.*\)$/, ""), text: trigger.replace(/\s*\(.*\)$/, ""), kind: "trigger",
       title: `${loraLabel(index)} - ${trigger}`,

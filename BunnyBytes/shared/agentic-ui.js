@@ -1,4 +1,4 @@
-/* Shared Image, Music and Voice Agentic mode UI (H3 Machine parity). The studio proxies
+/* Shared Image, Music and Voice Agentic mode UI (Video parity). The studio proxies
    every request to the internal framework (BunnyBytes/shared/agentic.py):
    - Studio card: Agentic queue, Hermes instructions, approval, active sessions.
    - Prompt syntax helper under the prompt that follows the loaded model.
@@ -8,8 +8,8 @@
 (() => {
   const root = document.body;
   const mount = root.dataset.appPrefix || location.pathname;
-  const studio = root.dataset.studio || (mount.startsWith('/Krea') ? 'image' : mount.startsWith('/Mus') ? 'music' : 'voice');
-  const prefix = root.dataset.appPrefix ?? (studio === 'image' ? '/Krea' : studio === 'music' ? '/Mus' : '/Voice');
+  const studio = root.dataset.studio || (mount.startsWith('/Image') ? 'image' : mount.startsWith('/Music') ? 'music' : 'voice');
+  const prefix = root.dataset.appPrefix ?? (studio === 'image' ? '/Image' : studio === 'music' ? '/Music' : '/Voice');
   const API = `${prefix}/api/agentic`;
   const LABEL = { image: 'Image', music: 'Music', voice: 'Voice' }[studio];
   const ACTIVE = new Set(['planning', 'reviewing_plan', 'queued', 'rendering', 'reviewing_output', 'retrying']);
@@ -356,7 +356,7 @@
         h('button', { type: 'button', class: 'secondary-button', text: `← Back to ${LABEL}`, onclick: closeView }),
         h('h1', { text: `Hermes · ${LABEL} agent` }),
         h('span', { id: 'agentic-save-state', class: 'agentic-hint', 'aria-live': 'polite' })),
-      h('p', { class: 'agentic-hint', text: `Agentic sends your ${LABEL} request to Hermes on the local Llama service with the guide for the model you have loaded, renders through the shared GPU queue, and reviews the result. Same controls as H3 Machine's Hermes settings.` }),
+      h('p', { class: 'agentic-hint', text: `Agentic sends your ${LABEL} request to Hermes on the local Llama service with the guide for the model you have loaded, renders through the shared GPU queue, and reviews the result. Same controls as Video's Hermes settings.` }),
       h('div', { class: 'agentic-layout' },
         h('form', { id: 'agentic-settings-form', class: 'agentic-main', autocomplete: 'off', onsubmit: event => event.preventDefault() },
           h('div', { class: 'agentic-card' }, h('h2', { text: 'Hermes model' }),
@@ -368,7 +368,7 @@
               ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Maximum']].map(([v, t]) => h('option', { value: v, text: t }))),
               'Available levels depend on the model.'),
             field('Agent context (tokens)', h('input', { id: 'ag-context', type: 'text', readonly: true }),
-              'Shared with H3 Machine: change it in H3 → Hermes settings or Llama Swap → Parameters.'),
+              'Shared with Video: change it in H3 → Hermes settings or Llama Swap → Parameters.'),
             field('Llama service', h('input', { id: 'ag-base-url', type: 'text', readonly: true })),
             h('details', { class: 'agentic-advanced' }, h('summary', { text: 'Advanced sampling' }),
               h('div', { class: 'agentic-grid' },

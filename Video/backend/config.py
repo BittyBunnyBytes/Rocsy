@@ -28,7 +28,7 @@ class Settings:
     host: str = field(default_factory=lambda: os.getenv("H3_HOST", "0.0.0.0"))
     port: int = field(default_factory=lambda: int(os.getenv("H3_PORT", "8000")))
 
-    # Reverse-proxy path-prefix awareness (e.g. "/Vid" when mounted behind the
+    # Reverse-proxy path-prefix awareness (e.g. "/Video" when mounted behind the
     # BunnyBytes gateway). Empty string for standalone/local-dev use.
     mount_prefix: str = field(default_factory=lambda: os.getenv("H3_MOUNT_PREFIX", "").rstrip("/"))
 

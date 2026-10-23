@@ -166,7 +166,7 @@
   setOpen(false);
 })();
 
-/* H3 Machine's References card as a shared component (used by Image).
+/* Video's References card as a shared component (used by Image).
    The studio owns its reference state and uploads; this renders the H3 row
    markup (thumbnail, token chip, meta line, extras, remove) and the totals,
    wires the drop zone, and inserts tokens at the prompt cursor. */

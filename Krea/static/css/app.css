@@ -205,7 +205,7 @@ textarea:focus, select:focus, input:focus {
   width: 70px;
 }
 
-/* Estimate + Generate, above the prompt and sticky (as in H3 Machine). */
+/* Estimate + Generate, above the prompt and sticky (as in Video). */
 .composer-footer {
   position: sticky; top: 10px; z-index: 30;
   display: flex; align-items: center; gap: 10px;
@@ -476,7 +476,7 @@ textarea:focus, select:focus, input:focus {
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
 }
 
-/* ============================================ H3 Machine parity (2026-09-27) */
+/* ============================================ Video parity (2026-09-27) */
 
 .ui-icon { width: 1.15em; height: 1.15em; flex: none; vertical-align: -0.2em; }
 .icon-button { display: inline-flex; align-items: center; justify-content: center; flex: none; }
@@ -505,7 +505,7 @@ textarea:focus, select:focus, input:focus {
 .reference-strength-field { display: flex; align-items: center; gap: 6px; font-size: 11px; }
 .reference-strength-field input { width: 64px; padding: 4px 6px; }
 
-/* on/off switch (same look as H3 Machine's) */
+/* on/off switch (same look as Video's) */
 .switch { position: relative; display: inline-flex; cursor: pointer; }
 .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
 .switch span { width: 38px; height: 22px; border-radius: 999px; background: var(--border); transition: background 0.15s; position: relative; }
@@ -593,7 +593,7 @@ textarea:focus, select:focus, input:focus {
   .jobs-search { flex-basis: 100%; }
 }
 
-/* ---- image crop (same tool as H3 Machine) */
+/* ---- image crop (same tool as Video) */
 .crop-frame { position: relative; display: inline-block; max-width: 100%; touch-action: none; }
 .crop-frame img { display: block; max-width: 100%; max-height: calc(100vh - 160px); user-select: none; -webkit-user-drag: none; }
 .crop-box { position: absolute; border: 2px solid var(--blue); background: rgba(121, 173, 211, 0.15); cursor: move; box-shadow: 0 0 0 2000px rgba(4, 7, 9, 0.5); }
@@ -609,7 +609,7 @@ textarea:focus, select:focus, input:focus {
 .lora-list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
 .lora-head-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
 
-/* ---- LoRA gallery (same layout as H3 Machine's) */
+/* ---- LoRA gallery (same layout as Video's) */
 .lora-gallery-dialog { width: min(1100px, 100%); }
 .lora-gallery-tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
 .lora-gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
@@ -640,7 +640,7 @@ textarea:focus, select:focus, input:focus {
 .lora-card-desc.is-open { display: block; max-height: 320px; overflow-y: auto; }
 .lora-card-foot { display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 4px; }
 
-/* ---- Generate + estimate bar, matched to H3 Machine's look (2026-09-27) */
+/* ---- Generate + estimate bar, matched to Video's look (2026-09-27) */
 .primary-button {
   display: inline-flex; align-items: center; justify-content: center;
   min-height: 40px; padding: 9px 22px; border: none; border-radius: 8px;
@@ -654,13 +654,13 @@ textarea:focus, select:focus, input:focus {
 .composer-footer { background: rgba(21, 30, 37, 0.9); border-color: #354550; border-radius: 12px; }
 .composer-footer .primary-button { min-height: 44px; padding: 10px 24px; font-size: 15px; }
 @media (max-width: 640px) {
-  /* Phones, as in H3 Machine: estimate on its own line, Generate full width under it. */
+  /* Phones, as in Video: estimate on its own line, Generate full width under it. */
   .composer-footer { flex-wrap: wrap; }
   .eta { flex-basis: 100%; }
   .composer-footer .primary-button { flex: 1; }
 }
 
-/* ---- LoRA list rows (same as H3 Machine: groups, ! trigger tip, i source link, enabled tint) */
+/* ---- LoRA list rows (same as Video: groups, ! trigger tip, i source link, enabled tint) */
 .lora-list { gap: 2px; }
 .lora-group {
   margin: 10px 0 4px; padding-bottom: 4px; border-bottom: 1px solid var(--border);
@@ -712,7 +712,7 @@ textarea:focus, select:focus, input:focus {
   .switch-small input:checked + span::after { transform: translateX(16px); }
 }
 
-/* ---- prompt hotbar (as in H3 Machine) */
+/* ---- prompt hotbar (as in Video) */
 .prompt-snippets {
   display: flex; flex-wrap: nowrap; align-items: stretch; gap: 6px; padding: 7px; margin-top: 6px;
   overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: #354550 transparent;

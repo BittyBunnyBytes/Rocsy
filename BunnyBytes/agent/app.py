@@ -1315,7 +1315,7 @@ def h3_script_block(s: dict[str, Any]) -> str:
             "prompt written or fixed (or an H3 prompting question answered), not a render. Pick the mode from what they describe "
             "and attach: Text (T2VA, 3 fields), Keyframe (I2VA / FL2VA / L2VA: an instruction line, a blank line, the 3 fields) or "
             "Reference (ref2va, the six sections). Write it exactly in that official format in a fenced code block labelled h3 (```h3) they can paste "
-            "into H3 Machine, then one line naming the mode and the references it expects. ONE H3 PROMPT IS AT MOST 15 SECONDS: "
+            "into Video, then one line naming the mode and the references it expects. ONE H3 PROMPT IS AT MOST 15 SECONDS: "
             "when the asked length (or what the story needs) is longer, write several prompts, Clip 1, Clip 2... each 15 s or "
             "less and adding up to the requested time (40 s = 15 + 15 + 10), each in its own code block labelled with its clip "
             "number and length, timestamps restarting at 00:00 in each, the same characters/setting/style/voices throughout and "
@@ -2206,12 +2206,12 @@ async def refresh_agentic(s: dict[str, Any], j: dict[str, Any]) -> None:
             if text:
                 kind = str(entry.get("kind") or "log").upper()
                 lines.append(f"[{kind}] {text}")
-        terminal_text = "\n".join(lines)[-24000:] or j.get("stage") or "Starting H3 Machine Agentic…"
+        terminal_text = "\n".join(lines)[-24000:] or j.get("stage") or "Starting Video Agentic…"
         terminal_status = ("failed" if state in studios.DONE and state not in ("complete", "completed")
                            else "complete" if state in ("complete", "completed") else "running")
         ev(s, "terminal", terminal_text,
            tool_id=f"h3-agentic:{j['job_id']}",
-           command=f"H3 Machine Agentic · {j.get('label') or j['ref']}",
+           command=f"Video Agentic · {j.get('label') or j['ref']}",
            phase=state,
            status=terminal_status,
            error=str(item.get("error") or "") if terminal_status == "failed" else "")

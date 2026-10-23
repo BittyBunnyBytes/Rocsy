@@ -54,11 +54,11 @@ def _required(name: str) -> str:
 QUEUE_INTERNAL_SECRET = _required("QUEUE_INTERNAL_SECRET")
 
 # The apps this coordinator hands GPU turns to. Base URLs already include
-# each app's own mount prefix (e.g. "/Vid") because every app in this stack is
+# each app's own mount prefix (e.g. "/Video") because every app in this stack is
 # configured with that prefix even when reached directly on its own port, not
 # just through the gateway -- see each service's *_MOUNT_PREFIX in
 # docker-compose.yml.
-APP_PREFIXES = {"Vid": "/Vid", "Mus": "/Mus", "Krea": "/Krea", "Trainer": "/Trainer", "Agent": "/Agent", "Voice": "/Voice", "Framework": ""}
+APP_PREFIXES = {"Vid": "/Video", "Mus": "/Music", "Krea": "/Image", "Trainer": "/Trainer", "Agent": "/Agent", "Voice": "/Voice", "Framework": ""}
 APP_BASE_URLS = {
     "Vid": os.getenv("VID_UPSTREAM", "http://127.0.0.1:8000").rstrip("/") + APP_PREFIXES["Vid"],
     "Mus": os.getenv("MUS_UPSTREAM", "http://127.0.0.1:8200").rstrip("/") + APP_PREFIXES["Mus"],

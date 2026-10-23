@@ -1,5 +1,5 @@
 /* Voice-only pieces on top of the shared studio shell (shared/ui/h3-studio.css).
-   Toolbars, job cards and view tabs follow Image (Krea app.css) and H3 Machine. */
+   Toolbars, job cards and view tabs follow Image (Krea app.css) and Video. */
 :root { color-scheme: dark; }
 *, *::before, *::after { box-sizing: border-box; }
 body.h3-studio-ui { --violet: #a58cf0; margin: 0; }
@@ -7,7 +7,7 @@ body.h3-studio-ui :is(button,input,select,textarea) { color: inherit; }
 body.h3-studio-ui a { color: inherit; }
 body.h3-studio-ui .brand-mark { font-size: 11px; letter-spacing: .02em; }
 
-/* ── Top view tabs (H3 Machine) ─────────────────────────────────────────── */
+/* ── Top view tabs (Video) ─────────────────────────────────────────── */
 .view-tabs { display: flex; gap: 4px; padding: 3px; border-radius: 999px; background: var(--field); border: 1px solid var(--border); }
 .view-tab {
   display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border: 0; border-radius: 999px;

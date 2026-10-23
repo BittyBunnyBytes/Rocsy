@@ -27,6 +27,23 @@ args_file=/app/overrides/$model_id.args
 # llama.cpp release converted to RDNA Boost, or at a stock llama.cpp build the
 # user chose knowing it has no RDNA Boost; it is read on every model load.
 server_bin=${LLAMA_SERVER_BIN:-}
+# The hand-made RDNA Boost build in llama.cpp-rdna-boost/, for any GPU targets
+# (gfx1100+gfx1101 first); empty when there is none.
+builtin_build() {
+  for candidate in "$ROCSY_ROOT"/llama.cpp-rdna-boost/build-rocm-gfx1100-gfx1101-rdna-boost/bin/llama-server \
+                   "$ROCSY_ROOT"/llama.cpp-rdna-boost/build-rocm-*-rdna-boost/bin/llama-server; do
+    [ -x "$candidate" ] && { echo "$candidate"; return; }
+  done
+}
+# Newest installed Core Backend build (RDNA Boost before stock), for installs where
+# "Use this build" was never picked; empty when there is none.
+newest_build() {
+  for pattern in 'b[0-9]*-boost-*' 'rocmfpx-*' 'b[0-9]*-stock*'; do
+    newest=$(ls -1d "$ROCSY_ROOT"/llama.cpp-builds/builds/$pattern/build/bin/llama-server 2>/dev/null \
+             | sed 's|.*/builds/b\([0-9]*\)-|\1 &|; t; s|^|0 |' | sort -k1,1nr | head -n 1 | cut -d' ' -f2-)
+    [ -n "$newest" ] && [ -x "$newest" ] && { echo "$newest"; return; }
+  done
+}
 # Per-model build (Parameters tab -> "llama.cpp build": "--build <id>" in .args) wins over
 # Core Backend's "Use this build"; a missing or unknown build falls back to that.
 if [ -z "$server_bin" ] && [ -n "$model_id" ] && [ -r "$args_file" ]; then
@@ -34,8 +51,8 @@ if [ -z "$server_bin" ] && [ -n "$model_id" ] && [ -r "$args_file" ]; then
   case "$build_choice" in
     '') ;;
     builtin)
-      server_bin=$ROCSY_ROOT/llama.cpp-rdna-boost/build-rocm-gfx1100-gfx1101-rdna-boost/bin/llama-server
-      echo "Build for this model: built-in" >&2 ;;
+      server_bin=$(builtin_build)
+      [ -n "$server_bin" ] && echo "Build for this model: built-in" >&2 ;;
     b[0-9]*-boost-[0-9a-f]*|b[0-9]*-stock|b[0-9]*-stock-*|rocmfpx-[0-9a-f]*-gfx*)
       if [ -x "$ROCSY_ROOT/llama.cpp-builds/builds/$build_choice/build/bin/llama-server" ]; then
         server_bin=$ROCSY_ROOT/llama.cpp-builds/builds/$build_choice/build/bin/llama-server
@@ -50,7 +67,15 @@ if [ -z "$server_bin" ] && [ -x "$ROCSY_ROOT/llama.cpp-builds/active/bin/llama-s
   server_bin=$(readlink -f "$ROCSY_ROOT/llama.cpp-builds/active/bin/llama-server")
   echo "Core Backend build: $server_bin" >&2
 fi
-server_bin=${server_bin:-$ROCSY_ROOT/llama.cpp-rdna-boost/build-rocm-gfx1100-gfx1101-rdna-boost/bin/llama-server}
+[ -n "$server_bin" ] || server_bin=$(builtin_build)
+if [ -z "$server_bin" ]; then
+  server_bin=$(newest_build)
+  [ -n "$server_bin" ] && echo "No build chosen in Core Backend - using the newest installed: $server_bin" >&2
+fi
+if [ -z "$server_bin" ]; then
+  echo "No llama.cpp build is installed yet. Open Models -> Manager -> Core Backend and install one (RDNA Boost or stock), then load the model again." >&2
+  exit 2
+fi
 case "$server_bin" in
   "$ROCSY_ROOT"/llama.cpp-rdna-boost/build-rocm-*-rdna-boost/bin/llama-server) ;;
   "$ROCSY_ROOT"/llama.cpp-builds/builds/b[0-9]*-boost-[0-9a-f]*/build/bin/llama-server) ;;
@@ -110,7 +135,7 @@ for device in $devices; do
 done
 IFS=$old_ifs
 
-# Per-model context override written by H3 Machine's "Agent context" setting
+# Per-model context override written by Video's "Agent context" setting
 # and the Parameters tab: /app/overrides/<model id>.ctx. Only digits within
 # 4096-262144 are accepted.
 override=/app/overrides/$model_id.ctx

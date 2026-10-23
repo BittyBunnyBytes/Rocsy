@@ -116,7 +116,7 @@ class ComfyService:
             if running_ids != {prompt_id}:
                 raise ServiceError(
                     "This ComfyUI version lacks targeted cancellation and is rendering unrelated jobs; "
-                    "H3 Machine will not issue a global interrupt."
+                    "Video will not issue a global interrupt."
                 )
             await self.request("POST", "/interrupt", {"prompt_id": prompt_id}, timeout=15)
             return True
@@ -148,7 +148,7 @@ class ComfyService:
 
     async def start(self) -> None:
         if self.config.comfy_mode != "local":
-            raise ServiceError("ComfyUI is configured as an external service and cannot be started by H3 Machine.")
+            raise ServiceError("ComfyUI is configured as an external service and cannot be started by Video.")
         # A separately launched ComfyUI Desktop instance may already own the
         # configured endpoint. Reuse it without claiming process ownership.
         if (await self.status())["online"]:

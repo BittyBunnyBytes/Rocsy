@@ -12,7 +12,7 @@
 !/Llama
 !/Music
 !/Krea
-!/H3Machine
+!/Video
 !/Trainer
 !/.gitignore
 !/.github
@@ -44,7 +44,7 @@ node_modules/
 /BunnyBytes/hostctl/storage.json
 /BunnyBytes/hermes-desktop/
 # downloaded LoRA preview galleries (third-party images; tools/fetch_lora_gallery.py rebuilds them)
-/H3Machine/static/lora-gallery/
+/Video/static/lora-gallery/
 /Krea/static/lora-gallery/
 # llama-swap: per-machine overrides and tuning runs
 /Llama/overrides/
@@ -73,7 +73,7 @@ node_modules/
 /BunnyBytes/branding/tiktok/*.wav
 # CameraBench-Pro stills: that dataset states no license, so they aren't redistributed
 # (the shot chips work without them; camera-clips/ is CameraBench, CC BY 4.0, and stays)
-/H3Machine/static/shot-examples/*.jpg
+/Video/static/shot-examples/*.jpg
 # notes from the author's own REA mod sessions
 /BunnyBytes/rea/IMPROVEMENT_NOTES.md
 # ---- logs, agent sessions and generations, wherever they end up (2026-10-20) ----
@@ -138,3 +138,6 @@ catalog_local.py
 
 # Personal host helper (LightDM crash-only autologin): never published
 /BunnyBytes/crash-relogin/
+
+# Compatibility link for host tools that still use the old folder name
+/H3Machine

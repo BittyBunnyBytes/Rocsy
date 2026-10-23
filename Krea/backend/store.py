@@ -33,7 +33,7 @@ class Store:
                     lock_token TEXT, queue_entry_id TEXT,
                     model TEXT NOT NULL DEFAULT 'krea2', stage TEXT NOT NULL DEFAULT 'render', enhanced_prompt TEXT
                 );
-                -- Named settings presets per model (like H3 Machine's), shared by every browser.
+                -- Named settings presets per model (like Video's), shared by every browser.
                 CREATE TABLE IF NOT EXISTS presets (
                     model TEXT NOT NULL, name TEXT NOT NULL, settings_json TEXT NOT NULL, updated_at TEXT NOT NULL,
                     PRIMARY KEY (model, name)

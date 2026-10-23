@@ -70,7 +70,7 @@ body.modal-open{overflow:hidden}
 .ed-caption{flex:1;min-height:220px;width:100%;resize:vertical;border:1px solid #41525b;border-radius:9px;background:#10181c;color:var(--text);padding:12px;font:15px/1.55 system-ui,sans-serif}.ed-caption:focus{outline:none;border-color:var(--blue)}
 .ed-nav{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.ed-nav .ds-cap-state{margin-left:auto}.ed-count{color:var(--muted);font-size:.8rem}
 @media(max-width:860px){.ds-modal-body{grid-template-columns:1fr}.ed-caption{min-height:150px}}
-/* ---- trimmer: H3 Machine's trim timeline styles, mapped to Trainer colours ---- */
+/* ---- trimmer: Video's trim timeline styles, mapped to Trainer colours ---- */
 .trim-timeline { position: relative; height: 40px; background: #10181c; border: 1px solid var(--border); border-radius: 6px; touch-action: none; }
 .trim-track { position: absolute; inset: 6px 0; }
 .trim-range { position: absolute; top: 0; bottom: 0; background: rgba(124, 179, 220, 0.25); border-top: 2px solid var(--blue); border-bottom: 2px solid var(--blue); }

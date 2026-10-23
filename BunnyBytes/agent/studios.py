@@ -12,9 +12,9 @@ from typing import Any
 import httpx
 
 UP = {
-    "Vid": os.getenv("VID_UPSTREAM", "http://127.0.0.1:8000").rstrip("/") + "/Vid",
-    "Krea": os.getenv("KREA_UPSTREAM", "http://127.0.0.1:8300").rstrip("/") + "/Krea",
-    "Mus": os.getenv("MUS_UPSTREAM", "http://127.0.0.1:8200").rstrip("/") + "/Mus",
+    "Vid": os.getenv("VID_UPSTREAM", "http://127.0.0.1:8000").rstrip("/") + "/Video",
+    "Krea": os.getenv("KREA_UPSTREAM", "http://127.0.0.1:8300").rstrip("/") + "/Image",
+    "Mus": os.getenv("MUS_UPSTREAM", "http://127.0.0.1:8200").rstrip("/") + "/Music",
     "Trainer": os.getenv("TRAINER_UPSTREAM", "http://127.0.0.1:8500").rstrip("/") + "/Trainer",
     "Queue": os.getenv("QUEUE_UPSTREAM", "http://127.0.0.1:8600").rstrip("/") + "/Queue",
     "Motion": os.getenv("MOTION_UPSTREAM", "http://127.0.0.1:8970").rstrip("/"),      # loopback only, no gateway route
@@ -188,7 +188,7 @@ AGENTIC_ACTIVE = {"waiting_for_gpu", "running", "queuing", "rendering", "reviewi
 
 async def agentic_video(prompt: str, guide: str, duration: float | None, aspect: str | None, mode: str, preset: str,
                         default_preset: str, reference_ids: list[str], resume: str | None, model: str = "minimax_h3") -> dict[str, Any]:
-    """Vid's Agentic mode: H3 Machine's own Hermes plans the clips (continuations, references,
+    """Vid's Agentic mode: Video's own Hermes plans the clips (continuations, references,
     reviews, staging, finishing) and renders them. Returns {job_id, session_id, state}."""
     # Agentic plans the whole film from the request. Its generation.duration is only
     # the seed clip length, and Vid validates that field at 15 seconds or less.
@@ -383,7 +383,7 @@ async def train(dataset: str, name: str, trigger: str | None, model: str | None)
 
 
 async def fetch_output(url: str, path: str) -> str:
-    """Save a job's output (a gateway URL like /Krea/api/outputs/ID/stream?index=0) to path;
+    """Save a job's output (a gateway URL like /Image/api/outputs/ID/stream?index=0) to path;
     returns its content type."""
     service = url.strip("/").split("/")[0]
     if service not in UP:
@@ -469,11 +469,11 @@ def outputs(service: str, item: dict[str, Any]) -> list[dict[str, str]]:
     """Viewable results of a finished job, as gateway URLs."""
     if service == "Vid" and item.get("output_url"):
         return [{"kind": "video", "url": item["output_url"], "thumb": item.get("poster_url") or "",
-                 "open": f"/Vid/?job={item.get('id')}"}]
+                 "open": f"/Video/?job={item.get('id')}"}]
     if service == "Krea":
-        return [{"kind": "image", "url": image["url"], "thumb": image["url"], "open": "/Krea/"} for image in item.get("images") or []]
+        return [{"kind": "image", "url": image["url"], "thumb": image["url"], "open": "/Image/"} for image in item.get("images") or []]
     if service == "Mus" and item.get("output_url"):
-        return [{"kind": "audio", "url": item["output_url"], "thumb": "", "open": "/Mus/"}]
+        return [{"kind": "audio", "url": item["output_url"], "thumb": "", "open": "/Music/"}]
     if service == "Voice" and item.get("state") == "complete":
         return [{"kind": "audio", "url": f"/Voice/api/audio/{item['id']}", "thumb": "", "open": "/Voice/"}]
     if service == "Trainer":

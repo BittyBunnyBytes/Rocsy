@@ -18,7 +18,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/BittyBunnyBytes/Rocsy/releases/latest"><b>Download the installer</b></a>
+  <a href="https://github.com/BittyBunnyBytes/Rocsy/releases/latest"><img alt="Download the installer" src="https://img.shields.io/badge/Download-the%20installer-e9a04f?style=for-the-badge&logo=github&logoColor=white"></a>
+  &nbsp;
+  <a href="https://ko-fi.com/bittybunnybytes"><img alt="Support me on Ko-fi" src="https://img.shields.io/badge/Donate-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white"></a>
 </p>
 
 A self-hosted, password-gated AI studio for one machine with an AMD GPU (ROCm). One gateway
@@ -36,9 +38,9 @@ agent that drives all of them, and every GPU job goes through one shared queue.
 |---|---|---|
 | `/` | Home page, Settings (themes, modules, services, notifications, Agentic) | `BunnyBytes/gateway` |
 | `/Agent` | Master Agent: a Hermes agent that plans and runs jobs across the studios | `BunnyBytes/agent` |
-| `/Vid` | Video (MiniMax H3, LTX 2.5) with Agentic mode and Post-Edit | `H3Machine` |
-| `/Krea` | Image (Krea 2, Lustify, Qwen Image 2.1) | `Krea` |
-| `/Mus` | Music (YuE2, MiniMax Music 3) | `Music` |
+| `/Video` | Video (MiniMax H3, LTX 2.5, Wan 2.2) with Agentic mode and Post-Edit | `Video` |
+| `/Image` | Image (Krea 2, MOSS-Image, Qwen Image 2.1) | `Krea` |
+| `/Music` | Music (YuE2, MiniMax Music 3) | `Music` |
 | `/Voice` | Text to speech with saved voices | `BunnyBytes/voice` |
 | `/Trainer` | LoRA training (ROCm) | `Trainer` |
 | `/Queue` | Shared GPU queue | `BunnyBytes/lock` |
@@ -56,7 +58,7 @@ output bot + Cloudflare tunnel), `BunnyBytes/hostctl` (host helper behind Settin
 
 ```
 BunnyBytes/   gateway, agent, queue, models hub, voice, motion, REA, hostctl, docker-compose.yml
-H3Machine/    video studio          Krea/   image studio       Music/   music studio
+Video/        video studio          Krea/   image studio       Music/   music studio
 Trainer/      LoRA trainer          Llama/  llama-swap config + launcher
 ```
 
@@ -81,7 +83,7 @@ installed later in Models → Manager → Core Backend. No desktop, or prefer a 
 `sh "Install Rocsy.sh" --terminal` for the same questions in the terminal, or `--defaults` for the
 default install without questions (`--help` lists the options). By hand:
 
-1. Copy each `.env.example` to `.env` (`BunnyBytes/`, `H3Machine/`, `Krea/`, `Music/`) and fill in
+1. Copy each `.env.example` to `.env` (`BunnyBytes/`, `Video/`, `Krea/`, `Music/`) and fill in
    the secrets (`MASTER_PASSWORD`, `COOKIE_SECRET`, `QUEUE_INTERNAL_SECRET`, `LLAMA_API_KEY`,
    `HOSTCTL_SECRET`). `BunnyBytes/.env.example` explains how to generate each one.
 2. In `BunnyBytes/.env`, set the folders (absolute paths):
@@ -130,8 +132,9 @@ and other host tools are Linux-only. Settings → Services shows the Windows ver
   `docker-compose.override.yml`.
 - One GPU is assumed to also drive the desktop. VRAM guards and the shared queue exist because
   running two GPU jobs at once crashed the display server.
-- The llama.cpp launcher expects RDNA Boost builds under `ROCSY_ROOT` (`llama.cpp-rdna-boost/`,
-  or ones built in Models → Manager → Core Backend).
+- The LLM server needs a llama.cpp build from Models → Manager → Core Backend (RDNA Boost or
+  stock, for any GPU target). Until you pick one with "Use this build", the launcher uses the newest
+  installed build; with none installed, loading a model says so instead of failing silently.
 - Public access goes through a Cloudflare tunnel created on the Connections page (or a
   hand-made one, see `BunnyBytes/cloudflared/README-manual-steps.md`). Rocsy has a single
   shared password; for internet exposure put Cloudflare Access in front of it as well.

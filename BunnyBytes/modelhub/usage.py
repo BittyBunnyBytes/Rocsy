@@ -54,7 +54,7 @@ def names_in_graph(graph) -> set[str]:
     return {m.decode("utf-8", "replace") for m in FILE_NAME.findall(json.dumps(graph).encode())}
 
 
-KREA = os.getenv("MODELHUB_KREA_URL", "http://127.0.0.1:8300/Krea")
+KREA = os.getenv("MODELHUB_KREA_URL", "http://127.0.0.1:8300/Image")
 # Krea saves images without the job graph, so past Krea jobs are read from its job
 # list. Model -> files from Krea's backend (models.py KREA_UNET_NAMES / ANIMA_VERSIONS,
 # qwen.py, the Krea template). Only for backfill: new jobs come from ComfyUI's history.

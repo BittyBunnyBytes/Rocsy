@@ -155,7 +155,7 @@ class ComfyService:
 
 def output_from_history(history: dict[str, Any], output_root: Path) -> Path | None:
     # ComfyUI's SaveAudioAdvanced node writes .flac/.wav/.mp3 (configured via
-    # its "format" input) rather than the image/video extensions H3 Machine
+    # its "format" input) rather than the image/video extensions Video
     # looks for.
     extensions = {".flac", ".wav", ".mp3", ".opus"}
     for node in history.get("outputs", {}).values():

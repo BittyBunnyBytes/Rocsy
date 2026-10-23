@@ -1,7 +1,7 @@
 # Krea 2 — prompting guide
 
-Applies to every Krea 2 checkpoint in the studio, including finetunes such as
-Lustify (Lustify is only a Krea 2 checkpoint; it uses this guide).
+Applies to every Krea 2 checkpoint in the studio, including community finetunes
+(a finetune is only a Krea 2 checkpoint; it uses this guide).
 
 ## Quick syntax
 - Natural-language prompts are recommended (official): describe the image, don't list keywords.
@@ -28,7 +28,6 @@ Studio notes:
 - Turbo checkpoints run with CFG disabled, so negative wording has no effect; describe the desired result positively.
 - References (style-reference LoRA) restyle toward the attached images; describe the new subject and scene, not the reference's content.
 - When enabled LoRAs list trigger words in the studio settings, start the prompt with those exact triggers.
-- Lustify (NSFW photoreal finetune): be concrete and physical about people, pose and camera; everyone depicted must be clearly adult.
 - Never put resolution, aspect ratio or step counts in the prompt.
 
 Sources: github.com/krea-ai/krea-2 (README, docs/prompting.md, docs/expansion.txt).

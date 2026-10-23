@@ -749,7 +749,7 @@ async function toggleAlerts() {
   localStorage.setItem("h3-completion-alerts", "on");
   unlockAudio();
   if (isIOS && !isInstalled && permission === "unsupported") {
-    toast("Sound alerts are on. For notifications on iPhone: tap Share → Add to Home Screen, open H3 Machine from there, then tap the bell.");
+    toast("Sound alerts are on. For notifications on iPhone: tap Share → Add to Home Screen, open Video from there, then tap the bell.");
     return updateAlertsButton();
   }
   const granted = permission === "granted" || (permission === "default" && await Notification.requestPermission() === "granted");
@@ -11795,7 +11795,7 @@ async function init() {
     setInterval(updateActiveJobMetrics, 250);
     if (!query.has("snapshot")) { connectEvents(); bindEventRecovery(); }
   } catch (error) {
-    toast(`H3 Machine could not initialize: ${error.message}`, "error");
+    toast(`Video could not initialize: ${error.message}`, "error");
   }
 }
 

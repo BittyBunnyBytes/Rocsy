@@ -3,7 +3,7 @@
    studio's own .topbar / header rules. Colours follow the site theme (--t-*)
    and fall back to the Rocsy slate palette on "Studio default". */
 
-:root { --topbar-height: 56px; } /* H3 Machine offsets its sticky columns by this */
+:root { --topbar-height: 56px; } /* Video offsets its sticky columns by this */
 
 .rb-bar.rb-bar {
   --rb-bg: var(--t-bg, #0f1418);

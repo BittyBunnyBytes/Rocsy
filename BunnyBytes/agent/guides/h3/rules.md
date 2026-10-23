@@ -1,6 +1,6 @@
 ---
 name: h3-prompting
-description: Write or fix MiniMax H3 video prompts in the official format - Text (T2VA), Keyframe (I2VA / FL2VA / L2VA) and Reference / full-reference mode (ref2va, six sections with <Subject N>/<Picture N>/<Video N>/<Audio N> labels, task-type tags, retention markers). Use whenever the user asks to write, rewrite, convert, check or debug a prompt for H3, H3 Machine, or MiniMax H3, including character swaps, video edits, continuations, voice/audio references.
+description: Write or fix MiniMax H3 video prompts in the official format - Text (T2VA), Keyframe (I2VA / FL2VA / L2VA) and Reference / full-reference mode (ref2va, six sections with <Subject N>/<Picture N>/<Video N>/<Audio N> labels, task-type tags, retention markers). Use whenever the user asks to write, rewrite, convert, check or debug a prompt for H3, Video, or MiniMax H3, including character swaps, video edits, continuations, voice/audio references.
 ---
 
 # MiniMax H3 prompting
@@ -12,7 +12,7 @@ the wrong reference into the shot.
 
 Pick the mode first:
 
-| H3 Machine mode | Format | Read |
+| Video mode | Format | Read |
 | --- | --- | --- |
 | Text | T2VA: 3 fields | `references/t2va-i2va-fl2va-l2va-guide.md` |
 | Keyframe (first / first+last / last) | I2VA / FL2VA / L2VA: an instruction line, a blank line, then the 3 fields | same guide, §2.1 and §3 |
@@ -46,7 +46,7 @@ non_diegetic_music:
 ```
 
 **Labels.** `<Picture N>`, `<Video N>`, `<Audio N>` are the attached references,
-numbered per category in attachment order (H3 Machine shows the exact tokens on
+numbered per category in attachment order (Video shows the exact tokens on
 each reference card and in the hotbar). `<Subject N>` is content *you* define
 from them (a person, dog, scene, costume, motion) and is numbered by you. A
 label keeps one meaning in every section.
@@ -58,7 +58,7 @@ label keeps one meaning in every section.
 - `<Video N>` only for whole-video roles: the edit source, the continuation
   source, or camera / cut / rhythm structure. People or objects taken from a
   video are still `<Subject N>`.
-- A reference video's own soundtrack is its own `<Audio N>` (H3 Machine passes
+- A reference video's own soundtrack is its own `<Audio N>` (Video passes
   it unless muted); `<Video N>` / `<Audio N>` indices are independent.
 - An audio bound to a speaker reuses that speaker's ID: `<Audio 1> is the
   voice-timbre reference for <Subject 1> (S1).`
@@ -99,7 +99,7 @@ there is no score.
 
 ## Proven recipe: swap a character into a video
 
-Inserting a picture's character into a reference clip (e.g. H3 Machine 2026-09-26):
+Inserting a picture's character into a reference clip (e.g. Video 2026-09-26):
 - `[video editing + reference generation + audio reuse] The target video is an edited version of <Video 1>. ...`
 - `<Video 1>` fully_preserved, `<Picture 1>` attribute_transfer (its character replaces the person in the video), the clip's `<Audio 1>` fully_copy.
 - Describe the video's actual scene concretely in every shot, with the new character in it.
@@ -114,7 +114,7 @@ Inserting a picture's character into a reference clip (e.g. H3 Machine 2026-09-2
 5. Speaker IDs assigned once in vocal order and reused; none in retention_analysis.
 6. All sections in English except words inside `<d>` and visible text.
 
-## Length: 15 seconds max per prompt (H3 Machine)
+## Length: 15 seconds max per prompt (Video)
 
 One H3 prompt renders one clip of at most 15 seconds (5-15 s). For a longer video (30 seconds, a minute,
 "a 40 s ad"), write several prompts: Clip 1, Clip 2, ... each 15 s or less, adding up to the requested

@@ -69,7 +69,7 @@ class InstallerTests(unittest.TestCase):
             self.addCleanup(guard.stop)
 
     def make_bundle(self, env_example='MASTER_PASSWORD=\nCOOKIE_SECRET=\n'):
-        for name in ('BunnyBytes', 'H3Machine', 'Music', 'Krea', 'Llama', 'Trainer'):
+        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer'):
             (self.bundle / name).mkdir(exist_ok=True)
         (self.bundle / 'BunnyBytes' / '.env.example').write_text(env_example)
 
@@ -208,7 +208,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_install_builds_and_starts_compose(self):
         m = self.module
-        for name in ('BunnyBytes', 'H3Machine', 'Music', 'Krea', 'Llama', 'Trainer'):
+        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer'):
             (self.bundle / name).mkdir(exist_ok=True)
             (self.bundle / name / 'example.txt').write_text(name)
         (self.bundle / 'BunnyBytes' / '.env.example').write_text('MASTER_PASSWORD=\nCOOKIE_SECRET=\n')
@@ -235,7 +235,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_failed_image_build_is_retried(self):
         m = self.module
-        for name in ('BunnyBytes', 'H3Machine', 'Music', 'Krea', 'Llama', 'Trainer'):
+        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer'):
             (self.bundle / name).mkdir(exist_ok=True)
         (self.bundle / 'BunnyBytes' / '.env.example').write_text('MASTER_PASSWORD=\n')
         flaky = m.CommandFailed('build failed', 'E: Failed to fetch x11-common.deb  400  Bad Request')
@@ -491,7 +491,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_update_prepares_the_existing_comfy_root(self):
         m = self.module
-        for name in ('BunnyBytes', 'H3Machine', 'Music', 'Krea', 'Llama', 'Trainer'):
+        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer'):
             (self.bundle / name).mkdir(exist_ok=True)
             (self.bundle / name / 'example.txt').write_text(name)
         destination = self.root / 'installed'
@@ -527,7 +527,7 @@ class InstallerTests(unittest.TestCase):
 
 
     def _bundle_apps(self):
-        for name in ('BunnyBytes', 'H3Machine', 'Music', 'Krea', 'Llama', 'Trainer'):
+        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer'):
             (self.bundle / name).mkdir(exist_ok=True)
             (self.bundle / name / 'example.txt').write_text(name)
         (self.bundle / 'BunnyBytes' / '.env.example').write_text('MASTER_PASSWORD=\nCOOKIE_SECRET=\n')

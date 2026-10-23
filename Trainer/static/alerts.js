@@ -1,4 +1,4 @@
-// Training alerts (ported from H3 Machine): a chime while the page is open, plus
+// Training alerts (ported from Video): a chime while the page is open, plus
 // notifications. Notifications go through the service worker (Android refuses the
 // plain Notification constructor) and, where supported, Web Push - the server pushes
 // when a run finishes, so they arrive even when the tab is closed or the phone is

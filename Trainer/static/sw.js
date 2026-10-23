@@ -1,6 +1,6 @@
 // Trainer service worker: shows Web Push notifications (sent by the server when
 // a LoRA finishes training) even when no tab is open, and focuses the Trainer on
-// that job when one is tapped. Ported from H3 Machine's sw.js.
+// that job when one is tapped. Ported from Video's sw.js.
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 

@@ -15,7 +15,7 @@ BODY_LIMITS = {"/Cache/api/files/upload": MAX_UPLOAD_BYTES + 1024 * 1024}
 # be passed to frontends via data-* attributes read by external JS files, not
 # inline <script> blocks -- that's what keeps this policy tight. style-src
 # allows 'unsafe-inline' only because the existing dark-theme frontends
-# (H3 Machine et al.) use some inline style attributes; scripts do not get the
+# (Video et al.) use some inline style attributes; scripts do not get the
 # same allowance.
 CSP = (
     "default-src 'self'; "

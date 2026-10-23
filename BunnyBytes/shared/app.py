@@ -34,13 +34,13 @@ CAPABILITIES = {
     "services": {
         "queue": {"base_url": os.environ.get("LOCK_UPSTREAM", "http://127.0.0.1:8600"),
                   "purpose": "GPU job coordination", "entrypoints": ["/enqueue", "/heartbeat", "/release", "/dequeue/{entry_id}"]},
-        "video": {"base_url": os.environ.get("VID_UPSTREAM", "http://127.0.0.1:8000") + "/Vid",
+        "video": {"base_url": os.environ.get("VID_UPSTREAM", "http://127.0.0.1:8000") + "/Video",
                   "purpose": "H3 video generation, specialized post-edit and reference tools", "entrypoints": ["/api/health", "/api/status"]},
-        "music": {"base_url": os.environ.get("MUS_UPSTREAM", "http://127.0.0.1:8200") + "/Mus",
+        "music": {"base_url": os.environ.get("MUS_UPSTREAM", "http://127.0.0.1:8200") + "/Music",
                   "purpose": "YuE2 and MiniMax Music 3 generation", "entrypoints": ["/api/health", "/api/generate", "/api/jobs"]},
         "voice": {"base_url": os.environ.get("VOICE_UPSTREAM", "http://127.0.0.1:8950") + "/Voice",
                   "purpose": "Text-to-speech generation", "entrypoints": ["/api/health", "/api/generate", "/api/jobs/{job_id}"]},
-        "krea": {"base_url": os.environ.get("KREA_UPSTREAM", "http://127.0.0.1:8300") + "/Krea",
+        "krea": {"base_url": os.environ.get("KREA_UPSTREAM", "http://127.0.0.1:8300") + "/Image",
                  "purpose": "Krea image generation", "entrypoints": ["/api/health", "/api/generate", "/api/jobs"]},
         "connections": {"base_url": os.environ.get("CONNECTIONS_UPSTREAM", "http://127.0.0.1:8800") + "/Connections",
                         "purpose": "Telegram output watcher and Cloudflare tunnel status",
@@ -88,9 +88,9 @@ def _studio_gallery_overrides(studio: str) -> list[dict]:
 
 def _studio_upstream(studio: str) -> str:
     if studio == "h3":
-        return os.environ.get("VID_UPSTREAM", "http://127.0.0.1:8000").rstrip("/") + "/Vid"
+        return os.environ.get("VID_UPSTREAM", "http://127.0.0.1:8000").rstrip("/") + "/Video"
     if studio == "krea":
-        return os.environ.get("KREA_UPSTREAM", "http://127.0.0.1:8300").rstrip("/") + "/Krea"
+        return os.environ.get("KREA_UPSTREAM", "http://127.0.0.1:8300").rstrip("/") + "/Image"
     raise HTTPException(status_code=404, detail="Unknown studio")
 
 

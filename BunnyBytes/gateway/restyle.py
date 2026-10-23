@@ -20,7 +20,7 @@ from functools import lru_cache
 # adds to studio stylesheet URLs.
 REWRITE_VERSION = "4"
 
-# Native colours of the studios (H3 Machine, Krea, Mus, Trainer, Queue),
+# Native colours of the studios (Video, Krea, Mus, Trainer, Queue),
 # grouped by the role they play. Taken from their :root blocks + the most
 # common hard-coded literals.
 ROLES: dict[str, list[str]] = {
