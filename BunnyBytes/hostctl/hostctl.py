@@ -33,6 +33,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import yaml
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -52,6 +53,7 @@ import reamods
 import comfynodes
 import modelfind
 import storage
+import providerchat
 import coreruntime
 import windowshost
 import coreswap
@@ -533,6 +535,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, browser_status())
         if self.path in ("/clis", "/clis?fresh=1"):
             return self._send(200, codingclis.detect(fresh=self.path.endswith("fresh=1")))
+        if self.path.startswith("/providers/info?"):
+            slug = (urllib.parse.parse_qs(self.path.partition("?")[2]).get("provider") or [""])[0]
+            try:
+                return self._send(200, providerchat.info(slug))
+            except (ValueError, OSError, subprocess.SubprocessError) as exc:
+                return self._send(400, {"error": str(exc)[:300]})
         if self.path.startswith("/storage"):
             return self._send(*storage.handle("GET", self.path, {}))
         if self.path.startswith("/core/voice"):
@@ -659,7 +667,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(status, reply)
 
     def _stream_cli(self) -> None:
-        """POST /clis/run (NDJSON events) and /clis/chat (chat-completion SSE): see codingclis."""
+        """POST /clis/run (NDJSON events), /clis/chat and /providers/chat (chat-completion SSE): see
+        codingclis and providerchat."""
         length = int(self.headers.get("Content-Length") or 0)
         if length > 48 * 1024 * 1024:
             return self._send(413, {"error": "Request too large"})
@@ -667,15 +676,15 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
             if not isinstance(body, dict):
                 raise ValueError("Expected an object")
-            if self.path == "/clis/chat":
-                lines = source = codingclis.chat_stream(body)
+            if self.path in ("/clis/chat", "/providers/chat"):
+                lines = source = (codingclis if self.path == "/clis/chat" else providerchat).chat_stream(body)
                 kind = "text/event-stream"
                 first = next(lines)        # starts the CLI: a bad request still gets a plain error
             else:
                 run_id, source = codingclis.run(body)
                 lines, kind = (json.dumps(e) + "\n" for e in source), "application/x-ndjson"
                 first = json.dumps({"type": "started", "run": run_id}) + "\n"
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
             return self._send(400, {"error": str(exc)[:300]})
         self.send_response(200)
         self.send_header("Content-Type", kind)
@@ -694,7 +703,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._authorized():
             return self._send(403, {"error": "forbidden"})
-        if self.path in ("/clis/run", "/clis/chat"):
+        if self.path in ("/clis/run", "/clis/chat", "/providers/chat"):
             return self._stream_cli()
         if self.path == "/clis/stop":
             return self._send(200, {"stopped": codingclis.stop(str(self._small_json().get("run") or ""))})

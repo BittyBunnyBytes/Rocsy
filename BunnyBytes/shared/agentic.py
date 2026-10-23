@@ -36,7 +36,8 @@ LLAMA = os.getenv("LLAMA_URL", "http://127.0.0.1:8400").rstrip("/")
 MODEL = os.getenv("FRAMEWORK_AGENTIC_MODEL", "qwen3.8-flash-next-uncensored")
 KEY = os.getenv("LLAMA_API_KEY", "")
 # Models named "cli:<cli>/<model>" are external coding CLIs on the host (Settings → Sub-agents),
-# answered by bunny-hostctl's chat-completions bridge instead of llama.
+# answered by bunny-hostctl's chat-completions bridge instead of llama; "hermes:<provider>/<model>"
+# are Hermes' other providers (Kimi Coding ...), proxied by bunny-hostctl with Hermes' own keys.
 HOSTCTL = os.getenv("HOSTCTL_URL", "http://127.0.0.1:8899").rstrip("/")
 HOSTCTL_SECRET = os.getenv("HOSTCTL_SECRET", "")
 QUEUE = os.getenv("LOCK_UPSTREAM", "http://127.0.0.1:8600").rstrip("/")
@@ -392,6 +393,24 @@ def chat_payload(hs: dict[str, Any], messages: list[dict[str, Any]], model: str)
     return payload
 
 
+_provider_local: dict[str, bool] = {}
+
+
+async def provider_is_local(model: str) -> bool:
+    """Whether a "hermes:<provider>/<model>" endpoint runs on this machine (and so needs a GPU turn).
+    Unknown counts as local: waiting for the GPU is safer than racing a render for it."""
+    slug = model[7:].partition("/")[0]
+    if slug not in _provider_local:
+        try:
+            async with httpx.AsyncClient(timeout=70) as client:
+                r = await client.get(f"{HOSTCTL}/providers/info", params={"provider": slug},
+                                     headers={"X-Hostctl-Secret": HOSTCTL_SECRET})
+            _provider_local[slug] = bool(r.json().get("local", True)) if r.status_code == 200 else True
+        except (httpx.HTTPError, ValueError):
+            return True
+    return _provider_local[slug]
+
+
 async def hermes(system: str, user: str, image_url: str = "", model: str = "", row: dict | None = None,
                  purpose: str = "planning") -> dict[str, Any]:
     """One Hermes call inside its own GPU turn, streamed into the session log."""
@@ -402,20 +421,23 @@ async def hermes(system: str, user: str, image_url: str = "", model: str = "", r
     model = model or hs.get("model") or MODEL
     payload = chat_payload(hs, [{"role": "system", "content": system}, {"role": "user", "content": content}], model)
     cli = model.startswith("cli:")
-    url, headers = ((f"{HOSTCTL}/clis/chat", {"X-Hostctl-Secret": HOSTCTL_SECRET}) if cli
+    provider = model.startswith("hermes:")
+    remote = cli or (provider and not await provider_is_local(model))   # no GPU turn for these
+    url, headers = ((f"{HOSTCTL}/{'clis' if cli else 'providers'}/chat", {"X-Hostctl-Secret": HOSTCTL_SECRET}) if cli or provider
                     else (f"{LLAMA}/v1/chat/completions", {"Authorization": f"Bearer {KEY}"} if KEY else {}))
     if row is not None:
-        log(row, "tool", f"Hermes · {purpose} · {model} · " + ("external CLI on the host" if cli else "waiting for the GPU queue"))
+        log(row, "tool", f"Hermes · {purpose} · {model} · " + ("external CLI on the host" if cli else
+                                                               "online provider" if remote else "waiting for the GPU queue"))
     parts: list[str] = []
     thinking = stream = None
     finish = None
     started = time.monotonic()
-    async with nullcontext() if cli else hermes_turn(f"Agentic Hermes {purpose}"):   # a CLI doesn't use the GPU
+    async with nullcontext() if remote else hermes_turn(f"Agentic Hermes {purpose}"):   # a CLI or online model doesn't use the GPU
         async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10)) as client:
             async with client.stream("POST", url, json=payload, headers=headers) as response:
                 if response.status_code >= 400:
                     detail = (await response.aread()).decode(errors="replace")
-                    raise ValueError(f"{'CLI bridge' if cli else 'Llama service'} HTTP {response.status_code}: {detail[:300]}")
+                    raise ValueError(f"{'CLI bridge' if cli else 'Provider bridge' if provider else 'Llama service'} HTTP {response.status_code}: {detail[:300]}")
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue

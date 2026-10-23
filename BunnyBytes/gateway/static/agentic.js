@@ -102,7 +102,7 @@
   function markCli() {
     if (!cfg) return;
     const id = cfg.provider?.startsWith("cli:") ? cfg.provider.slice(4) : "";
-    const cli = id && (clis.find((c) => c.id === id) || { id, name: id, efforts: [] });
+    const cli = id ? clis.find((c) => c.id === id) || { id, name: id, efforts: [] } : null;
     const na = (node, why) => {
       if (!node) return;
       node.classList.toggle("sa-na", !!cli);

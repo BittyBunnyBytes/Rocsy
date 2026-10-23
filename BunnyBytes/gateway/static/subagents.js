@@ -5,9 +5,10 @@
 //   Image/Music/Voice  /<studio>/api/agentic/settings  (shared framework)
 //   REA           /REA/api/settings            (Hermes model + thinking for every REA task)
 //   Vibe Coding   /Code/api/settings           (Hermes model + thinking for project sessions)
-// Coding CLIs installed on the host (Claude Code, Codex, Kimi Code ... from /Agent/api/options, found by
-// bunny-hostctl) are offered at the bottom of every model list: "cli:<id>/<model>" for the llama
-// planners, provider "cli:<id>" for the Hermes ones. Settings only llama/Strata/Hermes use are greyed then.
+// Every model list is the Master Agent's: Hermes' providers, then the coding CLIs installed on the host
+// (Claude Code, Codex, Kimi Code ... from /Agent/api/options, found by bunny-hostctl). The llama planners
+// store llama-swap models as plain ids, other Hermes providers as "hermes:<provider>/<model>" and CLIs as
+// "cli:<id>/<model>"; the Hermes ones store provider + model. Settings a CLI doesn't use are greyed then.
 (() => {
   const panel = document.getElementById("panel-subagents");
   if (!panel) return;
@@ -117,10 +118,27 @@
       s.append(g);
     }
   }
+  // A Hermes provider model in a llama planner's format: llama-swap's own models stay plain ids.
+  const llamaValue = (slug, m) => {
+    const pr = (hermes.providers || []).find((p) => p.slug === slug);
+    return pr?.local && llamaModels.models.includes(m) ? m : `hermes:${slug}/${m}`;
+  };
+  // Hermes' providers, grouped as on the Master Agent's picker; value(slug, model) gives each option's value.
+  function providerGroups(s, value) {
+    const listed = new Set();
+    for (const pr of hermes.providers || []) {
+      const g = el("optgroup"); g.label = `${pr.name}${pr.local ? " · local GPU" : ""}`;
+      for (const m of pr.models) { g.append(new Option(m, value(pr.slug, m))); listed.add(m); }
+      s.append(g);
+    }
+    return listed;
+  }
   function llamaSelect(value, allowDefault = true) {
     const s = el("select");
     if (allowDefault || !value) s.append(new Option(`Default (${llamaModels.default || "server default"})`, ""));
-    for (const m of llamaModels.models) s.append(new Option(m, m));
+    const listed = providerGroups(s, llamaValue);
+    const rest = llamaModels.models.filter((m) => !listed.has(m));   // Hermes down, or not in its config
+    if (rest.length) { const g = el("optgroup"); g.label = "Local models"; for (const m of rest) g.append(new Option(m, m)); s.append(g); }
     cliGroups(s, (id, m) => `cli:${id}/${m}`);
     if (value && ![...s.options].some((o) => o.value === value)) s.append(new Option(`${value} (not installed)`, value));
     s.value = value || "";
@@ -129,11 +147,7 @@
   function hermesSelect(model, provider, defaultLabel) {
     const s = el("select");
     s.append(new Option(defaultLabel || `Hermes default (${hermes.default?.model || "?"})`, "|"));
-    for (const pr of hermes.providers || []) {
-      const g = el("optgroup"); g.label = `${pr.name}${pr.local ? " · local GPU" : ""}`;
-      for (const m of pr.models) g.append(new Option(m, `${pr.slug}|${m}`));
-      s.append(g);
-    }
+    providerGroups(s, (slug, m) => `${slug}|${m}`);
     cliGroups(s, (id, m) => `cli:${id}|${m}`);
     const value = model ? `${provider}|${model}` : "|";
     if (![...s.options].some((o) => o.value === value)) s.append(new Option(`${model} (${provider || "?"})`, value));
@@ -154,6 +168,10 @@
     const cli = cliChoice(m.model, m.provider);
     const think = m.reasoning && (!cli || cli.cli?.efforts.length) ? ` · thinking ${m.reasoning}` : "";
     if (cli) return cliName(cli) + think;
+    if (a.kind === "llama" && m.model?.startsWith("hermes:")) {
+      const [slug, ...name] = m.model.slice(7).split("/");
+      return `${name.join("/")} · ${(hermes.providers || []).find((p) => p.slug === slug)?.name || slug}${think}`;
+    }
     if (a.kind === "llama") return `${m.model || `default (${llamaModels.default || "server"})`}${think}`;
     return `${m.model || (a.key === "master" ? `Hermes default (${hermes.default?.model || "?"})` : "Master Agent's model")}${think}`;
   };
@@ -267,23 +285,29 @@
   }
 
   function fillAll() {
-    const model = $("sa-all-model");
-    model.replaceChildren(new Option("Choose a model…", ""), ...llamaModels.models.map((m) => new Option(m, m)));
+    const model = $("sa-all-model");   // values in the Hermes format: "<provider>|<model>", "cli:<id>|<model>"
+    model.replaceChildren(new Option("Choose a model…", ""));
+    const listed = providerGroups(model, (slug, m) => `${slug}|${m}`);
+    const rest = llamaModels.models.filter((m) => !listed.has(m));
+    if (rest.length) { const g = el("optgroup"); g.label = "Local models"; for (const m of rest) g.append(new Option(m, `|${m}`)); model.append(g); }
+    cliGroups(model, (id, m) => `cli:${id}|${m}`);
     $("sa-all-thinking").replaceChildren(new Option("Keep each one's", ""), ...THINKING.map(([v, l]) => new Option(l, v)));
   }
   $("sa-all-apply").addEventListener("click", async () => {
-    const model = $("sa-all-model").value, think = $("sa-all-thinking").value, st = $("sa-all-status");
-    if (!model && !think) { status(st, "Choose a model or a thinking level first", "error"); return; }
-    const local = (hermes.providers || []).find((p) => p.local && p.models.includes(model));
+    const choice = $("sa-all-model").value, think = $("sa-all-thinking").value, st = $("sa-all-status");
+    if (!choice && !think) { status(st, "Choose a model or a thinking level first", "error"); return; }
+    const [provider, model] = choice ? choice.split("|") : ["", ""];
+    // The same choice in a llama planner's format.
+    const asLlama = !model ? "" : provider.startsWith("cli:") ? `${provider}/${model}` : provider ? llamaValue(provider, model) : model;
     const skipped = [];
     status(st, "Applying…");
     for (const a of AGENTS) {
       const s = state[a.key]; if (!s || s.error) { skipped.push(a.name); continue; }
       const foot = card(a).querySelector(".sa-foot .bb-status");
-      if (a.kind === "llama") await save(a, { ...(model ? { model } : {}), ...(think ? { thinking_level: think } : {}) }, foot);
+      if (a.kind === "llama") await save(a, { ...(model ? { model: asLlama } : {}), ...(think ? { thinking_level: think } : {}) }, foot);
       else {
-        if (model && local) await save(a, { model, provider: local.slug }, foot);
-        else if (model) skipped.push(a.name);
+        if (model && provider) await save(a, { model, provider }, foot);
+        else if (model) skipped.push(a.name);   // a llama-swap model Hermes has no provider for
         if (think) await save(a, { reasoning: think }, foot);
       }
     }
