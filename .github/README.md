@@ -1,11 +1,33 @@
-# Rocsy
+<p align="center">
+  <img src="../BunnyBytes/gateway/static/icons/rocsy-v2.svg" alt="Rocsy logo" width="128" height="128">
+</p>
+
+<h1 align="center">Rocsy</h1>
+
+<p align="center"><b>AI on AMD, made easier.</b></p>
+
+<p align="center">
+  <a href="https://github.com/BittyBunnyBytes/Rocsy/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/BittyBunnyBytes/Rocsy?style=flat-square&color=e9a04f"></a>
+  <a href="../LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
+  <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-informational?style=flat-square&logo=linux&logoColor=white">
+  <img alt="GPU: AMD ROCm" src="https://img.shields.io/badge/GPU-AMD%20ROCm-ED1C24?style=flat-square&logo=amd&logoColor=white">
+  <img alt="Docker Compose" src="https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3-3776AB?style=flat-square&logo=python&logoColor=white">
+  <img alt="ComfyUI" src="https://img.shields.io/badge/ComfyUI-backend-555?style=flat-square">
+  <img alt="llama.cpp" src="https://img.shields.io/badge/llama.cpp-LLM-555?style=flat-square">
+</p>
+
+<p align="center">
+  <a href="https://github.com/BittyBunnyBytes/Rocsy/releases/latest"><b>Download the installer</b></a>
+</p>
 
 A self-hosted, password-gated AI studio for one machine with an AMD GPU (ROCm). One gateway
 serves video, image, music and voice generation, LoRA training, a local LLM server and an
 agent that drives all of them, and every GPU job goes through one shared queue.
 
-> **v1.0.** Built and run daily on a single Linux box (RX 7900 XTX, ROCm). The installer sets
-> it up on Arch Linux and Ubuntu; other setups are by hand. **Windows support is untested**
+> **v1.1.** Built and run daily on a single Linux box (RX 7900 XTX, ROCm). The installer sets
+> it up on most Linux distros (APT, DNF, Zypper, pacman, APK, XBPS, eopkg, Portage; tested on Arch
+> Linux); immutable systems need a few manual steps. **Windows support is untested**
 > (see [Windows](#windows-untested)). See [Known limits](#known-limits).
 
 ## What's in it
