@@ -1,0 +1,25 @@
+{
+  "1": {"class_type": "CLIPLoader", "inputs": {"clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "type": "wan", "device": "default"}, "_meta": {"title": "Text encoder (umt5-xxl)"}},
+  "2": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["1", 0], "text": ""}, "_meta": {"title": "Positive prompt"}},
+  "3": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["1", 0], "text": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"}, "_meta": {"title": "Negative prompt (Wan official)"}},
+  "4": {"class_type": "VAELoader", "inputs": {"vae_name": "wan_2.1_vae.safetensors"}, "_meta": {"title": "Wan 2.1 VAE"}},
+
+  "10": {"class_type": "UNETLoader", "inputs": {"unet_name": "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors", "weight_dtype": "default"}, "_meta": {"title": "High-noise expert"}},
+  "11": {"class_type": "UNETLoader", "inputs": {"unet_name": "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors", "weight_dtype": "default"}, "_meta": {"title": "Low-noise expert"}},
+  "12": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["10", 0], "lora_name": "Wan22/wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors", "strength_model": 1.0}, "_meta": {"title": "Turbo LoRA (high)"}},
+  "13": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["11", 0], "lora_name": "Wan22/wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors", "strength_model": 1.0}, "_meta": {"title": "Turbo LoRA (low)"}},
+  "14": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["12", 0], "shift": 8.0}, "_meta": {"title": "Shift (high)"}},
+  "15": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["13", 0], "shift": 8.0}, "_meta": {"title": "Shift (low)"}},
+
+  "20": {"class_type": "EmptyHunyuanLatentVideo", "inputs": {"width": 1280, "height": 720, "length": 81, "batch_size": 1}, "_meta": {"title": "Text: empty latent"}},
+  "21": {"class_type": "LoadImage", "inputs": {"image": ""}, "_meta": {"title": "First frame"}},
+  "22": {"class_type": "LoadImage", "inputs": {"image": ""}, "_meta": {"title": "Last frame"}},
+  "23": {"class_type": "WanImageToVideo", "inputs": {"positive": ["2", 0], "negative": ["3", 0], "vae": ["4", 0], "width": 1280, "height": 720, "length": 81, "batch_size": 1, "start_image": ["21", 0]}, "_meta": {"title": "Keyframe: first frame"}},
+  "24": {"class_type": "WanFirstLastFrameToVideo", "inputs": {"positive": ["2", 0], "negative": ["3", 0], "vae": ["4", 0], "width": 1280, "height": 720, "length": 81, "batch_size": 1, "start_image": ["21", 0], "end_image": ["22", 0]}, "_meta": {"title": "Keyframe: first + last frame"}},
+
+  "30": {"class_type": "KSamplerAdvanced", "inputs": {"model": ["14", 0], "add_noise": "enable", "noise_seed": 20260909, "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "positive": ["2", 0], "negative": ["3", 0], "latent_image": ["20", 0], "start_at_step": 0, "end_at_step": 2, "return_with_leftover_noise": "enable"}, "_meta": {"title": "Sample: high-noise expert"}},
+  "31": {"class_type": "KSamplerAdvanced", "inputs": {"model": ["15", 0], "add_noise": "disable", "noise_seed": 20260909, "steps": 4, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "positive": ["2", 0], "negative": ["3", 0], "latent_image": ["30", 0], "start_at_step": 2, "end_at_step": 10000, "return_with_leftover_noise": "disable"}, "_meta": {"title": "Sample: low-noise expert"}},
+
+  "32": {"class_type": "VAEDecodeTiled", "inputs": {"samples": ["31", 0], "vae": ["4", 0], "tile_size": 512, "overlap": 64, "temporal_size": 64, "temporal_overlap": 8}, "_meta": {"title": "Decode video (tiled)"}},
+  "34": {"class_type": "VHS_VideoCombine", "inputs": {"images": ["32", 0], "frame_rate": 16.0, "loop_count": 0, "filename_prefix": "H3Machine_Wan22", "format": "video/h264-mp4", "pix_fmt": "yuv420p", "crf": 19, "save_metadata": true, "trim_to_audio": false, "pingpong": false, "save_output": true}, "_meta": {"title": "Save video"}}
+}

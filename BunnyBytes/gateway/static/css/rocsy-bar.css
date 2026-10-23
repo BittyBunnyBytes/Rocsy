@@ -1,0 +1,146 @@
+/* One top bar for every Rocsy service (topbar.py tags each studio's header
+   .rb-bar and inserts the "Rocsy / App" crumb). `.rb-bar.rb-bar` outranks each
+   studio's own .topbar / header rules. Colours follow the site theme (--t-*)
+   and fall back to the Rocsy slate palette on "Studio default". */
+
+:root { --topbar-height: 56px; } /* H3 Machine offsets its sticky columns by this */
+
+.rb-bar.rb-bar {
+  --rb-bg: var(--t-bg, #0f1418);
+  --rb-soft: var(--t-soft, #12191e);
+  --rb-raised: var(--t-raised, #1f2a32);
+  --rb-border: var(--t-border, #33414c);
+  --rb-text: var(--t-text, #c7d0d6);
+  --rb-muted: var(--t-muted, #7f8c96);
+  --rb-accent: var(--t-accent, #79add3);
+  --rb-amber: var(--t-amber, #e1a744);
+  --rb-green: var(--t-green, #7fbd54);
+  --rb-red: var(--t-red, #c96a6a);
+
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px 14px;
+  width: auto;
+  max-width: none;
+  height: auto;
+  min-height: 56px;
+  margin: 0;
+  padding: 8px max(18px, env(safe-area-inset-right)) 8px max(18px, env(safe-area-inset-left));
+  background: color-mix(in srgb, var(--rb-bg) 82%, transparent);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--rb-border) 75%, transparent);
+  color: var(--rb-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.2;
+}
+.rb-bar.rb-bar * { box-sizing: border-box; }
+
+/* ---- crumb: Rocsy (home) / App ---- */
+.rb-bar .rb-crumb { display: flex; align-items: center; gap: 4px; min-width: 0; flex: none; }
+.rb-bar .rb-home {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 36px; padding: 0 10px 0 6px; margin-left: -6px;
+  border-radius: 10px;
+  color: var(--rb-text); text-decoration: none;
+  font-weight: 650; font-size: 15px; letter-spacing: 0.02em;
+  transition: background 0.12s ease-out, color 0.12s ease-out;
+}
+.rb-bar .rb-home:hover { background: var(--rb-raised); }
+.rb-bar .rb-home:focus-visible { outline: 2px solid var(--rb-accent); outline-offset: 1px; }
+.rb-bar .rb-home svg { flex: none; }
+.rb-bar .rb-mark-sun { fill: var(--rb-amber); }
+.rb-bar .rb-mark-bird { fill: #f2f7fb; }
+.rb-bar .rb-sep { color: color-mix(in srgb, var(--rb-muted) 65%, transparent); font-size: 18px; font-weight: 300; padding: 0 2px; }
+.rb-bar .rb-app { display: inline-flex; align-items: center; gap: 8px; min-width: 0; padding-left: 4px; }
+.rb-bar .rb-app-icon {
+  display: inline-grid; place-items: center; flex: none;
+  width: 28px; height: 28px; border-radius: 8px;
+  background: color-mix(in srgb, var(--rb-accent) 14%, transparent);
+  color: var(--rb-accent);
+}
+.rb-bar .rb-app-name { font-weight: 600; font-size: 15px; color: var(--rb-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- each app's old brand / home links (the crumb replaces them) ---- */
+.rb-bar.rb-bar > .brand,
+.rb-bar.rb-bar > .topbar-right > .home,
+.rb-bar.rb-bar > .a-home,
+.rb-bar.rb-bar > h1,
+.rb-bar[data-rb-app="Connections"] > strong,
+.rb-bar[data-rb-app="Connections"] > a[href="/"] { display: none; }
+
+/* Krea keeps its model badge (Kr2 / Lu / Qw) as a small tag after the crumb. */
+.rb-bar[data-rb-app="Krea"] > .brand { display: inline-flex; gap: 0; margin-left: -6px; }
+.rb-bar[data-rb-app="Krea"] > .brand .brand-name { display: none; }
+.rb-bar[data-rb-app="Krea"] > .brand .brand-mark {
+  width: auto; height: 22px; padding: 0 8px; border-radius: 999px;
+  background: var(--rb-raised); border: 1px solid var(--rb-border); color: var(--rb-muted);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.03em;
+}
+
+/* Agent: the sessions drawer button (phones) stays before the crumb. */
+.rb-bar.rb-bar > .a-menu { order: -1; }
+
+/* ---- tabs: one segmented control, centred in the free space ---- */
+.rb-bar.rb-bar :is(.view-tabs, .tabs) {
+  position: static; transform: none;
+  display: inline-flex; gap: 2px; margin: 0 auto; padding: 3px;
+  border: 1px solid var(--rb-border); border-radius: 999px;
+  background: var(--rb-soft);
+}
+.rb-bar.rb-bar :is(.view-tab, .tab) {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 30px; padding: 0 14px; margin: 0;
+  border: 0; border-radius: 999px; background: transparent; box-shadow: none;
+  color: var(--rb-muted); font: inherit; font-size: 13px; font-weight: 600;
+  text-decoration: none; white-space: nowrap; cursor: pointer;
+  transition: background 0.12s ease-out, color 0.12s ease-out;
+}
+.rb-bar.rb-bar :is(.view-tab, .tab):hover { color: var(--rb-text); }
+.rb-bar.rb-bar :is(.view-tab.is-active, .view-tab[aria-selected="true"], .tab[aria-selected="true"]) {
+  background: var(--rb-raised); color: var(--rb-text);
+  box-shadow: inset 0 -2px 0 var(--rb-accent);
+}
+
+/* ---- right side: status chips + icon buttons ---- */
+.rb-bar.rb-bar > :is(.topbar-status, .topbar-right) { display: flex; align-items: center; gap: 8px; margin: 0 0 0 auto; flex-wrap: wrap; }
+/* no tabs: the last item still sits on the right */
+.rb-bar.rb-bar > :is(.service-state, .a-link, .rb-link):last-child { margin-left: auto; }
+.rb-bar.rb-bar .service-state {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 11px;
+  border: 1px solid var(--rb-border); border-radius: 999px;
+  background: var(--rb-soft); color: var(--rb-muted);
+  font-size: 12px; white-space: nowrap;
+}
+.rb-bar.rb-bar .service-state strong { color: var(--rb-text); font-weight: 600; }
+.rb-bar.rb-bar :is([id="alerts-toggle"], .alerts-toggle, .a-link, .rb-link) {
+  display: inline-grid; place-items: center;
+  width: 34px; height: 34px; padding: 0;
+  border: 1px solid var(--rb-border); border-radius: 10px;
+  background: transparent; color: var(--rb-muted);
+  transition: color 0.12s ease-out, border-color 0.12s ease-out, background 0.12s ease-out;
+}
+.rb-bar.rb-bar :is([id="alerts-toggle"], .alerts-toggle, .a-link, .rb-link):hover { color: var(--rb-text); border-color: var(--rb-accent); }
+.rb-bar.rb-bar :is([id="alerts-toggle"], .alerts-toggle)[aria-pressed="true"],
+.rb-bar.rb-bar .alerts-toggle.is-enabled {
+  color: var(--rb-amber); border-color: color-mix(in srgb, var(--rb-amber) 60%, transparent);
+  background: color-mix(in srgb, var(--rb-amber) 12%, transparent);
+}
+/* Agent's text "Settings" link becomes a pill like the others */
+.rb-bar.rb-bar :is(.a-link, .rb-link) { width: auto; padding: 0 12px; font-size: 13px; text-decoration: none; }
+
+/* ---- phones ---- */
+@media (max-width: 720px) {
+  .rb-bar.rb-bar { padding: 6px 12px; gap: 6px 10px; }
+  .rb-bar .rb-home-name { display: none; }
+  .rb-bar .rb-home { padding: 0 6px; }
+  .rb-bar.rb-bar :is(.view-tabs, .tabs) { order: 3; width: 100%; margin: 0; }
+  .rb-bar.rb-bar :is(.view-tab, .tab) { flex: 1; padding: 0 8px; }
+  .rb-bar.rb-bar .service-state > span:not(.status-dot) { display: none; }
+}

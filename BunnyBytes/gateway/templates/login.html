@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rocsy — Log in</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="/static/icons/rocsy-v2.svg">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/rocsy-v2-192.png">
+  <link rel="apple-touch-icon" href="/static/icons/rocsy-v2-touch-180.png">
+  <meta name="theme-color" content="#0f1418">
+  <link rel="stylesheet" href="/static/css/site.css?v={{ asset_v('css/site.css') }}">
+  <link rel="stylesheet" href="{{ theme_href() }}" id="bb-theme">
+</head>
+<body class="bb-body bb-login">
+  <div class="bb-bg-glow" aria-hidden="true"></div>
+  <main class="bb-login-card">
+    <div class="bb-brand bb-brand-center">
+      <span class="bb-brand-mark" aria-hidden="true">
+        <svg viewBox="40 140 432 260" width="46" height="30" xmlns="http://www.w3.org/2000/svg">
+          <circle class="bb-mark-sun" cx="256" cy="268" r="124"/>
+          <path class="bb-mark-bird" d="M256 186 C269 186 276 197 274 210 C320 182 380 162 464 156 C418 200 358 234 292 254 L308 314 L256 294 L204 314 L220 254 C154 234 94 200 48 156 C132 162 192 182 238 210 C236 197 243 186 256 186 Z"/>
+        </svg>
+      </span>
+      <span class="bb-brand-name">Rocsy</span>
+    </div>
+
+    <form class="bb-form" method="post" action="/login">
+      {% if no_password %}
+      <p class="bb-label">No password is set. Anyone who can reach Rocsy can sign in.</p>
+      <input type="hidden" name="password" value="">
+      {% else %}
+      <label class="bb-label" for="bb-password">Password</label>
+      <input
+        class="bb-input"
+        id="bb-password"
+        name="password"
+        type="password"
+        autocomplete="current-password"
+        maxlength="200"
+        autofocus
+        required
+      >
+      {% endif %}
+      <input type="hidden" name="next" value="{{ next or '/' }}">
+
+      <div class="bb-hp" aria-hidden="true">
+        <label for="bb-website">Website</label>
+        <input type="text" id="bb-website" name="website" tabindex="-1" autocomplete="off">
+      </div>
+
+      {% if error %}
+      <p class="bb-error" role="alert">{{ error }}</p>
+      {% endif %}
+
+      <button class="bb-submit" type="submit">Enter</button>
+    </form>
+  </main>
+</body>
+</html>

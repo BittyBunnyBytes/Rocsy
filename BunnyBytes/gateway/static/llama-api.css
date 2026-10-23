@@ -1,0 +1,235 @@
+/* Rocsy Llama API page (/llama-api). Built on site.css; colours come from its
+   --bb-* variables, which the chosen theme (/theme.css) overrides. */
+.bb-brand-link {
+  color: var(--bb-blue);
+  text-decoration: none;
+}
+
+.bb-api-main {
+  position: relative;
+  z-index: 1;
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 48px 16px 40px;
+}
+
+.bb-api-main .bb-title,
+.bb-api-main .bb-subtitle {
+  text-align: center;
+}
+
+.bb-api-main .bb-subtitle {
+  margin-bottom: 36px;
+}
+
+.bb-section {
+  background: var(--bb-panel);
+  border: 1px solid var(--bb-border);
+  border-radius: 14px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.bb-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.bb-section h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.bb-section-note {
+  margin: 0 0 12px;
+  color: var(--bb-muted);
+  font-size: 0.88rem;
+}
+
+.bb-status {
+  font-size: 0.85rem;
+  color: var(--bb-muted);
+}
+
+.bb-status[data-kind="ok"] { color: var(--bb-green); }
+.bb-status[data-kind="error"] { color: var(--bb-red); }
+
+.bb-api-count {
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: var(--bb-green);
+  background: color-mix(in srgb, var(--bb-green) 14%, transparent);
+}
+
+.bb-api-fields {
+  display: grid;
+  gap: 18px;
+}
+
+.bb-api-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.bb-api-field select.bb-input {
+  width: 100%;
+  font: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.bb-api-field select.bb-input:disabled { cursor: default; opacity: 0.7; }
+
+.bb-api-copyrow {
+  display: flex;
+  align-items: stretch;
+  min-height: 44px;
+  background: var(--bb-panel-alt);
+  border: 1px solid var(--bb-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.bb-api-copyrow code {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88rem;
+  color: var(--bb-text);
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+.bb-api-copyrow code.is-secret {
+  filter: blur(5px);
+  user-select: none;
+}
+
+.bb-api-copyrow .bb-api-button {
+  border: 0;
+  border-left: 1px solid var(--bb-border);
+  border-radius: 0;
+}
+
+.bb-api-button {
+  padding: 0 16px;
+  min-height: 34px;
+  border: 1px solid var(--bb-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--bb-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.bb-api-button:hover {
+  color: var(--bb-blue);
+  background: color-mix(in srgb, var(--bb-blue) 12%, transparent);
+}
+
+.bb-api-button:focus-visible,
+.bb-api-tab:focus-visible,
+.bb-api-code pre:focus-visible {
+  outline: 2px solid var(--bb-blue);
+  outline-offset: -2px;
+}
+
+.bb-api-button.is-done {
+  color: var(--bb-green);
+  background: color-mix(in srgb, var(--bb-green) 12%, transparent);
+}
+
+.bb-api-warning {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
+  color: var(--bb-amber);
+}
+
+.bb-api-warning::before {
+  content: "⚠ ";
+}
+
+.bb-api-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: max-content;
+  max-width: 100%;
+  margin-bottom: 14px;
+  padding: 4px;
+  background: var(--bb-panel-alt);
+  border: 1px solid var(--bb-border);
+  border-radius: 999px;
+}
+
+.bb-api-tab {
+  padding: 6px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--bb-muted);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.bb-api-tab:hover { color: var(--bb-text); }
+
+.bb-api-tab[aria-selected="true"] {
+  background: color-mix(in srgb, var(--bb-blue) 16%, transparent);
+  color: var(--bb-blue);
+}
+
+.bb-api-code {
+  position: relative;
+}
+
+.bb-api-code pre {
+  margin: 0;
+  padding: 16px 92px 16px 16px;
+  min-height: 64px;
+  background: var(--bb-bg);
+  border: 1px solid var(--bb-border);
+  border-radius: 10px;
+  color: var(--bb-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+
+.bb-api-code-copy {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: var(--bb-panel);
+}
+
+@media (max-width: 520px) {
+  .bb-header { padding: 16px; }
+  .bb-api-main { padding-top: 32px; }
+  .bb-section { padding: 16px; }
+  .bb-api-copyrow { flex-wrap: wrap; }
+  .bb-api-copyrow code { flex-basis: 100%; padding: 12px; }
+  .bb-api-copyrow .bb-api-button { flex: 1; min-height: 40px; border-top: 1px solid var(--bb-border); }
+  .bb-api-copyrow .bb-api-button:first-of-type { border-left: 0; }
+  .bb-api-code pre { padding-right: 16px; padding-top: 52px; }
+  .bb-api-tabs { width: 100%; flex-wrap: nowrap; }
+  .bb-api-tab { flex: 1; padding: 6px 4px; font-size: 0.82rem; }
+}

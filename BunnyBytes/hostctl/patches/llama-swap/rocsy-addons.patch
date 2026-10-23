@@ -1,0 +1,7 @@
+diff --git a/ui/index.html b/ui/index.html
+--- a/ui/index.html
++++ b/ui/index.html
+@@ -11,2 +11,3 @@
+     <title>llama-swap</title>
++    <script defer src="/static/llama-api-nav.js" data-rocsy-addons="1"></script>
+   </head>

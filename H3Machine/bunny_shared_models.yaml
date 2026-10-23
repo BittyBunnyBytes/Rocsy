@@ -1,0 +1,12 @@
+# Model roots used by H3 Machine when it starts the Bunny ComfyUI checkout.
+# Bunny's desktop launcher normally supplies this mapping; standalone launches
+# need it explicitly or MiniMax H3 model selectors are empty.
+h3_shared:
+  base_path: ~/ComfyUI-Shared   # ComfyUI expands ~; point it at your shared models folder
+  checkpoints: models/checkpoints
+  loras: models/loras
+  vae: models/vae
+  text_encoders: models/text_encoders
+  diffusion_models: models/diffusion_models
+  clip_vision: models/clip_vision
+  vae_approx: models/vae_approx

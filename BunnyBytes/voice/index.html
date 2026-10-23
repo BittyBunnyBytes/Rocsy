@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1418">
+  <title>Voice</title>
+  <link rel="stylesheet" href="/Voice/static/h3-studio.css?v=7">
+  <link rel="stylesheet" href="/Voice/static/voice.css?v=11">
+  <script defer src="/Voice/static/h3-studio.js?v=7"></script>
+  <script defer src="/Voice/static/voice.js?v=10"></script>
+  <link rel="stylesheet" href="/Voice/static/agentic-ui.css?v=4">
+  <script defer src="/Voice/static/agentic-ui.js?v=3"></script>
+</head>
+<!-- Same studio shell as Image / Music / Video (shared/ui/h3-studio.*): top view tabs,
+     Studio = composer cards + Generations; the character gallery and the
+     Add-a-character builder are their own tabs. -->
+<body class="h3-studio-ui" data-app-prefix="/Voice" data-studio="voice" data-view="studio" data-mobile-tab="create">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">TTS</span><span class="brand-name">Voice</span></div>
+    <nav class="view-tabs" role="tablist" aria-label="Views">
+      <button type="button" class="view-tab is-active" role="tab" aria-selected="true" data-view="studio">Studio</button>
+      <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="characters">Characters <span class="view-tab-count" id="character-count"></span></button>
+      <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="add">Add character</button>
+      <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="settings">Settings</button>
+    </nav>
+    <div class="service-state" id="service-state"><span class="status-dot"></span><span>Voice service</span><strong id="service-label">Checking</strong></div>
+  </header>
+
+  <!-- ─────────────────────────────── Studio ─────────────────────────────── -->
+  <nav class="mobile-tabs" role="tablist" aria-label="Sections" data-view-page="studio">
+    <button type="button" class="mobile-tab is-active" role="tab" aria-selected="true" data-mobile-tab="create" aria-controls="composer-panel">Create</button>
+    <button type="button" class="mobile-tab" role="tab" aria-selected="false" data-mobile-tab="jobs" aria-controls="jobs-panel">Generations <span class="mobile-tab-badge" id="mobile-jobs-badge"></span></button>
+  </nav>
+
+  <main class="app-shell" data-view-page="studio">
+    <section class="composer-panel" id="composer-panel" aria-label="Speech controls">
+      <h1>Create speech</h1>
+
+      <div class="composer-footer">
+        <div id="status" class="footer-status" role="status" aria-live="polite">Checking models…</div>
+        <button class="primary-button" id="generate" type="button" disabled>Generate speech</button>
+      </div>
+
+      <details class="card" id="character-card" open>
+        <summary class="card-head"><span class="card-title">Character</span><span class="card-badge" id="character-badge"></span><span class="card-chevron" aria-hidden="true"></span></summary>
+        <div class="card-body">
+          <div class="picked-voice">
+            <span class="picked-avatar" id="voice-avatar" aria-hidden="true"></span>
+            <div class="picked-info">
+              <select id="voice" aria-label="Character"></select>
+              <span class="field-hint" id="voice-summary-line"></span>
+            </div>
+          </div>
+          <div class="picked-actions">
+            <button type="button" class="secondary-button" id="picked-play" aria-pressed="false" disabled>Play sample</button>
+            <button type="button" class="secondary-button" id="browse-characters">Browse gallery</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="card" id="script-card" open>
+        <summary class="card-head"><span class="card-title">Script</span><span class="card-badge" id="char-count"></span><span class="card-chevron" aria-hidden="true"></span></summary>
+        <div class="card-body">
+          <div class="field-row">
+            <label for="text">What it should say</label>
+            <textarea id="text" rows="8" placeholder="Write the words you want spoken…"></textarea>
+            <div class="script-guide field-hint" id="index-emotion-guide" hidden>
+              <strong>IndexTTS2 emotion cues</strong>
+              <span>Wrap words in <code>[EMO=happy]Hello there![/]</code> or describe the delivery with <code>[EMO=text,TEXT=warm and reassuring]I'm here.[/]</code>. The cue itself is not spoken; its enclosed words are. <code>[/]</code> returns to the saved Emotion prompt; <code>[EMO=off]</code> turns it off for a passage. For text guidance, try Emotion strength around 0.6 in engine settings.</span>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details class="card" id="model-card" open>
+        <summary class="card-head"><span class="card-title">Model</span><span class="card-badge" id="model-badge"></span><span class="card-chevron" aria-hidden="true"></span></summary>
+        <div class="card-body">
+          <div class="field-pair">
+            <div class="field-row"><label for="engine">Engine</label><select id="engine"></select></div>
+            <div class="field-row"><label for="language">Language</label><select id="language"><option>English</option><option>Chinese</option><option>Japanese</option><option>Korean</option><option>German</option><option>French</option><option>Russian</option><option>Portuguese</option><option>Spanish</option><option>Italian</option></select></div>
+          </div>
+          <div class="model-list" id="models"></div>
+          <span class="field-hint">Generation waits its turn in the shared GPU queue.</span>
+          <button type="button" class="link-button" id="open-engine-settings">Configure this engine</button>
+        </div>
+      </details>
+    </section>
+
+    <section class="jobs-panel" id="jobs-panel" aria-label="Generations">
+      <div class="jobs-toolbar">
+        <h2>Generations</h2>
+        <div class="jobs-filter" role="tablist" aria-label="Show">
+          <button type="button" class="jobs-filter-tab is-active" data-job-filter="all" role="tab" aria-selected="true">All <span data-job-count="all"></span></button>
+          <button type="button" class="jobs-filter-tab" data-job-filter="running" role="tab" aria-selected="false">Running <span data-job-count="running"></span></button>
+          <button type="button" class="jobs-filter-tab" data-job-filter="complete" role="tab" aria-selected="false">Complete <span data-job-count="complete"></span></button>
+        </div>
+        <label class="jobs-search"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input type="search" id="job-search" placeholder="Search scripts…" aria-label="Search scripts"></label>
+      </div>
+      <div class="jobs-list" id="jobs-list"><div class="jobs-empty">No speech yet. Pick a character, write a script and hit Generate.</div></div>
+    </section>
+  </main>
+
+  <!-- ───────────────────────────── Characters ───────────────────────────── -->
+  <main class="view-page" data-view-page="characters" hidden>
+    <section class="page-panel" aria-labelledby="characters-heading">
+      <div class="page-toolbar">
+        <div>
+          <h1 id="characters-heading">Character gallery</h1>
+          <p class="field-hint">Your saved Rocsy characters. Play a sample, then use it in the Studio.</p>
+        </div>
+        <button type="button" class="primary-button" data-go-view="add">Add character</button>
+      </div>
+      <div class="jobs-toolbar gallery-tools" id="gallery-tools">
+        <label class="jobs-search"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="character-search" type="search" placeholder="Search characters…" aria-label="Search characters"></label>
+        <div class="jobs-filter category-chips" id="category-chips" role="group" aria-label="Filter by category"></div>
+      </div>
+      <div class="character-grid" id="character-grid" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <!-- ─────────────────────────── Engine settings ────────────────────────── -->
+  <main class="view-page settings-page" data-view-page="settings" hidden>
+    <section class="page-panel" aria-labelledby="settings-heading">
+      <div class="page-toolbar">
+        <div>
+          <h1 id="settings-heading">Engine settings</h1>
+          <p class="field-hint">Each engine keeps its own settings. Saved changes apply to new generations.</p>
+        </div>
+      </div>
+      <nav class="settings-engine-tabs" id="settings-engine-tabs" role="tablist" aria-label="Voice engines"></nav>
+      <form id="settings-form" class="settings-form">
+        <div class="settings-intro"><h2 id="settings-engine-name">Loading…</h2><p id="settings-engine-description" class="field-hint"></p></div>
+        <div id="settings-fields" class="settings-groups"></div>
+        <div class="settings-actions">
+          <button type="submit" class="primary-button" id="settings-save">Save settings</button>
+          <button type="button" class="secondary-button" id="settings-reset">Reset this engine</button>
+          <span id="settings-status" class="field-hint" role="status" aria-live="polite"></span>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <!-- ─────────────────────────── Add a character ────────────────────────── -->
+  <main class="view-page add-page" data-view-page="add" hidden>
+    <section class="page-panel" aria-labelledby="add-heading">
+      <div class="page-toolbar">
+        <div>
+          <h1 id="add-heading">Add a character</h1>
+          <p class="field-hint">Upload a recording or import YouTube audio, trim a clean clip, and save it to the gallery.</p>
+        </div>
+      </div>
+      <form id="voice-form" class="builder">
+        <div class="card builder-step">
+          <div class="card-head is-static"><span class="card-title"><span class="step-num">1</span> Recording</span></div>
+          <div class="card-body">
+            <label class="drop-zone drop" id="drop">
+              <input id="voice-audio" type="file" accept="audio/*,video/*,.mp3,.m4a,.wav,.flac,.ogg,.opus,.webm,.mp4">
+              <strong id="drop-title">Choose or drop an MP3, WAV, M4A…</strong>
+              <span class="field-hint" id="drop-hint">Songs, clips and videos work: music can be removed below. Up to 200 MB.</span>
+            </label>
+            <div class="youtube-import">
+              <label for="youtube-url">YouTube video link</label>
+              <div class="youtube-import-controls">
+                <input id="youtube-url" type="url" inputmode="url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off">
+                <button type="button" class="secondary-button" id="youtube-download">Download audio</button>
+              </div>
+              <span class="field-hint" id="youtube-state" role="status">Paste a video link to import its voice recording (up to 30 minutes).</span>
+            </div>
+            <div class="clip-picker" id="clip-picker" hidden>
+              <canvas id="wave" height="84" aria-label="Waveform. Click to move the selected clip."></canvas>
+              <div class="clip-controls">
+                <div class="field-row"><label for="clip-start">Start <output id="clip-start-out">0.0 s</output></label><input id="clip-start" type="range" min="0" max="0" step="0.1" value="0"></div>
+                <div class="field-row"><label for="clip-length">Length <output id="clip-length-out">15 s</output></label><input id="clip-length" type="range" min="1" max="15" step="0.5" value="15"></div>
+                <button type="button" class="secondary-button" id="play-selection">Play selection</button>
+              </div>
+              <span class="field-hint">5–15 seconds of one person talking clearly clones best. Click the waveform to jump there.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card builder-step">
+          <div class="card-head is-static"><span class="card-title"><span class="step-num">2</span> Clean up</span></div>
+          <div class="card-body">
+            <div class="effects">
+              <div class="field-row"><label for="fx-music">Remove music <output id="fx-music-out">100%</output></label><input id="fx-music" type="range" min="0" max="100" step="5" value="100"><span class="field-hint">Runs on the GPU (queued behind renders). 100% keeps only the voice.</span></div>
+              <div class="field-row"><label for="fx-noise">Noise suppression <output id="fx-noise-out">20%</output></label><input id="fx-noise" type="range" min="0" max="100" step="5" value="20"></div>
+              <label class="check"><input id="fx-normalize" type="checkbox" checked> Normalize speech level</label>
+              <label class="check"><input id="fx-focus" type="checkbox" checked> Voice frequency focus <span class="field-hint">(cuts rumble and hiss)</span></label>
+            </div>
+            <div class="action-row">
+              <button type="button" class="secondary-button" id="build-clip" disabled>Build cleaned clip</button>
+              <span class="field-hint" id="build-state" aria-live="polite"></span>
+            </div>
+            <div class="compare" id="compare" hidden>
+              <span class="field-hint">Cleaned reference</span><audio id="cleaned" controls></audio>
+            </div>
+          </div>
+        </div>
+
+        <div class="card builder-step">
+          <div class="card-head is-static"><span class="card-title"><span class="step-num">3</span> Character</span></div>
+          <div class="card-body">
+            <div class="field-pair">
+              <div class="field-row"><label for="voice-name">Name</label><input id="voice-name" name="name" type="text" required maxlength="100" placeholder="Character name"></div>
+              <div class="field-row"><label for="voice-category">Category</label><input id="voice-category" name="category" type="text" maxlength="40" placeholder="VA, Narrator, Game…" list="category-list"><datalist id="category-list"></datalist></div>
+            </div>
+            <div class="field-pair">
+              <div class="field-row"><label for="voice-icon">Emoji</label><input id="voice-icon" name="icon" type="text" maxlength="8" placeholder="🎙️"></div>
+              <div class="field-row"><label for="voice-portrait">Portrait <span class="label-note">optional</span></label><input id="voice-portrait" name="icon_image" type="file" accept="image/png,image/jpeg,image/webp"></div>
+            </div>
+            <div class="field-row"><label for="voice-summary">Summary <span class="label-note">optional</span></label><input id="voice-summary" name="summary" type="text" maxlength="300" placeholder="Warm, playful, slightly raspy"></div>
+            <div class="field-row"><div class="label-split"><label for="voice-transcript">Exact words in the clip</label><button type="button" class="link-button" id="transcribe" disabled>Auto-transcribe</button></div><textarea id="voice-transcript" name="transcript" rows="3" placeholder="Optional, but improves cloning quality"></textarea></div>
+            <div class="action-row"><button class="primary-button" type="submit" id="save-character" disabled>Save character</button><span class="field-hint" id="save-hint">Build the cleaned clip first.</span></div>
+          </div>
+        </div>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

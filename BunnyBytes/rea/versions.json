@@ -1,0 +1,90 @@
+{
+  "rea-agents": {
+    "version": "6.4.0"
+  },
+  "supergateway": {
+    "version": "4.1.0"
+  },
+  "wakaru": {
+    "version": "1.14.0"
+  },
+  "ghidra": {
+    "version": "12.1.4",
+    "url": "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip",
+    "sha256": "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db"
+  },
+  "jadx-headless-mcp": {
+    "version": "0.7.1",
+    "url": "https://github.com/1013503897/jadx-headless-mcp/releases/download/v0.7.1/jadx-headless-mcp-0.7.1-all.jar",
+    "sha256": "6e5eacf500b64292bfb73c49797c1958f6ee44646e43e868039ae7feb573ff75"
+  },
+  "wabt": {
+    "version": "1.0.42",
+    "url": "https://github.com/WebAssembly/wabt/releases/download/1.0.42/wabt-1.0.42-linux-x64.tar.gz",
+    "sha256": "84895407a6bbb80e918f33b16b2fb2206021c150b6bc9ff6f761263a745ab131"
+  },
+  "apktool": {
+    "version": "3.0.3",
+    "url": "https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar",
+    "sha256": "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423"
+  },
+  "rizin": {
+    "version": "0.9.1",
+    "url": "https://github.com/rizinorg/rizin/releases/download/v0.9.1/rizin-v0.9.1-static-x86_64.tar.xz",
+    "sha256": "9102249a9f0b6319c5334a2e5cf8d9cc3f2035e1d3def027c41f6a90f647e8cf"
+  },
+  "dotnet-sdk": {
+    "version": "10.0.402",
+    "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.402/dotnet-sdk-10.0.402-linux-x64.tar.gz",
+    "sha512": "1904a98dda2db34ba78ba3c4fb1b224455329af91c341d83547843c1839e112b04ae699ee92fa2449a8f62249196a938723078c0c60b9f65c88539d5687729c2"
+  },
+  "ilspycmd": {
+    "version": "11.1.0.9782"
+  },
+  "netfx-refs": {
+    "version": "1.0.3"
+  },
+  "bepinex-win-x64": {
+    "version": "5.4.23.5",
+    "url": "https://github.com/BepInEx/BepInEx/releases/download/v5.4.23.5/BepInEx_win_x64_5.4.23.5.zip",
+    "sha256": "82f9878551030f54657792c0740d9d51a09500eeae1fba21106b0c441e6732c4"
+  },
+  "bepinex-win-x86": {
+    "version": "5.4.23.5",
+    "url": "https://github.com/BepInEx/BepInEx/releases/download/v5.4.23.5/BepInEx_win_x86_5.4.23.5.zip",
+    "sha256": "37651c79e40d6f909572a4f461ac25350bb3ef8fe7fbd29f1aa8791a33b84c82"
+  },
+  "bepinex-linux-x64": {
+    "version": "5.4.23.5",
+    "url": "https://github.com/BepInEx/BepInEx/releases/download/v5.4.23.5/BepInEx_linux_x64_5.4.23.5.zip",
+    "sha256": "e538560be65739f562519ab518a75f9c65b3f57f87457403ae7cde683c12dab7"
+  },
+  "bepinex6-il2cpp-win-x64": {
+    "version": "6.0.0-be.788",
+    "url": "https://builds.bepinex.dev/projects/bepinex_be/788/BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.788%2B5b766a3.zip",
+    "sha256": "f4cc496bd098a0df4164b81e3737297707f13a47c2478dba2f60eefab784817a"
+  },
+  "bepinex6-il2cpp-linux-x64": {
+    "version": "6.0.0-be.788",
+    "url": "https://builds.bepinex.dev/projects/bepinex_be/788/BepInEx-Unity.IL2CPP-linux-x64-6.0.0-be.788%2B5b766a3.zip",
+    "sha256": "b9428e9f4b03f863114fe049ea8f578a45cd92ac68358136cd35b3fd6b3650c2"
+  },
+  "ue4ss": {
+    "version": "3.0.1-1181-g83330635",
+    "url": "https://github.com/UE4SS-RE/RE-UE4SS/releases/download/experimental-latest/UE4SS_v3.0.1-1181-g83330635.zip",
+    "sha256": "b9a166a756605b21058a64cde93bcaab1a855dba3553e5c7e6ce0fa8fdfad7b9"
+  },
+  "gdre": {
+    "version": "2.7.4",
+    "url": "https://github.com/GDRETools/gdsdecomp/releases/download/v2.7.4/GDRE_tools-v2.7.4-linux.zip",
+    "sha256": "3dc4f1244dda62e41e0c952ac00a69e60e07f3b0d5a211164806bf9d41a54758"
+  },
+  "unrpyc": {
+    "version": "2.0.4",
+    "url": "https://github.com/CensoredUsername/unrpyc/archive/refs/tags/v2.0.4.tar.gz",
+    "sha256": "bf2b176a82747bb98ece3a20c33872c9d1e448072096626ee084e805c7c8177d"
+  },
+  "asar": {
+    "version": "4.3.1"
+  }
+}

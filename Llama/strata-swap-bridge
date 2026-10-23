@@ -1,0 +1,30 @@
+#!/bin/sh
+# llama-swap keeps this process alive while the host Strata service serves requests.
+set -eu
+url=http://127.0.0.1:8899/core/engines
+case "${1:-start}" in
+  start|stop) action=${1:-start} ;;
+  *) exit 2 ;;
+esac
+if [ "$action" = stop ]; then
+  curl -fsS --max-time 90 -X POST -H "X-Hostctl-Secret: $HOSTCTL_SECRET" -H 'Content-Type: application/json' \
+    -d '{"swap":true}' "$url/strata-stop" >/dev/null
+  exit 0
+fi
+# start MODEL: the Strata size of this llama-swap entry (IQ3_XXS, Q2_0, ...); hostctl swaps sizes itself
+model=${2:-}
+case "$model" in
+  ''|*[!A-Za-z0-9_]*) body='{}' ;;
+  *) body="{\"model\":\"$model\"}" ;;
+esac
+curl -fsS --max-time 180 -X POST -H "X-Hostctl-Secret: $HOSTCTL_SECRET" -H 'Content-Type: application/json' \
+  -d "$body" "$url/strata-start" >/dev/null
+ready=0
+while :; do
+  if curl -fsS --max-time 2 "http://127.0.0.1:9101/health" >/dev/null 2>&1; then
+    ready=1
+  elif [ "$ready" = 1 ]; then
+    exit 0
+  fi
+  sleep 5
+done

@@ -1,0 +1,28 @@
+/* Missing model files dialog (shared/ui/missing-files.js). Colours come from each studio's tokens. */
+.mf-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--border, #33414c);
+  border-radius: var(--radius, 10px); background: var(--panel, #182128); color: var(--text, #c7d0d6); }
+.mf-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+.mf-body { display: grid; gap: 12px; margin: 0; padding: 18px; }
+.mf-title { margin: 0; font-size: 1.05rem; }
+.mf-lead { margin: 0; font-size: 0.88rem; color: var(--muted, #7f8c96); }
+.mf-rows { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; max-height: 52vh; overflow: auto; }
+.mf-row { display: grid; gap: 4px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border, #33414c);
+  border-radius: var(--radius-sm, 8px); background: var(--panel-alt, #12191e); }
+.mf-row.is-node { border-color: var(--amber, #e1a744); }
+.mf-name { font-weight: 600; font-size: 0.9rem; overflow-wrap: anywhere; }
+.mf-kind { font-weight: 400; font-size: 0.75rem; color: var(--muted, #7f8c96); }
+.mf-src { display: grid; gap: 6px; font-size: 0.8rem; line-height: 1.4; overflow-wrap: anywhere; }
+.mf-src a { color: var(--blue, #79add3); }
+.mf-path { display: block; font-size: 0.72rem; color: var(--muted, #7f8c96); }
+.mf-pick { width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid var(--border, #33414c); border-radius: var(--radius-sm, 8px);
+  background: var(--field, #0f1418); color: inherit; font: inherit; text-overflow: ellipsis; }
+.mf-bar { display: block; height: 4px; border-radius: 2px; background: var(--border, #33414c); overflow: hidden; }
+.mf-bar > span { display: block; height: 100%; background: var(--blue, #79add3); transition: width 0.4s; }
+.mf-auto { display: flex; gap: 8px; align-items: center; font-size: 0.82rem; }
+.mf-status { margin: 0; font-size: 0.8rem; color: var(--amber, #e1a744); }
+.mf-status:empty { display: none; }
+.mf-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.mf-actions button { padding: 8px 14px; border: 1px solid var(--border-strong, #4a5a66); border-radius: var(--radius-sm, 8px);
+  background: var(--raised, #1f2a32); color: inherit; font: inherit; cursor: pointer; }
+.mf-actions .mf-go { border-color: var(--blue, #79add3); background: var(--blue, #79add3); color: var(--bg, #0f1418); font-weight: 600; }
+.mf-actions button:disabled { opacity: 0.5; cursor: default; }

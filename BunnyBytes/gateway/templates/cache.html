@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAG &amp; Cache · Rocsy</title>
+  <link rel="icon" href="/static/icons/rocsy-v2.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/site.css?v={{ asset_v('css/site.css') }}">
+  <link rel="stylesheet" href="/static/css/cache.css?v={{ asset_v('css/cache.css') }}">
+  <link rel="stylesheet" href="/static/css/rocsy-bar.css?v={{ asset_v('css/rocsy-bar.css') }}">
+  <link rel="stylesheet" href="{{ theme_href('Cache') }}" id="bb-theme">
+  <script defer src="/static/cache.js?v={{ asset_v('cache.js') }}"></script>
+  {{ data_saver_script() }}
+</head>
+<body class="bb-body cache-body">
+  <header class="rb-bar cache-top" data-rb-app="Cache">{{ rocsy_crumb('Cache') }}</header>
+
+  <main class="work">
+    <div class="view-bar">
+      <div class="seg" id="tab-seg" role="group" aria-label="Section">
+        <button type="button" data-tab="rag" aria-pressed="true">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M12 3l1.9 4.6 4.6 1.9-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>RAG library <span class="tab-count" id="count-rag"></span></button>
+        <button type="button" data-tab="cache" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.8"/><path d="M12 8v4l2.5 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Upload cache <span class="tab-count" id="count-cache"></span></button>
+        <button type="button" data-tab="all" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>All files <span class="tab-count" id="count-all"></span></button>
+      </div>
+      <div class="view-tools">
+        <input type="search" id="search" placeholder="Search names, aliases, terms…" aria-label="Search files" autocomplete="off">
+        <div class="seg kinds" role="group" aria-label="File origin">
+          <button type="button" id="show-uploaded" aria-pressed="true" title="Files you uploaded">Uploaded</button>
+          <button type="button" id="show-generated" aria-pressed="true" title="Files Rocsy generated">Generated</button>
+        </div>
+        <button type="button" class="button" id="select-mode" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3.5" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 12.5l2.5 2.5 4.5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Select</span></button>
+        <div class="seg" role="group" aria-label="Layout">
+          <button type="button" data-view="list" aria-pressed="true" aria-label="List view" title="List"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+          <button type="button" data-view="gallery" aria-pressed="false" aria-label="Gallery view" title="Gallery"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="13" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="13" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/></svg></button>
+        </div>
+        <button type="button" class="button" id="new-group" title="Bundle RAG files to attach together"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Group</button>
+        <button type="button" class="icon-button" id="refresh" title="Re-read the upload folder" aria-label="Refresh"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button type="button" class="button" id="new-doc" title="Write a reusable text document for the RAG library"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z M14 3v5h5M12 11v6M9 14h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>New doc</button>
+        <button type="button" class="button primary" id="upload-top"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M5 20h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Upload</button>
+      </div>
+    </div>
+
+    <section class="block" id="files-block">
+      <div id="upload-zone" class="upload-zone">
+        <input id="upload-input" type="file" multiple hidden>
+        <svg class="upload-ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>
+        <span class="upload-text"><strong>Drop files anywhere</strong> or <button type="button" id="choose-files">browse</button> <small>· lands in the 7-day cache · 250 MB max · Add to RAG to keep</small></span>
+        <span id="upload-status" class="upload-status" role="status"></span>
+      </div>
+
+      <div class="file-table" id="list-view">
+        <div class="file-row file-head"><span></span><span>File</span><span>RAG</span><span>Added</span><span>Size</span><span>Lifetime</span><span></span></div>
+        <div id="files"></div>
+      </div>
+      <div id="gallery-view" class="gallery" hidden></div>
+      <div id="empty" class="empty-state" hidden>
+        <span class="empty-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg></span>
+        <h3 id="empty-title">Nothing here yet</h3><p id="empty-text"></p>
+      </div>
+    </section>
+
+    <section class="block" id="groups-block" hidden>
+      <div class="section-head"><h2>Groups</h2><span class="hint">Attach together with <code>@{Group name} all</code> or <code>random 2</code>, or a group trigger term</span></div>
+      <div id="groups" class="group-grid" aria-live="polite"></div>
+    </section>
+    <footer class="cache-foot">
+      <p class="foot-stats" id="foot-stats" role="status"></p>
+      <details class="how"><summary>How RAG works</summary>
+        <p>Uploads and generated outputs sit in the cache for 7 days. <strong>Add to RAG</strong> keeps a file and gives it trigger terms and a context note, and <strong>New doc</strong> writes a reusable text document straight into the library;
+          when your Master Agent message mentions a term (whole word, any case), the file and its note are attached, up to 20 per message.
+          Groups bundle RAG files so they travel together. Files never leave this computer.</p></details>
+    </footer>
+  </main>
+
+  <div id="selection-bar" class="selection-bar" hidden>
+    <span class="selection-label"><strong id="selection-count">0</strong> selected<span id="selection-hint"> · click files to select · shift-click for a range</span></span>
+    <button type="button" class="button small primary" id="pin-selected">Add to RAG</button>
+    <button type="button" class="button small" id="download-selected">Download</button>
+    <button type="button" class="button small" id="group-selected">Group</button>
+    <button type="button" class="button small danger" id="delete-selected">Delete</button>
+    <button type="button" class="button small" id="select-all">Select all</button>
+    <button type="button" class="button small" id="clear-selected">Cancel</button>
+  </div>
+
+  <dialog id="pin-dialog" class="dlg" aria-labelledby="pin-title"><form method="dialog" novalidate>
+    <header class="dlg-head"><span class="dlg-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l1.9 4.6 4.6 1.9-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/></svg></span>
+      <div><h2 id="pin-title">Add to RAG library</h2><p id="pin-lead">Kept until you remove it, and attached to the Master Agent when a trigger term comes up.</p></div>
+      <button type="button" class="icon-button" id="close-dialog" aria-label="Close"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button></header>
+    <div class="dlg-body">
+      <div class="pin-preview" id="pin-preview"></div>
+      <label for="alias">Alias</label>
+      <input id="alias" type="text" maxlength="80" placeholder="e.g. Product photos">
+      <p class="help" id="alias-help">How it shows up in the @ picker.</p>
+      <label for="pin-rag-terms">Trigger terms</label>
+      <textarea id="pin-rag-terms" rows="3" placeholder="One phrase per line, e.g.&#10;product launch&#10;blue sneaker"></textarea>
+      <div class="term-preview" id="pin-term-preview"></div>
+      <p class="help">When your message contains one of these, the file is attached automatically. Leave empty to attach it only by hand (@).</p>
+      <label for="pin-note">Context note <span class="opt">optional</span></label>
+      <textarea id="pin-note" rows="4" maxlength="2000" placeholder="What the file shows, identities, details to preserve, or how to use it."></textarea>
+      <p class="help">Sent to the Master Agent together with the file.</p>
+      <p id="pin-error" class="dlg-error" role="alert"></p>
+    </div>
+    <footer class="dlg-foot"><button type="button" class="button danger" id="unpin-file" hidden>Remove from RAG</button><button type="button" class="button danger" id="delete-file" hidden>Delete file</button><span class="spacer"></span><button value="cancel" class="button">Cancel</button><button value="default" class="button primary" id="save-pin">Add to RAG</button></footer>
+  </form></dialog>
+
+  <dialog id="doc-dialog" class="dlg wide" aria-labelledby="doc-title"><form id="doc-form" novalidate>
+    <header class="dlg-head"><span class="dlg-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></span>
+      <div><h2 id="doc-title">New text document</h2><p id="doc-lead">Reusable text kept in the RAG library: briefs, style guides, character sheets, prompt snippets.</p></div>
+      <button type="button" class="icon-button" id="close-doc" aria-label="Close"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button></header>
+    <div class="dlg-body doc-body">
+      <div class="doc-main">
+        <div class="doc-name-row">
+          <div><label for="doc-name">Name</label><input id="doc-name" type="text" maxlength="80" autocomplete="off" placeholder="e.g. Brand voice"></div>
+          <div class="doc-file-wrap"><label>File</label><span id="doc-file" class="doc-file"></span></div>
+        </div>
+        <div class="doc-text-head"><label for="doc-text">Text</label><span id="doc-count" class="hint"></span></div>
+        <textarea id="doc-text" class="doc-text" rows="16" spellcheck="true" placeholder="Write anything the Master Agent should reuse. Markdown works."></textarea>
+      </div>
+      <div class="doc-side">
+        <label class="doc-check"><input type="checkbox" id="doc-rag" checked> Keep in the RAG library</label>
+        <p class="help">Off = a plain file in the 7-day cache.</p>
+        <label for="doc-rag-terms">Trigger terms</label>
+        <textarea id="doc-rag-terms" rows="3" placeholder="One phrase per line, e.g.&#10;brand voice&#10;tone of voice"></textarea>
+        <div class="term-preview" id="doc-term-preview"></div>
+        <p class="help">A message with one of these attaches the document. Empty = attach by hand (@).</p>
+        <label for="doc-note">Context note <span class="opt">optional</span></label>
+        <textarea id="doc-note" rows="3" maxlength="2000" placeholder="When or how to use it."></textarea>
+      </div>
+    </div>
+    <p id="doc-error" class="dlg-error pad" role="alert"></p>
+    <footer class="dlg-foot"><button type="button" class="button danger" id="delete-doc" hidden>Delete document</button><span class="spacer"></span><span class="hint doc-keys">Ctrl+S saves</span><button type="button" class="button" id="cancel-doc">Cancel</button><button type="submit" class="button primary" id="save-doc">Create document</button></footer>
+  </form></dialog>
+
+  <dialog id="group-dialog" class="dlg wide" aria-labelledby="group-title"><form id="group-form" novalidate>
+    <header class="dlg-head"><span class="dlg-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="7" width="13" height="13" rx="2"/><path d="M8 4h10a2 2 0 0 1 2 2v10"/></svg></span>
+      <div><h2 id="group-title">New group</h2><p>Bundle RAG files so Master Agent chat can attach them by name or trigger term.</p></div>
+      <button type="button" class="icon-button" id="close-group" aria-label="Close"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button></header>
+    <div class="dlg-body group-body">
+      <div class="group-fields">
+        <label for="group-name">Group name</label>
+        <input id="group-name" type="text" maxlength="80" required autocomplete="off" placeholder="e.g. Character references">
+        <p class="group-usage">In chat: <button type="button" class="token" id="group-usage" title="Copy chat tag"></button> <span>or <code>random 2</code> instead of <code>all</code></span></p>
+        <label for="group-rag-terms">Trigger terms</label>
+        <textarea id="group-rag-terms" rows="3" placeholder="One phrase per line, e.g. character design"></textarea>
+        <div class="term-preview" id="group-term-preview"></div>
+        <p class="help">When your message contains one of these, every file in the group is attached.</p>
+        <label for="group-note">Group context note <span class="opt">optional</span></label>
+        <textarea id="group-note" rows="4" maxlength="2000" placeholder="What the files share, or how to use them together."></textarea>
+      </div>
+      <div class="group-picker">
+        <div class="picker-head"><span class="picker-label">Files</span><span id="group-count" class="hint"></span></div>
+        <div class="group-tools"><input id="group-filter" type="search" placeholder="Filter files…" aria-label="Filter files"><button type="button" class="button small" id="group-all">All</button><button type="button" class="button small" id="group-none">None</button></div>
+        <div id="group-members" class="group-members" role="group" aria-label="Files in this group"></div>
+      </div>
+    </div>
+    <p id="group-error" class="dlg-error pad" role="alert"></p>
+    <footer class="dlg-foot"><button type="button" class="button danger" id="delete-group" hidden>Delete group</button><span class="spacer"></span><button type="button" class="button" id="cancel-group">Cancel</button><button type="submit" class="button primary" id="save-group">Create group</button></footer>
+  </form></dialog>
+
+  <div id="drop-veil" class="drop-veil" hidden><div><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg><strong>Drop to upload to the cache</strong></div></div>
+  <div id="toast" class="toast" role="status"></div>
+</body>
+</html>

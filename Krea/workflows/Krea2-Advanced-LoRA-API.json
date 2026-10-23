@@ -1,0 +1,448 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "krea2_turbo_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+      "type": "krea2",
+      "device": "default"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "Power Lora Loader (rgthree)",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "clip": [
+        "2",
+        0
+      ]
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "4",
+        1
+      ],
+      "text": ""
+    }
+  },
+  "6": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "5",
+        0
+      ]
+    }
+  },
+  "7": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "8": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "positive": [
+        "16",
+        0
+      ],
+      "negative": [
+        "6",
+        0
+      ],
+      "latent_image": [
+        "7",
+        0
+      ],
+      "seed": 572143895013248,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1
+    }
+  },
+  "9": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "8",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
+  },
+  "10": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "20",
+        0
+      ],
+      "filename_prefix": "Krea2/Krea2_Advanced_LoRA"
+    }
+  },
+  "12": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "example.png"
+    }
+  },
+  "13": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "12",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
+  },
+  "14": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": [
+        "5",
+        0
+      ],
+      "latent": [
+        "34",
+        0
+      ]
+    }
+  },
+  "15": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": false
+    }
+  },
+  "16": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "switch": [
+        "15",
+        0
+      ],
+      "on_false": [
+        "5",
+        0
+      ],
+      "on_true": [
+        "33",
+        0
+      ]
+    }
+  },
+  "17": {
+    "class_type": "UpscaleModelLoader",
+    "inputs": {
+      "model_name": "RealESRGAN_x4plus.pth"
+    }
+  },
+  "18": {
+    "class_type": "ImageUpscaleWithModel",
+    "inputs": {
+      "upscale_model": [
+        "17",
+        0
+      ],
+      "image": [
+        "9",
+        0
+      ]
+    }
+  },
+  "19": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": false
+    }
+  },
+  "20": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "switch": [
+        "19",
+        0
+      ],
+      "on_false": [
+        "9",
+        0
+      ],
+      "on_true": [
+        "18",
+        0
+      ]
+    }
+  },
+  "21": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "example.png"
+    }
+  },
+  "22": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "21",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
+  },
+  "23": {
+    "class_type": "LatentMultiply",
+    "inputs": {
+      "samples": [
+        "22",
+        0
+      ],
+      "multiplier": 0.75
+    }
+  },
+  "24": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": [
+        "36",
+        0
+      ],
+      "latent": [
+        "23",
+        0
+      ]
+    }
+  },
+  "25": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "example.png"
+    }
+  },
+  "26": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "25",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
+  },
+  "27": {
+    "class_type": "LatentMultiply",
+    "inputs": {
+      "samples": [
+        "26",
+        0
+      ],
+      "multiplier": 0.6
+    }
+  },
+  "28": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": [
+        "38",
+        0
+      ],
+      "latent": [
+        "27",
+        0
+      ]
+    }
+  },
+  "29": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "example.png"
+    }
+  },
+  "30": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "29",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
+  },
+  "31": {
+    "class_type": "LatentMultiply",
+    "inputs": {
+      "samples": [
+        "30",
+        0
+      ],
+      "multiplier": 0.45
+    }
+  },
+  "32": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": [
+        "40",
+        0
+      ],
+      "latent": [
+        "31",
+        0
+      ]
+    }
+  },
+  "33": {
+    "class_type": "FluxKontextMultiReferenceLatentMethod",
+    "inputs": {
+      "conditioning": [
+        "42",
+        0
+      ],
+      "reference_latents_method": "index"
+    }
+  },
+  "34": {
+    "class_type": "LatentMultiply",
+    "inputs": {
+      "samples": [
+        "13",
+        0
+      ],
+      "multiplier": 1.0
+    }
+  },
+  "35": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": true
+    }
+  },
+  "36": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "switch": [
+        "35",
+        0
+      ],
+      "on_false": [
+        "5",
+        0
+      ],
+      "on_true": [
+        "14",
+        0
+      ]
+    }
+  },
+  "37": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": false
+    }
+  },
+  "38": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "switch": [
+        "37",
+        0
+      ],
+      "on_false": [
+        "36",
+        0
+      ],
+      "on_true": [
+        "24",
+        0
+      ]
+    }
+  },
+  "39": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": false
+    }
+  },
+  "40": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "switch": [
+        "39",
+        0
+      ],
+      "on_false": [
+        "38",
+        0
+      ],
+      "on_true": [
+        "28",
+        0
+      ]
+    }
+  },
+  "41": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": false
+    }
+  },
+  "42": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "switch": [
+        "41",
+        0
+      ],
+      "on_false": [
+        "40",
+        0
+      ],
+      "on_true": [
+        "32",
+        0
+      ]
+    }
+  }
+}

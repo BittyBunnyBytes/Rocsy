@@ -1,0 +1,19 @@
+# Template: BunnyBytes/install-units.sh fills in @ROCSY_ROOT@ / @COMFY_ROOT@ and installs it.
+[Unit]
+Description=ComfyUI lifecycle supervisor (starts the shared ComfyUI on demand and switches its profile; ComfyUI itself keeps running independently once started)
+
+[Service]
+Type=simple
+WorkingDirectory=@ROCSY_ROOT@/BunnyBytes/supervisors
+Environment=ROCSY_COMFY_ROOT=@COMFY_ROOT@
+ExecStart=/usr/bin/python3 @ROCSY_ROOT@/BunnyBytes/supervisors/comfyui_supervisor.py
+Restart=on-failure
+# ComfyUI is spawned into this unit's cgroup but is shared, long-lived
+# infrastructure that must outlive supervisor restarts (the supervisor adopts
+# it again on startup). The default KillMode=control-group killed it - and any
+# render in progress - on every supervisor stop/restart.
+KillMode=process
+RestartSec=5
+
+[Install]
+WantedBy=default.target

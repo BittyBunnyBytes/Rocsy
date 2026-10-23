@@ -1,0 +1,583 @@
+/* Rocsy home (2026-10 overhaul). Colours are site.css's --bb-* tokens,
+   which the chosen theme (/theme.css) overrides; each card sets --c to its
+   studio colour. */
+
+.bb-home2 { --h-max: 1120px; }
+.bb-home2 .bb-brand-link { color: var(--bb-blue); text-decoration: none; }
+
+/* ---------- Top bar ---------- */
+
+.h-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px max(16px, calc((100vw - var(--h-max)) / 2));
+  background: color-mix(in srgb, var(--bb-bg) 78%, transparent);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  border-bottom: 1px solid color-mix(in srgb, var(--bb-border) 70%, transparent);
+}
+
+.h-top-actions { display: flex; align-items: center; gap: 8px; }
+
+.h-icon-link,
+.h-logout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  border: 1px solid var(--bb-border);
+  border-radius: 10px;
+  color: var(--bb-muted);
+  text-decoration: none;
+  font-size: 0.88rem;
+  transition: color 0.1s ease-out, border-color 0.1s ease-out, background 0.1s ease-out;
+}
+
+.h-icon-link { width: 36px; }
+.h-logout { padding: 0 14px; }
+.h-icon-link:hover, .h-logout:hover { color: var(--bb-text); border-color: var(--bb-blue); background: color-mix(in srgb, var(--bb-blue) 8%, transparent); }
+
+/* ---------- Layout ---------- */
+
+.h-main {
+  position: relative;
+  z-index: 1;
+  max-width: var(--h-max);
+  margin: 0 auto;
+  padding: 24px 16px 24px;
+}
+
+.h-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* live status: chips + one summary line, no hero */
+.h-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-bottom: 28px;
+}
+
+.h-summary {
+  margin: 0;
+  min-width: 0;
+  color: var(--bb-muted);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.h-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.h-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 12px;
+  border: 1px solid var(--bb-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bb-panel) 80%, transparent);
+  font-size: 0.84rem;
+  color: var(--bb-text);
+}
+
+.h-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.h-chip-link { text-decoration: none; transition: border-color 0.1s ease-out; }
+.h-chip-link:hover { border-color: color-mix(in srgb, var(--c) 60%, var(--bb-border)); }
+.h-chip-link[data-state="busy"] { border-color: color-mix(in srgb, var(--c) 55%, var(--bb-border)); }
+/* "N updates available": amber, and it stands out until they're applied */
+.h-chip[data-chip="updates"][data-state="waiting"] { border-color: color-mix(in srgb, var(--bb-amber) 60%, var(--bb-border)); color: var(--bb-amber); }
+.h-chip[data-chip="updates"][data-state="waiting"] .h-dot { background: var(--bb-amber); }
+.h-chip-link:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
+
+/* status dots: idle green, busy accent + pulse, waiting amber, offline grey */
+.h-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bb-muted);
+}
+
+[data-state="idle"] > .h-dot { background: var(--bb-green); }
+[data-state="waiting"] > .h-dot { background: var(--bb-amber); }
+[data-state="offline"] > .h-dot { background: var(--bb-red); }
+[data-state="busy"] > .h-dot {
+  background: var(--c, var(--bb-blue));
+  animation: h-pulse 1.6s ease-out infinite;
+}
+
+@keyframes h-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c, var(--bb-blue)) 70%, transparent); }
+  100% { box-shadow: 0 0 0 8px transparent; }
+}
+
+.h-section { margin-bottom: 36px; }
+
+.h-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.h-section-head h2 {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--bb-muted);
+}
+
+.h-section-note { color: var(--bb-muted); font-size: 0.82rem; opacity: 0.75; }
+
+/* ---------- Master Agent prompt box ---------- */
+
+.h-ask {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--bb-border);
+  border-radius: 16px;
+  background: var(--bb-panel);
+  transition: border-color 0.12s ease-out, box-shadow 0.12s ease-out;
+}
+
+.h-ask:focus-within {
+  border-color: color-mix(in srgb, var(--bb-amber) 65%, var(--bb-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--bb-amber) 18%, transparent);
+}
+
+.h-ask-icon { flex: none; display: inline-flex; align-self: center; color: var(--bb-amber); }
+
+.h-ask textarea {
+  flex: 1;
+  min-width: 0;
+  max-height: 220px;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--bb-text);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1.45;
+  resize: none;
+  outline: none;
+}
+
+.h-ask textarea::placeholder { color: var(--bb-muted); }
+
+.h-ask button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bb-amber) 85%, var(--bb-bg));
+  color: var(--bb-bg);
+  cursor: pointer;
+  transition: transform 0.08s ease-out, filter 0.1s ease-out;
+}
+
+.h-ask button:hover { filter: brightness(1.08); }
+.h-ask button:active { transform: scale(0.94); }
+.h-ask button:disabled { opacity: 0.6; cursor: wait; }
+.h-ask-note { margin: 6px 4px 0; min-height: 1.2em; color: var(--bb-muted); font-size: 0.84rem; }
+.h-ask-note:empty { min-height: 0; margin: 0; }
+.h-ask-note { margin-bottom: 14px; }
+.h-ask-note:empty { margin-bottom: 14px; }
+
+/* ---------- Create cards ---------- */
+
+.h-create {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 16px;
+}
+/* three per row; a short last row stretches so it never leaves a hole */
+@media (min-width: 901px) {
+  .h-create > * { grid-column: span 2; }
+  .h-create > :last-child:nth-child(3n + 1) { grid-column: 1 / -1; }
+  .h-create > :nth-last-child(2):nth-child(3n + 1),
+  .h-create > :last-child:nth-child(3n + 2) { grid-column: span 3; }
+}
+
+.h-studio {
+  position: relative;
+  display: flex;
+  min-height: 236px;
+  overflow: hidden;
+  border: 1px solid var(--bb-border);
+  border-radius: 18px;
+  background:
+    radial-gradient(120% 90% at 100% 0%, color-mix(in srgb, var(--c) 16%, transparent), transparent 60%),
+    var(--bb-panel);
+  color: var(--bb-text);
+  text-decoration: none;
+  isolation: isolate;
+  transition: transform 0.12s ease-out, border-color 0.12s ease-out, box-shadow 0.12s ease-out;
+}
+
+.h-studio:hover,
+.h-studio:focus-visible {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--c) 70%, var(--bb-border));
+  box-shadow: 0 18px 40px -22px color-mix(in srgb, var(--c) 70%, transparent);
+}
+
+.h-studio:focus-visible { outline: 2px solid var(--c); outline-offset: 3px; }
+.h-studio.h-placeholder:hover { transform: none; border-color: var(--bb-border); box-shadow: none; }
+
+/* latest output, faded in behind the text */
+.h-studio-art {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-size: cover;
+  background-position: center;
+  opacity: 0;
+  transition: opacity 0.2s ease-out, transform 0.25s ease-out;
+}
+
+.h-studio-art.has-art { opacity: 0.32; }
+.h-studio-art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bb-panel) 35%, transparent) 0%, var(--bb-panel) 78%);
+}
+
+.h-studio:hover .h-studio-art.has-art { opacity: 0.45; transform: scale(1.03); }
+
+/* Music card: waveform of the newest song, in the band above the fade. */
+.h-studio-art.has-wave { opacity: 0.5; }
+.h-studio:hover .h-studio-art.has-wave { opacity: 0.7; transform: none; }
+.h-art-wave {
+  position: absolute;
+  inset: 14% 0 auto;
+  width: 100%;
+  height: 48%;
+  fill: var(--c);
+}
+
+/* Vibe Coding card: activity heatmap, in the same band as the waveform. */
+.h-studio-art.has-heat { opacity: 0.6; }
+.h-studio:hover .h-studio-art.has-heat { opacity: 0.8; transform: none; }
+.h-art-heat {
+  position: absolute;
+  inset: 14% 16px auto;
+  width: calc(100% - 32px);
+  height: 48%;
+}
+.h-art-heat rect { fill: var(--c); }
+.h-art-heat .h-heat-0 { fill: var(--bb-text); fill-opacity: 0.08; }
+.h-art-heat .h-heat-1 { fill-opacity: 0.3; }
+.h-art-heat .h-heat-2 { fill-opacity: 0.5; }
+.h-art-heat .h-heat-3 { fill-opacity: 0.75; }
+.h-art-heat .h-heat-4 { fill-opacity: 1; }
+
+/* Trainer card: crossfading dataset slides (a slow drift while training). */
+.h-art-slide {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  opacity: 0;
+  transition: opacity 1.6s ease-in-out;
+}
+.h-art-slide.on { opacity: 1; }
+.h-art-slideshow .h-art-slide.on { animation: h-art-drift 7s ease-out both; }
+@keyframes h-art-drift { from { transform: scale(1.0); } to { transform: scale(1.07); } }
+
+.h-studio-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 20px;
+}
+
+.h-studio-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.h-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  color: var(--c);
+  background: color-mix(in srgb, var(--c) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c) 28%, transparent);
+}
+
+.h-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bb-bg) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bb-border) 80%, transparent);
+  font-size: 0.78rem;
+  color: var(--bb-muted);
+  white-space: nowrap;
+}
+
+.h-live[data-state="busy"] { color: var(--bb-text); border-color: color-mix(in srgb, var(--c) 55%, transparent); }
+
+.h-studio-name {
+  margin-top: 30px;
+  font-size: 1.55rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.h-studio-desc { color: var(--bb-muted); font-size: 0.9rem; line-height: 1.45; }
+
+.h-studio-current {
+  min-height: 0;
+  color: var(--bb-text);
+  font-size: 0.82rem;
+  font-style: italic;
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.h-studio-current:empty { display: none; }
+
+/* ---------- Latest strip ---------- */
+
+.h-strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(220px, 1fr);
+  gap: 14px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  /* fade the edge so a cut-off card reads as "scroll for more" */
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 48px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 48px), transparent);
+  padding-right: 40px;
+}
+
+.h-shot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  color: var(--bb-text);
+  text-decoration: none;
+  scroll-snap-align: start;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.h-shot:active .h-shot-frame { transform: scale(0.97); }
+
+.h-shot-frame {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--bb-border);
+  background: var(--bb-panel-alt);
+  transition: transform 0.08s ease-out, border-color 0.12s ease-out;
+}
+
+.h-shot:hover .h-shot-frame { border-color: color-mix(in srgb, var(--bb-blue) 60%, var(--bb-border)); }
+
+.h-shot-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.18s ease-out;
+}
+
+.h-shot:hover .h-shot-frame img { transform: scale(1.05); }
+.h-shot:focus-visible .h-shot-frame { outline: 2px solid var(--bb-blue); outline-offset: 2px; }
+
+.h-shot-tag {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bb-bg) 85%, transparent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--bb-text);
+}
+
+.h-shot-title {
+  font-size: 0.84rem;
+  color: var(--bb-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.35;
+}
+
+/* ---------- Tools ---------- */
+
+.h-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.h-tool {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--bb-border);
+  border-radius: 14px;
+  background: var(--bb-panel);
+  color: var(--bb-text);
+  text-decoration: none;
+  transition: transform 0.12s ease-out, border-color 0.12s ease-out, background 0.12s ease-out;
+}
+
+.h-tool:hover,
+.h-tool:focus-visible {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--c) 65%, var(--bb-border));
+  background: color-mix(in srgb, var(--c) 6%, var(--bb-panel));
+}
+
+.h-tool:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
+.h-tool.h-placeholder:hover { transform: none; border-color: var(--bb-border); background: var(--bb-panel); }
+.h-studio:active, .h-tool:active { transform: scale(0.985); }
+.h-studio, .h-tool { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.h-tool .h-icon { width: 40px; height: 40px; border-radius: 11px; }
+.h-tool-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.h-tool-name { font-weight: 650; }
+.h-tool-status { color: var(--bb-muted); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.h-tool[data-state="busy"] .h-tool-status { color: var(--c); }
+.h-tool[data-state="offline"] .h-tool-status { color: var(--bb-red); }
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 900px) {
+  .h-create { grid-template-columns: 1fr 1fr; }
+  /* two per row; an odd count gives the first card the full width */
+  .h-create > :first-child:nth-last-child(2n + 1) { grid-column: 1 / -1; }
+}
+
+@media (max-width: 560px) {
+  .h-main { padding-top: 16px; }
+  .h-status { margin-bottom: 20px; }
+  .h-create { grid-template-columns: 1fr; gap: 12px; }
+  .h-create > :first-child { grid-column: auto; }
+  .h-studio { min-height: 0; }
+  .h-studio-body { padding: 16px; }
+  .h-studio-name { margin-top: 14px; font-size: 1.35rem; }
+  .h-strip { grid-auto-columns: 72%; }
+  .h-tools { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .h-studio, .h-tool, .h-shot-frame, .h-shot-frame img, .h-studio-art, .h-art-slide { transition: none; }
+  .h-art-slideshow .h-art-slide.on { animation: none; }
+  [data-state="busy"] > .h-dot { animation: none; }
+}
+
+/* ---------- First-run tour ---------- */
+.h-tour { position: fixed; inset: 0; z-index: 1002; pointer-events: none; }
+.h-tour-target {
+  position: relative !important; z-index: 1001 !important; border-radius: 14px;
+  outline: 3px solid var(--bb-blue) !important; outline-offset: 5px;
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--bb-blue) 22%, transparent), 0 0 24px color-mix(in srgb, var(--bb-blue) 35%, transparent) !important;
+  pointer-events: none !important;
+}
+.h-tour-card {
+  --tour-left: max(12px, calc(50vw - 210px)); --tour-top: max(72px, calc(50vh - 150px));
+  position: fixed; left: var(--tour-left); top: var(--tour-top); z-index: 1002; width: min(420px, calc(100vw - 24px));
+  padding: 22px; border: 1px solid color-mix(in srgb, var(--bb-blue) 55%, var(--bb-border)); border-radius: 16px;
+  max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px); overflow: auto; background: var(--bb-panel); color: var(--bb-text); box-shadow: 0 22px 70px rgba(0, 0, 0, 0.65); pointer-events: auto;
+}
+.h-tour-progress { height: 3px; margin: -22px -22px 18px; overflow: hidden; border-radius: 16px 16px 0 0; background: var(--bb-panel-alt); }
+.h-tour-progress span { display: block; height: 100%; background: var(--bb-blue); transition: width 0.2s ease; }
+.h-tour-kicker { margin: 0 0 7px; color: var(--bb-blue); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em; }
+.h-tour-card h2 { margin: 0 0 9px; font-size: 1.35rem; }
+.h-tour-card > p:last-of-type { margin: 0; color: var(--bb-muted); line-height: 1.6; }
+.h-tour-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 20px; }
+.h-tour-actions > div { display: flex; gap: 8px; }
+.h-tour-actions button { min-height: 38px; padding: 8px 13px; border: 1px solid var(--bb-border); border-radius: 9px; background: var(--bb-panel-alt); color: var(--bb-text); font: inherit; font-weight: 600; cursor: pointer; }
+.h-tour-actions button:hover { border-color: var(--bb-blue); }
+.h-tour-actions button:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 2px; }
+.h-tour-actions .h-tour-skip { padding-left: 0; border-color: transparent; background: transparent; color: var(--bb-muted); }
+.h-tour-actions .h-tour-next { border-color: var(--bb-blue); background: var(--bb-blue); color: #081118; }
+/* Keep the document scrollable so lower tools (including Models) can be
+   centered before their spotlight and tooltip are measured. */
+body.h-tour-open { overflow: auto; }
+@media (max-width: 560px) {
+  body.h-tour-open .h-main { padding-bottom: calc(70dvh + 24px); }
+  .h-tour-card {
+    left: 12px; right: 12px; top: auto; bottom: max(8px, env(safe-area-inset-bottom));
+    width: auto; max-height: 70vh; max-height: min(70dvh, calc(100dvh - 16px)); padding: 18px;
+    overscroll-behavior: contain;
+  }
+  .h-tour-progress { margin: -18px -18px 15px; }
+  .h-tour-actions { align-items: stretch; flex-direction: column-reverse; }
+  .h-tour-actions > div { display: grid; grid-template-columns: 1fr 1fr; }
+  .h-tour-actions button { min-height: 44px; }
+  .h-tour-actions .h-tour-skip { align-self: center; }
+}
+@media (prefers-reduced-motion: reduce) { .h-tour-progress span { transition: none; } }
+
+/* "Experimental" pill on module cards (REA, Vibe Coding) */
+.h-exp {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--bb-amber) 55%, transparent);
+  background: color-mix(in srgb, var(--bb-amber) 14%, transparent);
+  color: var(--bb-amber);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+/* icon on the left, then the status pill(s) together on the right */
+.h-studio-top:has(.h-exp) { justify-content: flex-start; }
+.h-studio-top:has(.h-exp) > :nth-child(2) { margin-left: auto; }

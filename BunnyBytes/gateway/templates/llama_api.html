@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rocsy — Llama API</title>
+  {{ app_icon_link("Llama") }}
+  <link rel="apple-touch-icon" href="/static/icons/rocsy-v2-touch-180.png">
+  <meta name="theme-color" content="#0f1418">
+  <link rel="stylesheet" href="/static/css/site.css?v={{ asset_v('css/site.css') }}">
+  <link rel="stylesheet" href="/static/llama-api.css?v={{ asset_v('llama-api.css') }}">
+  <link rel="stylesheet" href="/static/css/rocsy-bar.css?v={{ asset_v('css/rocsy-bar.css') }}">
+  <link rel="stylesheet" href="{{ theme_href() }}" id="bb-theme">
+  <script defer src="/static/llama-api.js?v={{ asset_v('llama-api.js') }}"></script>
+  {{ data_saver_script() }}
+</head>
+<body class="bb-body bb-api">
+  <div class="bb-bg-glow" aria-hidden="true"></div>
+  <header class="rb-bar" data-rb-app="Llama API">
+    {{ rocsy_crumb('Llama API') }}
+    <a class="rb-link" href="/ui/">&larr; Llama Swap</a>
+  </header>
+
+  <main class="bb-api-main">
+    <h1 class="bb-title">Llama API</h1>
+    <p class="bb-subtitle">Connect Hermes or any OpenAI-compatible app to your local models.</p>
+
+    <section class="bb-section" aria-labelledby="connection-heading">
+      <div class="bb-section-head">
+        <h2 id="connection-heading">Connection</h2>
+        <span class="bb-api-count" id="count" hidden></span>
+      </div>
+      <div class="bb-api-fields">
+        <label class="bb-api-field" for="model">
+          <span class="bb-label">Model</span>
+          <select class="bb-input" id="model" disabled><option>Loading models…</option></select>
+        </label>
+        <div class="bb-api-field">
+          <span class="bb-label" id="base-url-label">Base URL</span>
+          <div class="bb-api-copyrow">
+            <code id="base-url" aria-labelledby="base-url-label">…</code>
+            <button type="button" class="bb-api-button" data-copy="base-url">Copy</button>
+          </div>
+        </div>
+        <div class="bb-api-field">
+          <span class="bb-label" id="api-key-label">API key</span>
+          <div class="bb-api-copyrow">
+            <code id="api-key" class="is-secret" aria-labelledby="api-key-label">…</code>
+            <button type="button" class="bb-api-button" id="reveal" aria-pressed="false">Reveal</button>
+            <button type="button" class="bb-api-button" data-copy="api-key">Copy</button>
+          </div>
+          <p class="bb-api-warning">Treat the key like a password: anyone with it can use your models.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="bb-section" aria-labelledby="snippets-heading">
+      <div class="bb-section-head">
+        <h2 id="snippets-heading">Use it</h2>
+        <span class="bb-status" id="status" role="status" aria-live="polite"></span>
+      </div>
+      <nav class="bb-api-tabs" role="tablist" aria-label="Snippet format">
+        <button type="button" class="bb-api-tab" role="tab" data-snippet="hermes" aria-selected="true">Hermes</button>
+        <button type="button" class="bb-api-tab" role="tab" data-snippet="env" aria-selected="false">Environment</button>
+        <button type="button" class="bb-api-tab" role="tab" data-snippet="curl" aria-selected="false">curl</button>
+        <button type="button" class="bb-api-tab" role="tab" data-snippet="python" aria-selected="false">Python</button>
+      </nav>
+      <p class="bb-section-note" id="snippet-note"></p>
+      <div class="bb-api-code">
+        <button type="button" class="bb-api-button bb-api-code-copy" data-copy="snippet">Copy</button>
+        <pre id="snippet" tabindex="0"></pre>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

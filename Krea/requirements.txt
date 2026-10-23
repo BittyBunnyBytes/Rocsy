@@ -1,0 +1,9 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+httpx==0.28.1
+websockets==17.1
+python-multipart==0.0.20
+pydantic==2.11.7
+Jinja2==3.1.6
+Pillow==11.3.0
+imageio-ffmpeg==0.6.0

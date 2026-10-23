@@ -1,0 +1,534 @@
+{
+  "1": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Shared Qwen3-VL encoder"
+    }
+  },
+  "2": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+    },
+    "_meta": {
+      "title": "Video VAE"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "_meta": {
+      "title": "Audio VAE"
+    }
+  },
+  "4": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "value": 0
+    },
+    "_meta": {
+      "title": "MODE: 0 Text only | 1 FL2V | 2 Ref2V"
+    }
+  },
+  "5": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "minimax_h3_fl2va_pruned_int8_convrot_official.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "FL2V base \u2014 official fl2va"
+    }
+  },
+  "6": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "5",
+        0
+      ],
+      "lora_name": "H3-PK-Parasyte-Turbo.safetensors",
+      "strength_model": 0.6
+    },
+    "_meta": {
+      "title": "Parasyte Turbo 6-step LoRA"
+    }
+  },
+  "7": {
+    "class_type": "H3AdaLNLoRAFix",
+    "inputs": {
+      "model": [
+        "6",
+        0
+      ],
+      "mode": "port"
+    },
+    "_meta": {
+      "title": "Parasyte AdaLN compatibility fix"
+    }
+  },
+  "8": {
+    "class_type": "H3SLAAttention",
+    "inputs": {
+      "model": [
+        "7",
+        0
+      ],
+      "sparsity_ratio": 0.9,
+      "block_size": "64",
+      "min_seq_len": 8192
+    },
+    "_meta": {
+      "title": "Parasyte SLA attention \u2014 validated"
+    }
+  },
+  "9": {
+    "class_type": "MiniMaxH3SigmaShift",
+    "inputs": {
+      "model": [
+        "8",
+        0
+      ],
+      "shift_video": 8.0,
+      "shift_audio": 5.0
+    },
+    "_meta": {
+      "title": "Parasyte sigma shift"
+    }
+  },
+  "10": {
+    "class_type": "MiniMaxH3ImageToVideo",
+    "inputs": {
+      "clip": [
+        "1",
+        0
+      ],
+      "vae": [
+        "2",
+        0
+      ],
+      "prompt": "integrated_multimodal_description: A cinematic continuous shot of a woman in a blue shirt at a warm wooden kitchen counter. She picks up a red apple, slowly turns it in her hand, and sets it down. Natural skin, believable fingers, stable background, gentle camera movement, no cuts, no text.\noverall_soundscape: Quiet indoor room tone, a soft sleeve rustle, and a small wooden tap as the apple touches the counter.\nnon_diegetic_music: N/A",
+      "width": 1280,
+      "height": 720,
+      "length": 364
+    },
+    "_meta": {
+      "title": "TEXT ONLY \u2014 no image connected"
+    }
+  },
+  "11": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "videoframe_79180.png"
+    },
+    "_meta": {
+      "title": "FL2V input \u2014 replace with your first frame"
+    }
+  },
+  "12": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "videoframe_79180.png"
+    },
+    "_meta": {
+      "title": "FL2V last frame \u2014 optional; replace or disconnect"
+    }
+  },
+  "13": {
+    "class_type": "MiniMaxH3ImageToVideo",
+    "inputs": {
+      "clip": [
+        "1",
+        0
+      ],
+      "vae": [
+        "2",
+        0
+      ],
+      "prompt": "integrated_multimodal_description: A cinematic continuous shot of a woman in a blue shirt at a warm wooden kitchen counter. She picks up a red apple, slowly turns it in her hand, and sets it down. Natural skin, believable fingers, stable background, gentle camera movement, no cuts, no text.\noverall_soundscape: Quiet indoor room tone, a soft sleeve rustle, and a small wooden tap as the apple touches the counter.\nnon_diegetic_music: N/A",
+      "width": 1280,
+      "height": 720,
+      "length": 364,
+      "first_frame": [
+        "11",
+        0
+      ],
+      "last_frame": [
+        "12",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "FL2V \u2014 first / optional last frame"
+    }
+  },
+  "14": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "minimaxH3INT8INT4_ref2vaINT8Pruned.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "Ref2V base \u2014 local INT8/INT4"
+    }
+  },
+  "15": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "14",
+        0
+      ],
+      "lora_name": "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+      "strength_model": 0.6
+    },
+    "_meta": {
+      "title": "LightX Ref2V Turbo 8-step LoRA"
+    }
+  },
+  "16": {
+    "class_type": "H3AdaLNLoRAFix",
+    "inputs": {
+      "model": [
+        "15",
+        0
+      ],
+      "mode": "port"
+    },
+    "_meta": {
+      "title": "Ref2V AdaLN compatibility fix"
+    }
+  },
+  "17": {
+    "class_type": "ModelAttentionBackend",
+    "inputs": {
+      "model": [
+        "16",
+        0
+      ],
+      "attention": "comfy kitchen attention"
+    },
+    "_meta": {
+      "title": "Ref2V Comfy Kitchen attention"
+    }
+  },
+  "18": {
+    "class_type": "MiniMaxH3SigmaShift",
+    "inputs": {
+      "model": [
+        "17",
+        0
+      ],
+      "shift_video": 8.0,
+      "shift_audio": 5.0
+    },
+    "_meta": {
+      "title": "Ref2V sigma shift"
+    }
+  },
+  "19": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "videoframe_79180.png"
+    },
+    "_meta": {
+      "title": "Ref2V reference image \u2014 replace with your subject"
+    }
+  },
+  "20": {
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "inputs": {
+      "clip": [
+        "1",
+        0
+      ],
+      "vae": [
+        "2",
+        0
+      ],
+      "audio_vae": [
+        "3",
+        0
+      ],
+      "prompt": "integrated_multimodal_description: A cinematic continuous shot of a woman in a blue shirt at a warm wooden kitchen counter. She picks up a red apple, slowly turns it in her hand, and sets it down. Natural skin, believable fingers, stable background, gentle camera movement, no cuts, no text.\noverall_soundscape: Quiet indoor room tone, a soft sleeve rustle, and a small wooden tap as the apple touches the counter.\nnon_diegetic_music: N/A",
+      "width": 1280,
+      "height": 720,
+      "length": 364,
+      "ref_image_size": "match",
+      "ref_images": {
+        "ref_image_1": [
+          "19",
+          0
+        ]
+      }
+    },
+    "_meta": {
+      "title": "Ref2V \u2014 one or more reference images"
+    }
+  },
+  "21": {
+    "class_type": "easy anythingIndexSwitch",
+    "inputs": {
+      "index": [
+        "4",
+        0
+      ],
+      "value0": [
+        "9",
+        0
+      ],
+      "value1": [
+        "9",
+        0
+      ],
+      "value2": [
+        "18",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Select model by MODE"
+    }
+  },
+  "22": {
+    "class_type": "easy conditioningIndexSwitch",
+    "inputs": {
+      "index": [
+        "4",
+        0
+      ],
+      "cond0": [
+        "10",
+        0
+      ],
+      "cond1": [
+        "13",
+        0
+      ],
+      "cond2": [
+        "20",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Select conditioning by MODE"
+    }
+  },
+  "23": {
+    "class_type": "easy anythingIndexSwitch",
+    "inputs": {
+      "index": [
+        "4",
+        0
+      ],
+      "value0": [
+        "10",
+        1
+      ],
+      "value1": [
+        "13",
+        1
+      ],
+      "value2": [
+        "20",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "Select latent by MODE"
+    }
+  },
+  "24": {
+    "class_type": "BasicGuider",
+    "inputs": {
+      "model": [
+        "21",
+        0
+      ],
+      "conditioning": [
+        "22",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Guider"
+    }
+  },
+  "25": {
+    "class_type": "BasicScheduler",
+    "inputs": {
+      "model": [
+        "9",
+        0
+      ],
+      "scheduler": "simple",
+      "steps": 6,
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "Parasyte scheduler \u2014 6 steps"
+    }
+  },
+  "26": {
+    "class_type": "BasicScheduler",
+    "inputs": {
+      "model": [
+        "18",
+        0
+      ],
+      "scheduler": "simple",
+      "steps": 8,
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "Ref2V scheduler \u2014 8 steps"
+    }
+  },
+  "27": {
+    "class_type": "easy anythingIndexSwitch",
+    "inputs": {
+      "index": [
+        "4",
+        0
+      ],
+      "value0": [
+        "25",
+        0
+      ],
+      "value1": [
+        "25",
+        0
+      ],
+      "value2": [
+        "26",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Select sigmas by MODE"
+    }
+  },
+  "28": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "_meta": {
+      "title": "Euler sampler"
+    }
+  },
+  "29": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 20260909
+    },
+    "_meta": {
+      "title": "Seed"
+    }
+  },
+  "30": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "29",
+        0
+      ],
+      "guider": [
+        "24",
+        0
+      ],
+      "sampler": [
+        "28",
+        0
+      ],
+      "sigmas": [
+        "27",
+        0
+      ],
+      "latent_image": [
+        "23",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Sample selected mode"
+    }
+  },
+  "31": {
+    "class_type": "LTXVSeparateAVLatent",
+    "inputs": {
+      "av_latent": [
+        "30",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Separate video and audio latent"
+    }
+  },
+  "32": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "31",
+        0
+      ],
+      "vae": [
+        "2",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Decode video"
+    }
+  },
+  "33": {
+    "class_type": "VAEDecodeAudio",
+    "inputs": {
+      "samples": [
+        "31",
+        1
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Decode audio"
+    }
+  },
+  "34": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": [
+        "32",
+        0
+      ],
+      "audio": [
+        "33",
+        0
+      ],
+      "frame_rate": 24.0,
+      "loop_count": 0,
+      "filename_prefix": "H3_Optimization/Parasyte-Selectable",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true
+    },
+    "_meta": {
+      "title": "Save 720p video"
+    }
+  }
+}

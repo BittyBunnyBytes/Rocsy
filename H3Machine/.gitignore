@@ -1,0 +1,17 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+*.portable-drive-*
+uploads/*
+input/*
+data/*
+logs/*
+Output/*
+!uploads/.gitkeep
+!input/.gitkeep
+!data/.gitkeep
+!logs/.gitkeep
+!Output/.gitkeep
+

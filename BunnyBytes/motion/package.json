@@ -1,0 +1,26 @@
+{
+  "name": "bunny-motion",
+  "private": true,
+  "type": "module",
+  "description": "Rocsy Motion: renders Remotion (React) video projects the Master Agent writes. Frames in Chrome on the GPU, encode with VA-API.",
+  "dependencies": {
+    "remotion": "4.0.527",
+    "@remotion/bundler": "4.0.527",
+    "@remotion/renderer": "4.0.527",
+    "@remotion/cli": "4.0.527",
+    "@remotion/transitions": "4.0.527",
+    "@remotion/captions": "4.0.527",
+    "@remotion/media-utils": "4.0.527",
+    "@remotion/media": "4.0.527",
+    "@remotion/google-fonts": "4.0.527",
+    "@remotion/shapes": "4.0.527",
+    "@remotion/noise": "4.0.527",
+    "@remotion/paths": "4.0.527",
+    "@remotion/layout-utils": "4.0.527",
+    "@remotion/motion-blur": "4.0.527",
+    "@remotion/lottie": "4.0.527",
+    "lottie-web": "5.12.2",
+    "react": "19.1.9",
+    "react-dom": "19.1.9"
+  }
+}

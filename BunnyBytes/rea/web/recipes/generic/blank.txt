@@ -1,0 +1,5 @@
+{{NAME}} (Rocsy REA mod)
+
+Put every file this mod adds or replaces under src/files/, with the same path it has inside the
+game folder (e.g. src/files/config/settings.ini replaces config/settings.ini). Build copies them
+into the package; Install copies them into the game and backs up what they replace.

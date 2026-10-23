@@ -1,0 +1,270 @@
+/* Rocsy (formerly BunnyBytes) shared dark theme -- matches the H3Machine
+   dark aesthetic. Palette: */
+:root {
+  --bb-bg: #0f1418;
+  --bb-panel: #182128;
+  --bb-panel-alt: #12191e;
+  --bb-border: #33414c;
+  --bb-text: #c7d0d6;
+  --bb-muted: #7f8c96;
+  --bb-blue: #79add3;
+  --bb-green: #7fbd54;
+  --bb-amber: #e1a744;
+  --bb-red: #a85b5b;
+  --bb-purple: #9b86c4;
+  --bb-teal: #5fa8a0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+}
+
+.bb-body {
+  min-height: 100vh;
+  background: var(--bb-bg);
+  color: var(--bb-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  position: relative;
+  overflow-x: hidden;
+}
+
+.bb-bg-glow {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 18% 12%, color-mix(in srgb, var(--bb-blue) 10%, transparent), transparent 45%),
+    radial-gradient(circle at 85% 80%, color-mix(in srgb, var(--bb-green) 8%, transparent), transparent 40%),
+    radial-gradient(circle at 75% 10%, color-mix(in srgb, var(--bb-amber) 6%, transparent), transparent 35%);
+  z-index: 0;
+}
+
+/* ---------- Home ---------- */
+
+.bb-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 28px;
+  border-bottom: 1px solid var(--bb-border);
+}
+
+.bb-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bb-brand-mark {
+  display: inline-flex;
+}
+
+/* CSS beats the SVG's presentation attributes, so the mark follows the theme. */
+.bb-brand-mark .bb-mark-sun { fill: var(--bb-amber); }
+.bb-brand-mark .bb-mark-bird { fill: #f2f7fb; }
+
+.bb-brand-name {
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--bb-text);
+}
+
+.bb-logout-link {
+  color: var(--bb-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 6px 12px;
+  border: 1px solid var(--bb-border);
+  border-radius: 6px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.bb-logout-link:hover {
+  color: var(--bb-text);
+  border-color: var(--bb-blue);
+}
+
+.bb-main {
+  position: relative;
+  z-index: 1;
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 72px 24px 48px;
+  text-align: center;
+}
+
+.bb-title {
+  font-size: 2.1rem;
+  font-weight: 650;
+  margin: 0 0 10px;
+  color: var(--bb-text);
+  letter-spacing: -0.01em;
+}
+
+.bb-subtitle {
+  color: var(--bb-muted);
+  font-size: 1rem;
+  margin: 0 0 48px;
+}
+
+.bb-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 20px;
+}
+
+.bb-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 20px;
+  background: var(--bb-panel);
+  border: 1px solid var(--bb-border);
+  border-radius: 14px;
+  text-decoration: none;
+  color: var(--bb-text);
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.bb-tile:hover {
+  transform: translateY(-3px);
+  border-color: var(--bb-blue);
+  background: var(--bb-panel-alt);
+}
+
+.bb-tile-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.03);
+  margin-bottom: 4px;
+}
+
+.bb-icon-blue { color: var(--bb-blue); }
+.bb-icon-green { color: var(--bb-green); }
+.bb-icon-amber { color: var(--bb-amber); }
+.bb-icon-red { color: var(--bb-red); }
+.bb-icon-purple { color: var(--bb-purple); }
+.bb-icon-teal { color: var(--bb-teal); }
+
+.bb-tile-label {
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.bb-tile-desc {
+  color: var(--bb-muted);
+  font-size: 0.88rem;
+}
+
+.bb-footer {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  padding: 24px;
+  color: var(--bb-muted);
+  font-size: 0.8rem;
+}
+
+/* ---------- Login ---------- */
+
+.bb-login {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bb-login-card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 340px;
+  margin: 0 20px;
+  padding: 36px 32px 32px;
+  background: var(--bb-panel);
+  border: 1px solid var(--bb-border);
+  border-radius: 14px;
+}
+
+.bb-brand-center {
+  justify-content: center;
+  margin-bottom: 28px;
+}
+
+.bb-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bb-label {
+  font-size: 0.85rem;
+  color: var(--bb-muted);
+}
+
+.bb-input {
+  background: var(--bb-panel-alt);
+  border: 1px solid var(--bb-border);
+  border-radius: 8px;
+  padding: 11px 12px;
+  color: var(--bb-text);
+  font-size: 1rem;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.bb-input:focus {
+  border-color: var(--bb-blue);
+}
+
+/* Honeypot: positioned off-screen rather than display:none/visibility:hidden
+   -- those are the first two things unsophisticated bots check for and skip,
+   while off-screen positioning still reads as a normal visible field to a
+   naive form-filler. Real users never see or reach it (no keyboard tab stop
+   via tabindex="-1" in the markup, and it's outside the viewport). */
+.bb-hp {
+  position: absolute;
+  left: -9999px;
+  top: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.bb-error {
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  color: var(--bb-red);
+}
+
+.bb-submit {
+  margin-top: 10px;
+  padding: 11px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--bb-blue);
+  background: color-mix(in srgb, var(--bb-blue) 12%, transparent);
+  color: var(--bb-blue);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.bb-submit:hover {
+  background: var(--bb-blue);
+  color: var(--bb-bg);
+}
+.bb-footer a { color: inherit; text-decoration: none; }
+.bb-footer a:hover { color: var(--bb-text); }

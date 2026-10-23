@@ -1,0 +1,28 @@
+.env
+cloudflared/*.json
+cloudflared/cert.pem
+__pycache__/
+*.pyc
+lock/data/*
+!lock/data/.gitkeep
+
+# Trainer datasets (large media, local only)
+/Datasets/
+
+# Connections watcher state and logs
+/connections/data/
+hostctl/hostctl.env
+hostctl/state.json
+hostctl/load_priority.json
+
+# Local TTS weights and generated audio
+/voice/models/
+/voice/data/
+
+# Motion renders, bundles and job records
+/motion/data/
+
+# Local Rocsy Voice engine preferences
+/voice/engine_config.json
+hostctl/gputune.json
+cloudflared/config.yml

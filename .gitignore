@@ -1,0 +1,136 @@
+# This repo is scoped to the Rocsy docker project only -- ~/AI also
+# holds large, unrelated ML/training work (model checkpoints, LoRA training
+# runs, ComfyUI installs) that doesn't belong in this history. Everything at
+# this level is ignored except the docker-compose project's own directories,
+# each of which carries its own .gitignore for its runtime/generated content.
+#
+# hermes-rocsy/ (the Hermes fork the hermes-agent image builds from) is its own
+# git repository.
+/*
+
+!/BunnyBytes
+!/Llama
+!/Music
+!/Krea
+!/H3Machine
+!/Trainer
+!/.gitignore
+!/.github
+!/LICENSE
+
+# ---- repo-wide: never upload these (added 2026-10-15 for the GitHub upload) ----
+# local backups made before every edit (*.bak-YYYYMMDD-what) and editor/OS junk
+*.bak
+*.bak-*
+*.pre-github
+*.orig
+*.swp
+.DS_Store
+# Python / Node build output
+__pycache__/
+*.py[cod]
+node_modules/
+.venv/
+*.log
+# secrets: only the *.example templates are tracked
+.env
+.env.*
+!.env.example
+*.env
+!*.env.example
+# per-install runtime state (sessions, configs, caches, thumbnails, jobs)
+/BunnyBytes/*/data/
+/BunnyBytes/hostctl/state.json
+/BunnyBytes/hermes-desktop/
+# downloaded LoRA preview galleries (third-party images; tools/fetch_lora_gallery.py rebuilds them)
+/H3Machine/static/lora-gallery/
+/Krea/static/lora-gallery/
+# llama-swap: per-machine overrides and tuning runs
+/Llama/overrides/
+/Llama/optimization-runs/
+*.pre_*
+# machine-local config (examples are tracked next to them)
+/BunnyBytes/docker-compose.override.yml
+/Llama/config.yaml
+/Llama/benchmarks/
+/Llama/slot-saves/
+/BunnyBytes/rea/folders.json
+/BunnyBytes/supervisors/profiles.json
+
+# ---- added 2026-10-20 for the v1.0 release ----
+# per-install venvs, backups, tuning output, scratch dataset copies
+.worker-venv/
+*.orig-*
+/BunnyBytes/rea/backups/
+/BunnyBytes/Datasets/
+/BunnyBytes/Datasets-*/
+/BunnyBytes/hostctl/tuning-runs/
+/BunnyBytes/hostctl/gputune.json
+/Llama/hipblaslt-tuning/
+# generated marketing renders (made with Rocsy); the logo sources and make_endcard.py stay
+/BunnyBytes/branding/tiktok/*.mp4
+/BunnyBytes/branding/tiktok/*.wav
+# CameraBench-Pro stills: that dataset states no license, so they aren't redistributed
+# (the shot chips work without them; camera-clips/ is CameraBench, CC BY 4.0, and stays)
+/H3Machine/static/shot-examples/*.jpg
+# notes from the author's own REA mod sessions
+/BunnyBytes/rea/IMPROVEMENT_NOTES.md
+# ---- logs, agent sessions and generations, wherever they end up (2026-10-20) ----
+*.jsonl
+*.sqlite
+*.sqlite3
+*.db
+**/Output/*
+!**/Output/.gitkeep
+**/outputs/
+**/workspace/
+**/hermes-workspace/
+**/rocsy-workspace/
+**/attachments/
+**/sessions/
+**/transcripts/
+**/logs/*
+!**/logs/.gitkeep
+*.pem
+*.key
+# Settings -> Developer tab (Compile Installer): dev-only, not in the public repository
+/BunnyBytes/gateway/developer.py
+/BunnyBytes/gateway/Dockerfile.developer
+/BunnyBytes/gateway/templates/settings_developer_*.html
+/BunnyBytes/gateway/static/developer.js
+/BunnyBytes/docker-compose.developer.yml
+# this machine's LoRA/checkpoint catalogues and personal workflow defaults (public builds start empty)
+catalog_local.py
+*.local.json
+# ---- core backends and installed models: never in git (2026-10-23) ----
+# Engine builds/runtimes and their source checkouts (installed per machine by Core Backend)
+**/llama.cpp/
+**/llama.cpp-*/
+**/llama-swap-builds/
+**/rocm-versions/
+**/vulkan-sdk/
+**/core-backend-extras/
+**/core-engines/
+**/hermes-rocsy/
+**/ComfyUI/
+**/ComfyUI-Installs/
+# installed model weights, wherever they land
+*.safetensors
+*.gguf
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.bin
+*.npz
+*.npy
+*.h5
+*.tflite
+*.engine
+*.mlmodel
+*.mlpackage/
+**/models/
+**/loras/
+**/checkpoints/
+**/hf-cache/
+**/whisper-models/

@@ -1,0 +1,87 @@
+{
+ "medium-wide": {
+  "file": "medium-wide.jpg",
+  "source": "3G2FHsE299A_15_19",
+  "category": "medium-full"
+ },
+ "medium": {
+  "file": "medium.jpg",
+  "source": "bPZc7avrCT4.0.5",
+  "category": "medium"
+ },
+ "close-shot": {
+  "file": "close-shot.jpg",
+  "source": "1IJFnOlcCfs_0012_0016",
+  "category": "medium-close-up"
+ },
+ "close-up": {
+  "file": "close-up.jpg",
+  "source": "1497.1.3",
+  "category": "close-up"
+ },
+ "extreme-close-up": {
+  "file": "extreme-close-up.jpg",
+  "source": "1gWMmmvr8Gc",
+  "category": "extreme-close-up"
+ },
+ "two-shot": {
+  "file": "two-shot.jpg",
+  "source": "6aef88c40ab56905fa975814538e0bfb28c0fa115eb0e8083da1740203b729e5.0",
+  "category": "medium"
+ },
+ "over-the-shoulder": {
+  "file": "over-the-shoulder.jpg",
+  "source": "RolttrarOOA.0.5",
+  "category": "medium-close-up"
+ },
+ "wide": {
+  "file": "wide.jpg",
+  "source": "3G2FHsE299A_66_68",
+  "category": "wide"
+ },
+ "establishing": {
+  "file": "establishing.jpg",
+  "source": "kSx5KGOv5Qc.0",
+  "category": "extreme-wide"
+ },
+ "full": {
+  "file": "full.jpg",
+  "source": "lTxn2BuqyzU.0.7",
+  "category": "full"
+ },
+ "cowboy": {
+  "file": "cowboy.jpg",
+  "source": "0cbc3e64-f186-49f7-8a86-d18d2f180bee",
+  "category": "medium-full"
+ },
+ "insert": {
+  "file": "insert.jpg",
+  "source": "8iZ8RtiJq14.1.3",
+  "category": "insert"
+ },
+ "low-angle": {
+  "file": "low-angle.jpg",
+  "source": "3209176.0",
+  "category": "low-angle"
+ },
+ "high-angle": {
+  "file": "high-angle.jpg",
+  "source": "88vmzn_LufA.1.0",
+  "category": "high-angle"
+ },
+ "birds-eye": {
+  "file": "birds-eye.jpg",
+  "source": "oRt5NPY7yYA.4.2",
+  "category": "birds-eye"
+ },
+ "worms-eye": {
+  "file": "worms-eye.jpg",
+  "source": "281308fe-c0d6-4fd5-a4a5-d5b4957caf41",
+  "category": "worms-eye"
+ },
+ "dutch": {
+  "file": "dutch.jpg",
+  "source": "R9FUEScjB1U_8",
+  "category": "dutch"
+ }
+}

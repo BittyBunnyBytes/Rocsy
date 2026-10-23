@@ -1,0 +1,14 @@
+# llama-swap model list. Copy to config.yaml (git-ignored: it holds your model paths):
+#   cp Llama/config.example.yaml Llama/config.yaml
+# Models -> Manager adds entries here as you download GGUF files; ${llama_launch} is the launcher
+# macro the entries use (see config.yaml on a running install).
+# Add your own model entries after installing an LLM backend and model files.
+# No models or machine-specific model paths are bundled with Rocsy.
+healthCheckTimeout: 300
+logLevel: info
+startPort: 9100
+globalTTL: 1800
+unloadTimeout: 15
+apiKeys:
+  - "${env.LLAMA_API_KEY}"
+models: {}

@@ -1,0 +1,16 @@
+[Unit]
+Description=Rocsy Voice local speech engine worker
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@ROCSY_ROOT@/BunnyBytes/voice
+EnvironmentFile=@ROCSY_ROOT@/BunnyBytes/.env
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1
+ExecStart=@ROCSY_ROOT@/BunnyBytes/voice/.worker-venv/bin/python -m uvicorn worker.app:app --host 127.0.0.1 --port 7860
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

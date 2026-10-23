@@ -1,0 +1,24 @@
+diff --git a/comfy/ldm/minimax/vae.py b/comfy/ldm/minimax/vae.py
+index 36d9abb5..99a3c36f 100644
+--- a/comfy/ldm/minimax/vae.py
++++ b/comfy/ldm/minimax/vae.py
+@@ -1,6 +1,7 @@
+ # MiniMax H3 video VAE: 3D causal CNN encoder + ViT3D decoder.
+ 
+ import math
++import os
+ 
+ import torch
+ import torch.nn as nn
+@@ -440,7 +441,10 @@ class MiniMaxH3VideoVAE(nn.Module):
+         # spatial tiling parameters
+         self.tiling = tiling
+         self.tile_size = tile_size
+-        self.tile_overlap_min = tile_overlap_min
++        # (Bunny) minimum spatial tile overlap, upstream 64 px. 16 px decodes 1856x1024 in 40 tiles
++        # instead of 50: 44.7 s vs 54.8 s, no visible seams (2026-09-29, 47.8 dB vs 64 px).
++        # H3_VAE_TILE_OVERLAP overrides it.
++        self.tile_overlap_min = int(os.environ.get("H3_VAE_TILE_OVERLAP", "16"))
+ 
+         self.encoder = EncoderFCN3D(
+             ch=ch,

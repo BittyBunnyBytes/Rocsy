@@ -1,0 +1,10 @@
+# Only needed to adopt a tunnel made by hand (`cloudflared tunnel create <name>`); tunnels
+# made on the Connections page don't use this file. Copy to config.yml (git-ignored) and
+# mount it from docker-compose.override.yml (see docker-compose.override.example.yml).
+tunnel: 00000000-0000-0000-0000-000000000000
+credentials-file: /etc/cloudflared/byte.json
+
+ingress:
+  - hostname: rocsy.example.com
+    service: http://127.0.0.1:8080
+  - service: http_status:404

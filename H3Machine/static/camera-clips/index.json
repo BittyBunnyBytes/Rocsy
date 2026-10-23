@@ -1,0 +1,199 @@
+{
+ "push-in": {
+  "file": "push-in.mp4",
+  "source": "8iZ8RtiJq14.4.0",
+  "caption": "The camera dollies forward with a very smooth and steady motion, showing no shaking."
+ },
+ "pull-out": {
+  "file": "pull-out.mp4",
+  "source": "LtXUoaZcp70.4.4",
+  "caption": "The camera smoothly dollies backward, maintaining a steady and fluid motion throughout."
+ },
+ "zoom-in": {
+  "file": "zoom-in.mp4",
+  "source": "5e7Kk3WEFAA.0.3",
+  "caption": "The camera smoothly zooms in, maintaining a steady and fluid motion throughout."
+ },
+ "zoom-out": {
+  "file": "zoom-out.mp4",
+  "source": "5679.1.3",
+  "caption": "The camera smoothly zooms out, maintaining a steady and fluid motion throughout."
+ },
+ "pan-left": {
+  "file": "pan-left.mp4",
+  "source": "8SphTOiOe6k.2.8",
+  "caption": "The camera smoothly pans left, maintaining a steady and fluid motion throughout."
+ },
+ "pan-right": {
+  "file": "pan-right.mp4",
+  "source": "3HYfPz8lvDI.0.13",
+  "caption": "The camera smoothly pans right, maintaining a steady and fluid motion throughout."
+ },
+ "truck-left": {
+  "file": "truck-left.mp4",
+  "source": "KI2lsdXJQ40.0.15",
+  "caption": "The camera smoothly trucks left, maintaining a steady and fluid motion throughout."
+ },
+ "truck-right": {
+  "file": "truck-right.mp4",
+  "source": "6YDWsGwz2lI.0.10",
+  "caption": "The camera smoothly trucks right, maintaining a steady and fluid motion throughout."
+ },
+ "tilt-up": {
+  "file": "tilt-up.mp4",
+  "source": "XDndUR0xeAQ.0.3",
+  "caption": "The camera tilts up smoothly, maintaining a steady and fluid motion throughout."
+ },
+ "tilt-down": {
+  "file": "tilt-down.mp4",
+  "source": "s7I9Ab9rXkU.0.0",
+  "caption": "The camera tilts down smoothly, maintaining a steady and fluid motion throughout."
+ },
+ "pedestal-up": {
+  "file": "pedestal-up.mp4",
+  "source": "Cj6ho1-G6tw.0.13",
+  "caption": "The camera smoothly pedestals upward, maintaining a steady and fluid motion throughout."
+ },
+ "pedestal-down": {
+  "file": "pedestal-down.mp4",
+  "source": "QaRnEZFM6ZQ.0.3",
+  "caption": "The camera smoothly pedestals downward, maintaining a steady and fluid motion throughout."
+ },
+ "arc": {
+  "file": "arc.mp4",
+  "source": "0Pzq0URbL2M.1.4",
+  "caption": "The camera arcs smoothly in a clockwise direction, maintaining a steady and fluid motion without any shaking."
+ },
+ "tracking": {
+  "file": "tracking.mp4",
+  "source": "KI2lsdXJQ40.2.4",
+  "caption": "The camera smoothly trucks right, maintaining a steady focus as it tracks the subject from the side."
+ },
+ "static": {
+  "file": "static.mp4",
+  "source": "1934.1.11",
+  "caption": "The camera remains completely fixed, exhibiting no movement or shaking."
+ },
+ "shake-slightly": {
+  "file": "shake-slightly.mp4",
+  "source": "2519.5.17",
+  "caption": "The camera remains fixed but slightly unsteady, with no intentional movement."
+ },
+ "shake-strongly": {
+  "file": "shake-strongly.mp4",
+  "source": "h1PjJ9_Yd2c.2.5",
+  "caption": "The camera vibrates erratically, lacking a clear pattern in its movement."
+ },
+ "roll-cw": {
+  "file": "roll-cw.mp4",
+  "source": "ZADlkbr7Avg.6.0",
+  "caption": "The camera rolls smoothly clockwise, offering a high-angle view of the white structure without any shaking."
+ },
+ "roll-ccw": {
+  "file": "roll-ccw.mp4",
+  "source": "03hvbnE0asg.0.0",
+  "caption": "The camera rolls smoothly in a counterclockwise direction, maintaining a steady and fluid motion throughout."
+ },
+ "pov": {
+  "file": "pov.mp4",
+  "source": "IWv0EhEGmNI.1.5",
+  "caption": "The camera, embodying a first-person perspective in an FPS game, smoothly tracks a comrade from behind. It begins by moving forward, then pans to the right midway, continuing in that direction with minimal shaking."
+ },
+ "small-amplitude": {
+  "file": "small-amplitude.mp4",
+  "source": "3HYfPz8lvDI.4.7",
+  "caption": "The camera tilts down smoothly, exhibiting minor movement without any shaking."
+ },
+ "large-amplitude": {
+  "file": "large-amplitude.mp4",
+  "source": "CjPSzAtLzO8.0.3",
+  "caption": "The drone swiftly flies in a complex and dynamic pattern, energetically panning right to track a group of oncoming motorcyclists as they turn on a race track. The camera maintains a fast pace and remains very smooth with no shaking throughout."
+ },
+ "slow-speed": {
+  "file": "slow-speed.mp4",
+  "source": "un7JOh6x-c4.0",
+  "caption": "The camera pans left slowly, maintaining a very smooth and steady motion without any shaking."
+ },
+ "fast-speed": {
+  "file": "fast-speed.mp4",
+  "source": "338.2.30",
+  "caption": "The camera quickly pans left with a smooth motion, exhibiting minimal shaking."
+ },
+ "whip-pan-right": {
+  "file": "whip-pan-right.mp4",
+  "source": "338.2.2",
+  "caption": "The camera quickly pans right with a very smooth motion, showing no shaking."
+ },
+ "crash-zoom": {
+  "file": "crash-zoom.mp4",
+  "source": "_I6Y-rtiTPc.0.2",
+  "caption": "The camera quickly zooms in with a smooth and steady motion, maintaining minimal shaking throughout."
+ },
+ "dolly-zoom": {
+  "file": "dolly-zoom.mp4",
+  "source": "anEdRKaWM-I.0.0",
+  "caption": "The camera smoothly moves backward while simultaneously zooming in during the first half, creating a dolly zoom effect with minimal shaking."
+ },
+ "crane-up": {
+  "file": "crane-up.mp4",
+  "source": "T9_ZzFwwWwk.0.2",
+  "caption": "The camera cranes upward in a smooth arc, maintaining a steady and fluid motion throughout."
+ },
+ "crane-down": {
+  "file": "crane-down.mp4",
+  "source": "mlUKWRnYzR4.0.11",
+  "caption": "The camera smoothly cranes down in an arc, maintaining minimal shaking throughout the movement."
+ },
+ "orbit-ccw": {
+  "file": "orbit-ccw.mp4",
+  "source": "l5RWa1D00ck.0.9",
+  "caption": "The camera arcs counterclockwise with smooth movement and minimal shaking."
+ },
+ "lead-tracking": {
+  "file": "lead-tracking.mp4",
+  "source": "Oy8yQZ1Wg7k.0.0",
+  "caption": "The camera smoothly moves backward, leading the subject from the front with minimal shaking."
+ },
+ "tail-tracking": {
+  "file": "tail-tracking.mp4",
+  "source": "HTMDNZOlUq4.0.2",
+  "caption": "The camera smoothly dollies forward, following the subject from behind with minimal shaking."
+ },
+ "drone-shot": {
+  "file": "drone-shot.mp4",
+  "source": "88vmzn_LufA.0.7",
+  "caption": "The camera smoothly trucks right, maintaining a steady aerial perspective as it tracks the subject from the side."
+ },
+ "slow-push-in": {
+  "file": "slow-push-in.mp4",
+  "source": "MuNyfqxAO6Y.8.20",
+  "caption": "The camera moves forward slowly with a smooth, steady motion, exhibiting minimal shaking."
+ },
+ "pull-back-reveal": {
+  "file": "pull-back-reveal.mp4",
+  "source": "vEvBpjCOBu0.6.7",
+  "caption": "The camera smoothly moves backward while slightly rolling counterclockwise, revealing the entire scene with a steady, fluid motion."
+ },
+ "whip-pan-left": {
+  "file": "whip-pan-left.mp4",
+  "source": "338.2.2",
+  "caption": "The camera quickly pans left with a very smooth motion, showing no shaking.",
+  "derived": "horizontal mirror of whip-pan-right.mp4"
+ },
+ "orbit-cw": {
+  "file": "orbit-cw.mp4",
+  "source": "l5RWa1D00ck.0.9",
+  "caption": "The camera arcs clockwise with smooth movement and minimal shaking.",
+  "derived": "horizontal mirror of orbit-ccw.mp4"
+ },
+ "side-tracking": {
+  "file": "tracking.mp4",
+  "source": "KI2lsdXJQ40.2.4",
+  "caption": "The camera smoothly trucks right, maintaining a steady focus as it tracks the subject from the side."
+ },
+ "handheld": {
+  "file": "shake-slightly.mp4",
+  "source": "2519.5.17",
+  "caption": "The camera remains fixed but slightly unsteady, with no intentional movement."
+ }
+}

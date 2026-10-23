@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trainer · BunnyBytes</title>
+  <link rel="stylesheet" href="{{ mount_prefix }}/static/trainer.css?v={{ asset_version }}">
+  <!-- Installable (Home Screen) - iOS only allows web notifications for installed apps. -->
+  <link rel="manifest" href="{{ mount_prefix }}/manifest.webmanifest">
+  <link rel="icon" href="{{ mount_prefix }}/static/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="{{ mount_prefix }}/static/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Trainer">
+  <meta name="theme-color" content="#101619">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">BunnyBytes <span>/ Trainer</span></a>
+    <nav class="tabs" role="tablist">
+      <button class="tab" role="tab" data-tab="train" aria-selected="true">Train</button>
+      <button class="tab" role="tab" data-tab="datasets" aria-selected="false">Datasets</button>
+      <button class="tab" role="tab" data-tab="loras" aria-selected="false">LoRA Gallery</button>
+    </nav>
+    <div class="topbar-right">
+      <button class="alerts-toggle" id="alerts-toggle" type="button" aria-pressed="false" aria-label="Training alerts" title="Get a notification when a LoRA finishes training">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      </button>
+      <a class="home" href="/">Back to studios</a>
+    </div>
+  </header>
+  <main>
+    <section class="intro">
+      <p class="eyebrow">LOCAL ROCm TRAINING</p>
+      <h1>Train a LoRA</h1>
+      <p>Prepare a dataset folder, choose a model family, and submit a training run. Training jobs join BunnyBytes’ shared GPU queue.</p>
+      <div class="notice"><strong>ROCm only.</strong> Trainer refuses to run without a visible HIP-enabled GPU. Every base model in ComfyUI's models folder is checked by its architecture, so models you install later show up here on their own.</div>
+    </section>
+
+    <div id="tab-train" class="tab-panel">
+    <section class="panel setup-panel">
+      <div class="panel-heading"><div><h2>Trainer environments</h2><p>Three trainers cover every model family below. Install a missing one once; each keeps its own isolated ROCm environment.</p></div><button id="refresh-status" class="button secondary">Refresh</button></div>
+      <div id="backend-status" class="backend-grid"><p class="muted">Checking ROCm and trainer environments…</p></div>
+      <details class="other-models" id="other-models" hidden><summary></summary><ul></ul></details>
+      <pre id="setup-log" class="log setup-log" hidden></pre>
+    </section>
+
+    <div class="columns">
+      <section class="panel form-panel">
+        <div class="panel-heading"><div><h2>New training run</h2><p>Datasets are read from ~/AI/BunnyBytes/Datasets (manage them on the Datasets tab).</p></div></div>
+        <form id="job-form">
+          <label>Model family
+            <select name="model" id="model" required><option value="">Checking installed models…</option></select>
+          </label>
+          <div id="family-status" class="family-status" hidden aria-live="polite"></div>
+          <div class="preset-row">
+            <label>Preset
+              <select id="preset"><option value="">Custom</option></select>
+            </label>
+            <button type="button" class="button secondary" id="preset-save">Save as…</button>
+            <button type="button" class="button secondary" id="preset-delete" disabled>Delete</button>
+          </div>
+          <div class="row">
+            <label>Dataset folder
+              <select name="dataset" id="dataset" required><option value="">Loading datasets…</option></select>
+            </label>
+            <label>LoRA name<input name="name" maxlength="64" required placeholder="my_character"></label>
+          </div>
+          <label data-knob="trigger">Trigger word <span class="muted">(also put it in every caption)</span><input name="trigger" maxlength="64" placeholder="e.g. inkw4sh"></label>
+          <div id="train-check" class="train-check" hidden aria-live="polite"></div>
+          <div class="row compact">
+            <label data-knob="rank">LoRA rank
+              <select name="rank" data-preset>
+                <option value="4">4</option><option value="8">8</option><option value="16" selected>16</option>
+                <option value="32">32</option><option value="64">64</option><option value="128">128</option>
+              </select>
+            </label>
+            <label data-knob="epochs">Epochs<input name="epochs" type="number" min="1" max="500" value="10" list="epoch-choices" data-preset></label>
+            <label data-knob="max_pixels">Max pixels
+              <select name="max_pixels" data-preset>
+                <option value="262144">0.26 MP (512²)</option><option value="409600">0.41 MP (640²)</option>
+                <option value="524288">0.52 MP (Fizgig default)</option><option value="655360" selected>0.66 MP</option><option value="1048576">1.05 MP (1024²)</option>
+              </select>
+            </label>
+            <label data-knob="frames">Frames (8n+1)
+              <select name="frames" data-preset>
+                <option value="9">9</option><option value="17">17</option><option value="25" selected>25</option>
+                <option value="33">33</option><option value="49">49</option><option value="73">73</option><option value="97">97</option><option value="121">121</option>
+              </select>
+            </label>
+            <label data-knob="resolution">Resolution
+              <select name="resolution" data-preset>
+                <option value="384">384 (0.15 MP)</option><option value="512" selected>512 (0.26 MP)</option>
+                <option value="640">640 (0.41 MP)</option><option value="768">768 (0.59 MP)</option><option value="1024">1024 (1.05 MP)</option><option value="1280">1280 (1.64 MP)</option>
+              </select>
+            </label>
+            <label data-knob="steps">Training steps<input name="steps" type="number" min="1" max="100000" value="2000" data-preset></label>
+            <label data-knob="learning_rate">Learning rate<input name="learning_rate" maxlength="16" placeholder="recipe" inputmode="decimal" data-preset></label>
+            <label data-knob="repeats">Repeats<input name="repeats" type="number" min="1" max="100" value="1" data-preset></label>
+          </div>
+          <datalist id="epoch-choices"><option value="5"></option><option value="10"></option><option value="20"></option><option value="30"></option><option value="50"></option><option value="60"></option></datalist>
+          <div class="model-files" id="model-files"></div>
+          <div id="model-hint" class="hint"></div>
+          <button class="button primary" type="submit" id="submit-job">Queue training run</button>
+          <p id="form-message" class="form-message" role="status"></p>
+        </form>
+      </section>
+
+      <section class="panel jobs-panel">
+        <div class="panel-heading"><div><h2>Training jobs</h2><p>Logs are kept locally and survive service restarts.</p></div><button id="refresh-jobs" class="button secondary">Refresh</button></div>
+        <div id="jobs" class="jobs"><p class="muted">No training runs yet.</p></div>
+      </section>
+    </div>
+    </div>
+    <div id="tab-datasets" class="tab-panel" hidden>
+      <div class="drop-overlay" id="drop-overlay" hidden>
+        <div class="drop-card">
+          <div class="drop-icon">⇩</div>
+          <div class="drop-title" id="drop-title">Drop files to add them</div>
+          <div class="drop-sub" id="drop-sub"></div>
+        </div>
+      </div>
+      <section class="panel ds-panel" id="ds-drop">
+        <div class="ds-bar">
+          <label class="ds-pick">Dataset
+            <select id="ds-select"><option value="">Loading…</option></select>
+          </label>
+          <span id="ds-summary" class="ds-summary"></span>
+          <form id="ds-new" class="ds-new">
+            <input name="name" maxlength="80" placeholder="new dataset name" pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" required title="Letters, numbers, _ and -">
+            <button class="button secondary" type="submit">Create</button>
+          </form>
+          <button id="ds-reload" class="button secondary" title="Refresh">↻</button>
+          <button id="ds-delete" class="button secondary danger" title="Delete this whole dataset folder" hidden>Delete dataset</button>
+        </div>
+        <p id="ds-message" class="form-message ds-message"></p>
+        <div id="ds-empty" class="muted ds-empty">Pick a dataset above, or create a new one. Folder: <span id="ds-root">~/AI/BunnyBytes/Datasets</span></div>
+        <div id="ds-view" hidden>
+          <div class="ds-toolbar">
+            <label class="button secondary ds-add" title="Or drop files anywhere on this panel. A .txt with the same name as a clip becomes its caption.">
+              <input type="file" id="ds-files" multiple accept=".mp4,.mov,.webm,.mkv,.jpg,.jpeg,.png,.webp,.wav,.flac,.m4a,.mp3,.ogg,.txt,.csv">+ Add files
+            </label>
+            <label class="tr-check ds-autotrim-label" title="On: uploaded videos wait in 'Waiting to be trimmed' so you can trim them (or add them as-is) later. Off: videos go straight into the dataset."><input type="checkbox" id="ds-autotrim" checked> Hold videos for trimming</label>
+            <form id="ds-youtube" class="ds-trigger" title="YouTube links download with yt-dlp (≤1080p). Links from any other site start Hermes, which gets the video (age gates, JavaScript players) using your Find clips model. Then the trimmer opens; the download is deleted after cutting.">
+              <input name="url" type="url" placeholder="Video link (YouTube or any site)" required>
+              <button class="button secondary" type="submit">Download &amp; trim</button>
+            </form>
+            <button type="button" class="button secondary ds-find-btn" id="ds-find" title="Hermes searches YouTube and other video sites (even ones it has never seen) for source footage; you pick what to download">🔎 Find clips</button>
+            <button type="button" class="button secondary ds-autotag-btn" id="ds-autotag" title="Caption every clip with a vision model (llama service)">✨ Auto-tag</button>
+            <form id="ds-trigger" class="ds-trigger" title="Adds the word to the start of every caption that doesn't contain it yet">
+              <input name="trigger" maxlength="64" placeholder="trigger word" required>
+              <button class="button secondary" type="submit">Add to all captions</button>
+            </form>
+            <div class="ds-filter">
+              <label><input type="radio" name="ds-filter" value="all" checked> All</label>
+              <label><input type="radio" name="ds-filter" value="nocap"> No caption</label>
+              <label><input type="radio" name="ds-filter" value="issues"> H3 problems</label>
+            </div>
+            <span class="ds-keyhint" title="Click a clip first, or just press an arrow key">Keys: arrows select · Enter edit caption · T trim</span>
+            <div class="ds-viewmode" role="group" aria-label="Layout">
+              <button type="button" class="button secondary" data-view="rows" aria-pressed="true">Rows</button>
+              <button type="button" class="button secondary" data-view="grid" aria-pressed="false">Grid</button>
+            </div>
+          </div>
+          <div id="ds-uploads" class="ds-uploads"></div>
+          <section id="ds-url-queue" class="ds-url-queue" aria-label="Hermes URL queue" hidden></section>
+          <div id="ds-staged" class="ds-staged"></div>
+          <div id="ds-tagjob" class="ds-tagjob" hidden></div>
+          <div id="ds-findjob" class="ds-findjob" hidden></div>
+          <details class="job-box ds-dlhist" id="ds-dlhist"><summary><span class="box-title">Download history</span><span class="box-summary"><span id="dlh-count"></span> · every video downloaded and where it was saved; the same video is never downloaded twice by accident</span></summary>
+            <div class="box-body"><label class="tr-check"><input type="checkbox" id="dlh-all"> All datasets</label><div id="dlh-list" class="dlh-list"></div></div>
+          </details>
+          <div class="ds-split" id="ds-split">
+            <div id="ds-items" class="ds-items rows"></div>
+            <aside class="hterm" id="ds-term" hidden>
+              <div class="hterm-head"><span class="hterm-brand">☤ Hermes Agent</span><span class="hterm-sub" id="hterm-sub"></span><span class="hterm-following" id="hterm-following" hidden></span><button type="button" class="hterm-follow" id="hterm-follow" hidden title="Scroll back to the clip being tagged and keep following it">⇣ Follow</button><span class="hterm-state" id="hterm-state"></span><button type="button" class="hterm-close" id="hterm-close" title="Hide the terminal">✕</button></div>
+              <div class="hterm-body" id="hterm-body"></div>
+              <div class="hterm-status" id="hterm-status"></div>
+            </aside>
+          </div>
+          <p id="ds-originals" class="box-note"></p>
+        </div>
+
+      </section>
+    </div>
+    <div id="tab-loras" class="tab-panel" hidden>
+      <section class="panel">
+        <div class="panel-heading"><div><h2>LoRA gallery</h2><p>Browse the same built-in LoRAs available in H3 Machine and Krea Image.</p></div></div>
+        <div class="lora-gallery-controls"><input id="shared-lora-search" type="search" placeholder="Search LoRAs" aria-label="Search LoRAs"><select id="shared-lora-studio" aria-label="Studio"><option value="all">All studios</option><option value="h3">H3 Machine</option><option value="krea">Krea Image</option></select><label><input id="shared-lora-nsfw" type="checkbox"> Show mature previews</label></div>
+        <div id="shared-lora-grid" class="shared-lora-grid" aria-live="polite"></div>
+      </section>
+    </div>
+    <p class="footer-note">ROCm backend training uses your AMD GPU. Keep the computer awake; stop/cancel a run before shutting it down.</p>
+  </main>
+  <script>window.TRAINER_BASE = {{ mount_prefix|tojson }};</script>
+  <script src="{{ mount_prefix }}/static/alerts.js?v={{ asset_version }}" defer></script>
+  <script src="{{ mount_prefix }}/static/trainer.js?v={{ asset_version }}" defer></script>
+  <script src="{{ mount_prefix }}/static/player.js?v={{ asset_version }}" defer></script>
+  <script src="{{ mount_prefix }}/static/datasets.js?v={{ asset_version }}" defer></script>
+  <script src="{{ mount_prefix }}/static/lora-gallery.js?v={{ asset_version }}" defer></script>
+</body>
+</html>

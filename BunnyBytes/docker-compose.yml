@@ -1,0 +1,715 @@
+# Rocsy -- top-level orchestration for the whole stack (see README.md).
+#
+# Every service uses network_mode: host and binds 127.0.0.1 only. ComfyUI and
+# Qwen run natively on the host (loopback-only, GPU workloads stay bare-metal)
+# and are reached at COMFY_URL/QWEN_BASE_URL below -- never host.docker.internal,
+# which resolves to the bridge's host IP, not 127.0.0.1, and a loopback-bound
+# service refuses that. Connections runs cloudflared with an outbound-only
+# connection; no inbound tunnel port is opened on the host. Its gateway origin
+# remains on loopback.
+
+services:
+  lock:
+    build: ./lock
+    container_name: bunny-lock
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      LOCK_PORT: ${LOCK_PORT:-8600}
+      QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
+      # /Queue/... browser-facing page, routed through the gateway.
+      QUEUE_MOUNT_PREFIX: /Queue
+      # Loopback base URLs (same values given to the gateway below) so this
+      # service can call each app's proceed/cancel endpoints directly.
+      VID_UPSTREAM: http://127.0.0.1:${H3_PORT:-8000}
+      MUS_UPSTREAM: http://127.0.0.1:${MUS_PORT:-8200}
+      KREA_UPSTREAM: http://127.0.0.1:${KREA_PORT:-8300}
+      TRAINER_UPSTREAM: http://127.0.0.1:${TRAINER_PORT:-8500}
+      AGENT_UPSTREAM: http://127.0.0.1:${AGENT_PORT:-8900}
+      VOICE_UPSTREAM: http://127.0.0.1:${VOICE_PORT:-8950}
+      FRAMEWORK_UPSTREAM: http://127.0.0.1:8700
+      HERMES_API_URL: http://127.0.0.1:8642
+      HERMES_API_KEY: ${HERMES_API_KEY:-}
+      LLAMA_URL: http://127.0.0.1:${LLAMA_PORT:-8400}
+      LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
+    volumes:
+      - ./lock/data:/app/data
+
+  framework:
+    build: ./shared
+    container_name: bunny-framework
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
+      FRAMEWORK_MAX_UPLOAD_MB: ${FRAMEWORK_MAX_UPLOAD_MB:-250}
+      FRAMEWORK_MAX_PARALLEL: ${FRAMEWORK_MAX_PARALLEL:-2}
+      FRAMEWORK_DATA_DIR: /data
+      LLAMA_URL: http://127.0.0.1:${LLAMA_PORT:-8400}
+      LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
+      VOICE_UPSTREAM: http://127.0.0.1:${VOICE_PORT:-8950}
+      LOCK_UPSTREAM: http://127.0.0.1:${LOCK_PORT:-8600}
+      VID_UPSTREAM: http://127.0.0.1:${H3_PORT:-8000}
+      MUS_UPSTREAM: http://127.0.0.1:${MUS_PORT:-8200}
+      KREA_UPSTREAM: http://127.0.0.1:${KREA_PORT:-8300}
+      TRAINER_UPSTREAM: http://127.0.0.1:${TRAINER_PORT:-8500}
+      CONNECTIONS_UPSTREAM: http://127.0.0.1:${CONNECTIONS_PORT:-8800}
+    volumes:
+      - ../H3Machine/static/lora-gallery:/catalogs/h3:ro
+      - ../Krea/static/lora-gallery:/catalogs/krea:ro
+      - ./shared/guides:/app/guides:ro
+      - ../Llama/overrides:/llama-overrides:ro
+      - framework-agentic-data:/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8700/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  connections:
+    build: ./connections
+    container_name: bunny-connections
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CONNECTIONS_PORT: ${CONNECTIONS_PORT:-8800}
+      CONNECTIONS_MOUNT_PREFIX: /Connections
+      CONNECTIONS_DATA_DIR: /data
+      CONNECTIONS_SCRIPT: /app/telegram_comfyui_output.py
+      CONNECTIONS_CONFIG: /data/telegram-config.json
+      CONNECTIONS_LEGACY_CONFIG: /run/telegram/config.json
+      CONNECTIONS_OUTPUT_DIR: ${ROCSY_COMFY_SHARED:-${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}}/output
+      CONNECTIONS_H3_OUTPUT_DIR: ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/output
+      CONNECTIONS_COMFY_URL: ${COMFY_URL:-http://127.0.0.1:8189}
+      CONNECTIONS_CLOUDFLARE_CONFIG: /run/cloudflared/config.yml
+      CONNECTIONS_CLOUDFLARE_CREDENTIAL: /run/cloudflared/byte.json
+      CONNECTIONS_CLOUDFLARE_METRICS: http://127.0.0.1:20241
+      HOSTCTL_URL: http://127.0.0.1:${HOSTCTL_PORT:-8899}
+      HOSTCTL_SECRET: ${HOSTCTL_SECRET:-}
+    volumes:
+      - ./connections/data:/data
+      # Reddit/TikTok logins + the upload scripts Hermes writes (Hermes: /opt/data/rocsy-accounts).
+      - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/rocsy-accounts:/accounts
+      # Tunnels are created and managed from the Connections page (stored in /data). An older,
+      # hand-made tunnel can be adopted by mounting its config.yml + credentials file at
+      # /run/cloudflared/ in docker-compose.override.yml (see docker-compose.override.example.yml).
+      - ${ROCSY_COMFY_SHARED:-${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}}/output:${ROCSY_COMFY_SHARED:-${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}}/output:ro
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/output:${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/output:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${CONNECTIONS_PORT:-8800}/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  agent:
+    # Rocsy Master Agent (/Agent): Hermes runs that drive Vid, Krea, Mus and the
+    # Trainer through the master-agent skill; its jobs get GPU-queue priority.
+    build: ./agent
+    container_name: bunny-agent
+    restart: unless-stopped
+    network_mode: host
+    # The GPU's media engine (VA-API) for video frames on the Agent page's video boards: decodes
+    # never use the CPU. DRM access rule (like h3-machine) so it still starts without renderD128.
+    device_cgroup_rules:
+      - "c 226:* rmw"
+    environment:
+      AGENT_PORT: ${AGENT_PORT:-8900}
+      AGENT_MOUNT_PREFIX: /Agent
+      AGENT_DATA_DIR: /data
+      AGENT_QUEUE_URL: http://127.0.0.1:${LOCK_PORT:-8600}
+      QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
+      VID_UPSTREAM: http://127.0.0.1:${H3_PORT:-8000}
+      MUS_UPSTREAM: http://127.0.0.1:${MUS_PORT:-8200}
+      KREA_UPSTREAM: http://127.0.0.1:${KREA_PORT:-8300}
+      TRAINER_UPSTREAM: http://127.0.0.1:${TRAINER_PORT:-8500}
+      QUEUE_UPSTREAM: http://127.0.0.1:${LOCK_PORT:-8600}
+      LLAMA_URL: http://127.0.0.1:${LLAMA_PORT:-8400}
+      LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
+      HERMES_API_URL: http://127.0.0.1:8642
+      HERMES_API_KEY: ${HERMES_API_KEY:-}
+      COMFY_URL: http://127.0.0.1:8188
+      AGENT_NOTIFY_HUB_URL: http://127.0.0.1:${GATEWAY_PORT:-8080}/internal/notify
+      # /browser connect|status|disconnect go through the host helper (it can open a window on the desktop).
+      HOSTCTL_URL: http://127.0.0.1:${HOSTCTL_PORT:-8899}
+      HOSTCTL_SECRET: ${HOSTCTL_SECRET:-}
+      MOTION_UPSTREAM: http://127.0.0.1:${MOTION_PORT:-8970}
+      VOICE_UPSTREAM: http://127.0.0.1:${VOICE_PORT:-8950}
+      AGENT_PINNED_ROOT: /pinned-uploads
+      AGENT_PINNED_INDEX: /pinned-cache-data/upload-cache.json
+      AGENT_PINNED_HERMES_DIR: /opt/data/rocsy-pinned
+    volumes:
+      - /dev/dri:/dev/dri
+      - ../core-backend-extras/yt-dlp:/opt/rocsy-tools/yt-dlp:ro
+      - ./agent/data:/data
+      # Attachments sent to the Master Agent; Hermes reads the same folder at /opt/data/rocsy-attachments.
+      - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/rocsy-attachments:/attachments
+      - ../H3Machine/uploads:/pinned-uploads:ro
+      - ./gateway/data:/pinned-cache-data:ro
+      # The agent's workspace (Hermes: /opt/data/rocsy-workspace): `share` reads it, `fetch` copies job outputs into it.
+      - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/rocsy-workspace:/workspace
+      # Connections → Accounts (read only here): which accounts exist and whether their upload script is written yet.
+      - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/rocsy-accounts:/accounts:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${AGENT_PORT:-8900}/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  motion:
+    # Rocsy Motion: code-based video (Remotion). Renders the Master Agent's React projects from
+    # its workspace: Chrome draws frames with GPU GL, ffmpeg encodes with VA-API. Loopback only.
+    build: ./motion
+    container_name: bunny-motion
+    restart: unless-stopped
+    network_mode: host          # Google Fonts at render time; listens on 127.0.0.1 only
+    shm_size: 2gb               # Chrome
+    device_cgroup_rules:
+      - "c 226:* rmw"
+    environment:
+      MOTION_PORT: ${MOTION_PORT:-8970}
+      MOTION_HOST: 127.0.0.1
+      MOTION_GL: ${MOTION_GL:-angle}
+    volumes:
+      - /dev/dri:/dev/dri
+      - motion-data:/data
+      - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/rocsy-workspace:/workspace
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:${MOTION_PORT:-8970}/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  rea:
+    # Rocsy REA: "Reverse Engineer Anything" MCP server (github.com/morluto/rea) + Ghidra, JADX,
+    # Apktool, WABT, Rizin, tshark... Hermes reaches it at http://127.0.0.1:8975/mcp (mcp_servers.rea).
+    # Install/update: Models -> Manager -> Core Backend -> REA. Loopback only; targets come from
+    # the agent's workspace/attachments at the same paths Hermes sees.
+    build: ./rea
+    container_name: bunny-rea
+    # Opt-in (REA is experimental): COMPOSE_PROFILES=rea in .env, or Models → Core Backend → REA.
+    profiles: ["rea"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REA_PORT:-8975}:8975"
+      - "127.0.0.1:${REA_WEB_PORT:-8976}:8976"
+    shm_size: 1gb               # Chromium for website analysis
+    volumes:
+      - rea-data:/home/node
+      - ../core-backend-extras/rea-engines:/home/node/rea-test/engines/godotsteam:ro
+      - ../core-backend-extras/rea-engines:/home/node/rea-test/engines/official:ro
+      - ../core-backend-extras/rea-engines:/home/node/rea-test/engines/portable:ro
+      # hostctl's install state + backups of game files a mod replaced: builds, recoveries and
+      # baselines read the ORIGINAL game file from here while a mod is installed.
+      - ../core-backend-extras/rea-mod-installs:/home/node/rea-installs:ro
+      - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/rocsy-workspace:/opt/data/rocsy-workspace
+      - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/rocsy-attachments:/opt/data/rocsy-attachments:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "Promise.all([fetch('http://127.0.0.1:8975/mcp'), fetch('http://127.0.0.1:8976/REA/api/health')]).then(([m, w]) => process.exit(m.status < 500 && w.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  voice:
+    build: ./voice
+    container_name: bunny-voice
+    restart: unless-stopped
+    network_mode: host
+    devices:
+      - /dev/kfd
+      - /dev/dri:/dev/dri
+    environment:
+      VOICE_PORT: ${VOICE_PORT:-8950}
+      BUNNY_FRAMEWORK_URL: http://127.0.0.1:8700
+      VOICE_DATA_DIR: /data
+      QWEN_TTS_MODEL_DIR: /models/qwen/Qwen3-TTS-12Hz-1.7B-Base
+      VOICE_VOICES_DIR: /data/voices
+      VOICE_WORKER_URL: http://127.0.0.1:7860
+      COMFY_URL: ${COMFY_URL:-http://127.0.0.1:8188}
+      COMFY_SUPERVISOR_URL: http://127.0.0.1:8083
+      VOICE_QUEUE_URL: http://127.0.0.1:${LOCK_PORT:-8600}
+      QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
+    volumes:
+      # Same studio shell as Image / Music / Video (view tabs, cards, Generations panel).
+      - ./shared/ui/h3-studio.css:/app/static/h3-studio.css:ro
+      - ./shared/ui/h3-studio.js:/app/static/h3-studio.js:ro
+      - ./shared/agentic-ui.js:/app/static/agentic-ui.js:ro
+      - ./shared/agentic-ui.css:/app/static/agentic-ui.css:ro
+      - ./voice/data:/data
+      - ./voice/models/qwen:/models/qwen:ro
+      # New-character music removal runs on the GPU through ComfyUI's
+      # BunnyRemoveMusic node (voice/reference.py): clips go to its input
+      # folder (a real bind mount - ComfyUI rejects symlinked inputs) and the
+      # speech stem comes back in output/postedit-sep.
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/input/VoiceRefs:/comfy-input/VoiceRefs
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/output/postedit-sep:/comfy-sep
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.getenv('VOICE_PORT', '8950') + '/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  modelhub:
+    # Models: Civitai / Civitai Red / Hugging Face downloads into ComfyUI's
+    # models folder, hardware fit, update checks (modelhub/README.md).
+    build: ./modelhub
+    container_name: bunny-models
+    restart: unless-stopped
+    network_mode: host
+    # Files it writes in ComfyUI's models folder must belong to the desktop user.
+    user: "1000:1000"
+    environment:
+      MODELHUB_PORT: ${MODELHUB_PORT:-8960}
+      MODELHUB_DATA_DIR: /data
+      MODELHUB_MODELS_DIR: /comfy-models
+      MODELHUB_LAYA_MODELS_DIR: /laya-models
+      MODELHUB_GATEWAY_URL: http://127.0.0.1:${GATEWAY_PORT:-8080}
+      # Downloaded GGUFs get llama-swap entries; llama is restarted via hostctl once idle.
+      MODELHUB_LLAMA_CONFIG: /llama/config.yaml
+      MODELHUB_LLAMA_URL: http://127.0.0.1:${LLAMA_PORT:-8400}
+      LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
+      HOSTCTL_URL: http://127.0.0.1:${HOSTCTL_PORT:-8899}
+      HOSTCTL_SECRET: ${HOSTCTL_SECRET:-}
+      MODELHUB_MODELS_HOST_DIR: ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models
+      # "Last used": job graphs embedded in ComfyUI outputs + its live history (modelhub/usage.py).
+      COMFY_URL: ${COMFY_URL:-http://127.0.0.1:8188}
+      MODELHUB_COMFY_OUTPUT: /comfy-output
+      QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
+    volumes:
+      - ./modelhub/data:/data
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models:/comfy-models
+      # Folder mount: config.yaml is edited in place (other containers bind the file itself).
+      - ../Llama:/llama
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/output:/comfy-output:ro
+      # Saved ComfyUI workflows (<Category>/<Family>/) count as supported families.
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/user/default/workflows:/comfy-workflows:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.getenv('MODELHUB_PORT', '8960') + '/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  gateway:
+    build: ./gateway
+    container_name: bunny-gateway
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - lock
+      - connections
+      - h3-machine
+      - music
+      - krea
+      - llama
+    environment:
+      ROCSY_PUBLIC_URL: ${ROCSY_PUBLIC_URL:-}
+      # First-start seed only (hashed into gateway/data/password.json); safe to remove from .env afterwards.
+      MASTER_PASSWORD: ${MASTER_PASSWORD:-}
+      ROCSY_NO_PASSWORD: ${ROCSY_NO_PASSWORD:-0}
+      COOKIE_SECRET: ${COOKIE_SECRET:?Set COOKIE_SECRET in .env before starting}
+      COOKIE_TTL_DAYS: ${COOKIE_TTL_DAYS:-30}
+      GATEWAY_HOST: 127.0.0.1
+      GATEWAY_PORT: ${GATEWAY_PORT:-8080}
+      VID_UPSTREAM: http://127.0.0.1:${H3_PORT:-8000}
+      MUS_UPSTREAM: http://127.0.0.1:${MUS_PORT:-8200}
+      KREA_UPSTREAM: http://127.0.0.1:${KREA_PORT:-8300}
+      TRAINER_UPSTREAM: http://127.0.0.1:${TRAINER_PORT:-8500}
+      LOCK_URL: http://127.0.0.1:${LOCK_PORT:-8600}
+      QUEUE_UPSTREAM: http://127.0.0.1:${LOCK_PORT:-8600}
+      LLAMA_UPSTREAM: http://127.0.0.1:${LLAMA_PORT:-8400}
+      HERMES_UPSTREAM: http://127.0.0.1:${HERMES_PORT:-9119}
+      CONNECTIONS_UPSTREAM: http://127.0.0.1:${CONNECTIONS_PORT:-8800}
+      AGENT_UPSTREAM: http://127.0.0.1:${AGENT_PORT:-8900}
+      VOICE_UPSTREAM: http://127.0.0.1:${VOICE_PORT:-8950}
+      MODELS_UPSTREAM: http://127.0.0.1:${MODELHUB_PORT:-8960}
+      REA_UPSTREAM: http://127.0.0.1:${REA_WEB_PORT:-8976}
+      LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
+      # Signs H3 Machine / Trainer events to the notification hub (/internal/notify).
+      QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
+      # Settings -> Services talks to bunny-hostctl (host user service, see hostctl/).
+      HOSTCTL_URL: http://127.0.0.1:${HOSTCTL_PORT:-8899}
+      HOSTCTL_SECRET: ${HOSTCTL_SECRET:-}
+      MAX_BODY_MB: ${MAX_BODY_MB:-50}
+      LLAMA_CONFIG: /llama-config.yaml
+      LLAMA_OVERRIDE_DIR: /llama-overrides
+    volumes:
+      # Site settings (theme, notifications, VAPID key) from the /Settings page.
+      - ./gateway/data:/app/data
+      # Llama -> Parameters page: reads model defaults, writes per-model
+      # <id>.args / <id>.ctx overrides that llama-launch applies on the next load.
+      - ../Llama/config.yaml:/llama-config.yaml:ro
+      - ../Llama/overrides:/llama-overrides
+      # Settings -> Cache/Storage: only these explicit generated-data roots
+      # are writable by the gateway cleanup endpoint.
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/output:/storage/comfy-output
+      - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/rocsy-workspace:/storage/agent-workspace
+      - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/workspace:/storage/hermes-workspace
+      - ../H3Machine/uploads:/storage/user-uploads
+      # Identify H3 continuation frames and generated thumbnails in the Cache view.
+      - ../H3Machine/data:/storage/h3-data:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${GATEWAY_PORT:-8080}/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  h3-machine:
+    # The ONLY definition of this container (2026-10-13): ../H3Machine/docker-compose.yml
+    # used to define it too (project "h3machine"), so `up` here died on a container-name
+    # conflict and `down` here missed it. Deploy from this folder:
+    #   docker compose up -d --build --no-deps h3-machine
+    build: ../H3Machine
+    container_name: h3-machine
+    restart: unless-stopped
+    network_mode: host
+    # The GPU's media engine for ffmpeg (VA-API h264_vaapi, backend/gpu.py):
+    # encodes/decodes never use the CPU. /dev/dri is mounted with a DRM
+    # (major 226) access rule instead of `devices:`, so the app still starts
+    # (and falls back) if renderD128 is ever missing or renumbered.
+    device_cgroup_rules:
+      - "c 226:* rmw"
+    environment:
+      ROCSY_PUBLIC_URL: ${ROCSY_PUBLIC_URL:-}
+      BUNNY_FRAMEWORK_URL: http://127.0.0.1:8700
+      H3_HOST: 127.0.0.1
+      H3_PORT: ${H3_PORT:-8000}
+      H3_MOUNT_PREFIX: /Vid
+      H3_COMFY_URL: ${COMFY_URL:-http://127.0.0.1:8188}
+      H3_COMFY_MODE: external
+      H3_QWEN_URL: ${QWEN_BASE_URL:-http://127.0.0.1:8081/v1}
+      H3_QWEN_MODE: external
+      H3_LLAMA_URL: http://127.0.0.1:${LLAMA_PORT:-8400}
+      H3_LLAMA_OVERRIDE_DIR: /llama-overrides
+      H3_LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
+      H3_LOCK_URL: http://127.0.0.1:${LOCK_PORT:-8600}
+      H3_QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
+      H3_WORKFLOW_PATH: /app/workflows/MiniMax-H3.json
+      H3_LTX_WORKFLOW_PATH: /app/workflows/LTX-2.5-Final-Optimized-V3.flash.json
+      H3_UPLOAD_DIR: /data/uploads
+      H3_INPUT_DIR: /data/input
+      H3_OUTPUT_DIR: /data/output
+      H3_DATA_DIR: /data/app
+      H3_LOG_DIR: /data/logs
+      H3_TRAINER_OUTPUT_DIR: /trainer-output
+      H3_CUSTOM_LORA_DIR: /models/loras/H3MachineCustom
+    volumes:
+      - ./shared/ui/h3-studio.css:/app/static/css/h3-studio.css:ro
+      - ./shared/ui/h3-studio.js:/app/static/js/h3-studio.js:ro
+      # Advanced workflow card (per-workflow model files): shared module + UI, live edits need a restart.
+      - ./shared/workflow_models.py:/app/backend/workflow_models.py:ro
+      - ./shared/ui/workflow-models.js:/app/static/js/workflow-models.js:ro
+      - ./shared/ui/workflow-models.css:/app/static/css/workflow-models.css:ro
+      - ./shared/ui/missing-files.js:/app/static/js/missing-files.js:ro
+      - ./shared/ui/missing-files.css:/app/static/css/missing-files.css:ro
+      - /dev/dri:/dev/dri
+      - ../H3Machine/uploads:/data/uploads
+      # llama-swap context overrides (Hermes settings -> Agent context); see ../Llama/llama-launch.
+      - ../Llama/overrides:/llama-overrides
+      - ../H3Machine/input:/data/input
+      # ComfyUI validates "image" inputs with realpath(), so H3MachineRefs must be a
+      # genuine bind mount into ComfyUI's own input dir, not a symlink (2026-09-22).
+      # Mounted after ../H3Machine/input so it overrides just this one subpath.
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/input/H3MachineRefs:/data/input/H3MachineRefs
+      # The REAL ComfyUI output directory (ComfyUI-Shared/output is stale). Writable
+      # so a generation's delete button can remove its own files (delete_job_files,
+      # 2026-09-28); otherwise only paths from ComfyUI's /history are read.
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/output:/data/output
+      - ../H3Machine/data:/data/app
+      - ../Trainer/data/output:/trainer-output:ro
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/loras/H3MachineCustom:/models/loras/H3MachineCustom
+      - ../H3Machine/logs:/data/logs
+      - ../H3Machine/workflows:/app/workflows:ro
+      # Read-only: the checkpoint scanner (backend/checkpoints.py) finds H3
+      # models here and fingerprints their weights to tell which support Ref2V.
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/diffusion_models:/models/diffusion_models:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${H3_PORT:-8000}/Vid/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  music:
+    build: ../Music
+    container_name: music
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      BUNNY_FRAMEWORK_URL: http://127.0.0.1:8700
+      MUS_HOST: 127.0.0.1
+      MUS_PORT: ${MUS_PORT:-8200}
+      MUS_MOUNT_PREFIX: /Mus
+      MUS_COMFY_URL: ${COMFY_URL:-http://127.0.0.1:8189}
+      MUS_LOCK_URL: http://127.0.0.1:${LOCK_PORT:-8600}
+      MUS_QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
+      MUS_WORKFLOW_PATH: /app/workflows/YuE2-INT8.json
+      MUS_MINIMAX_WORKFLOW_PATH: /app/workflows/MiniMax-Music3-INT8.json
+      MUS_MODELS_DIR: /models
+      MUS_OUTPUT_DIR: /data/output
+      MUS_DATA_DIR: /data/app
+      MUS_LOG_DIR: /data/logs
+    volumes:
+      - ./shared/ui/h3-studio.css:/app/static/css/h3-studio.css:ro
+      - ./shared/ui/h3-studio.js:/app/static/js/h3-studio.js:ro
+      # Advanced workflow card (per-workflow model files): shared module + UI, live edits need a restart.
+      - ./shared/workflow_models.py:/app/backend/workflow_models.py:ro
+      - ./shared/ui/workflow-models.js:/app/static/js/workflow-models.js:ro
+      - ./shared/ui/workflow-models.css:/app/static/css/workflow-models.css:ro
+      - ./shared/ui/missing-files.js:/app/static/js/missing-files.js:ro
+      - ./shared/ui/missing-files.css:/app/static/css/missing-files.css:ro
+      - ./shared/agentic-ui.js:/app/static/js/agentic-ui.js:ro
+      - ./shared/agentic-ui.css:/app/static/css/agentic-ui.css:ro
+      # See the h3-machine volume above -- same fix, same reason: Music only
+      # reads paths ComfyUI's own /history response points it at, it never
+      # writes here itself.
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/output:/data/output:ro
+      - ../Music/data:/data/app
+      - ../Music/logs:/data/logs
+      - ../Music/workflows:/app/workflows:ro
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models:/models:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${MUS_PORT:-8200}/Mus/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  krea:
+    build: ../Krea
+    container_name: krea
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      BUNNY_FRAMEWORK_URL: http://127.0.0.1:8700
+      KREA_HOST: 127.0.0.1
+      KREA_PORT: ${KREA_PORT:-8300}
+      KREA_MOUNT_PREFIX: /Krea
+      KREA_COMFY_URL: ${COMFY_URL:-http://127.0.0.1:8189}
+      KREA_COMFY_MODE: external
+      KREA_LOCK_URL: http://127.0.0.1:${LOCK_PORT:-8600}
+      KREA_QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
+      KREA_WORKFLOW_PATH: /app/workflows/Krea2-Advanced-LoRA-API.json
+      KREA_OUTPUT_DIR: /data/output
+      KREA_DATA_DIR: /data/app
+      KREA_LOG_DIR: /data/logs
+      KREA_CUSTOM_LORA_DIR: /models/loras/KreaCustom
+      KREA_LLAMA_URL: http://127.0.0.1:${LLAMA_PORT:-8400}
+      KREA_LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
+    volumes:
+      - ./shared/ui/h3-studio.css:/app/static/css/h3-studio.css:ro
+      - ./shared/ui/h3-studio.js:/app/static/js/h3-studio.js:ro
+      # Advanced workflow card (per-workflow model files): shared module + UI, live edits need a restart.
+      - ./shared/workflow_models.py:/app/backend/workflow_models.py:ro
+      - ./shared/ui/workflow-models.js:/app/static/js/workflow-models.js:ro
+      - ./shared/ui/workflow-models.css:/app/static/css/workflow-models.css:ro
+      - ./shared/ui/missing-files.js:/app/static/js/missing-files.js:ro
+      - ./shared/ui/missing-files.css:/app/static/css/missing-files.css:ro
+      - ./shared/agentic-ui.js:/app/static/js/agentic-ui.js:ro
+      - ./shared/agentic-ui.css:/app/static/css/agentic-ui.css:ro
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/loras/KreaCustom:/models/loras/KreaCustom
+      # The live ComfyUI install writes to this output directory. Krea reads
+      # paths from /history here and needs this mount to resolve generated files.
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/output:/data/output:ro
+      - ../Krea/data:/data/app
+      - ../Krea/logs:/data/logs
+      - ../Krea/workflows:/app/workflows:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${KREA_PORT:-8300}/Krea/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  llama:
+    build: ../Llama
+    container_name: llama
+    restart: unless-stopped
+    network_mode: host
+    # Expose all render nodes so llama.cpp can use additional GPUs when
+    # LLAMA_GPU_DEVICES names them. The default still selects only ROCm0.
+    devices:
+      - /dev/kfd
+      - /dev/dri:/dev/dri
+    environment:
+      LLAMA_HOST: 127.0.0.1
+      LLAMA_PORT: ${LLAMA_PORT:-8400}
+      LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
+      HOSTCTL_SECRET: ${HOSTCTL_SECRET:?Set HOSTCTL_SECRET in .env before starting}
+      LLAMA_GPU_DEVICES: ${LLAMA_GPU_DEVICES:-ROCm0}
+      LLAMA_SPLIT_MODE: ${LLAMA_SPLIT_MODE:-layer}
+      LLAMA_GPU_LAYERS: ${LLAMA_GPU_LAYERS:-}
+      LLAMA_TENSOR_SPLIT: ${LLAMA_TENSOR_SPLIT:-}
+      LLAMA_FIT_TARGET: ${LLAMA_FIT_TARGET:-}
+      LLAMA_CPU_MOE_LAYERS: ${LLAMA_CPU_MOE_LAYERS:-}
+      LLAMA_KV_OFFLOAD: ${LLAMA_KV_OFFLOAD:-1}
+      LLAMA_SERVER_BIN: ${LLAMA_SERVER_BIN:-}
+      # Same-path mounts below: llama-launch finds the llama.cpp builds under this root.
+      ROCSY_ROOT: ${ROCSY_ROOT:?Set ROCSY_ROOT in .env}
+    volumes:
+      # ROCm userspace runtime -- bind-mounted rather than installed in the
+      # image so it always matches this host's kernel driver exactly.
+      - /opt/rocm:/opt/rocm:ro
+      # Per-model context overrides (<model id>.ctx) written by H3 Machine's
+      # "Agent context" setting; llama-launch applies them on the next load.
+      - ../Llama/overrides:/app/overrides:ro
+      # The custom RDNA-boost llama.cpp ROCm build (see
+      # hostctl/build-rocm-flash-attention.sh) -- mounted at the identical
+      # host path because llama-server's RUNPATH is an absolute path baked in
+      # at build time, not relative. Read-only: this container only runs it.
+      # gfx1100+gfx1101 build used by llama-launch; the gfx1100-only one stays mounted for rollback
+      # (LLAMA_SERVER_BIN=.../build-rocm-gfx1100-rdna-boost/bin/llama-server).
+      # The whole clone (not each build folder), so deleting an old build in Core Backend
+      # can't leave a missing bind-mount source behind.
+      - ${ROCSY_ROOT:?Set ROCSY_ROOT in .env}/llama.cpp-rdna-boost:${ROCSY_ROOT:?Set ROCSY_ROOT in .env}/llama.cpp-rdna-boost:ro
+      # Models -> Manager -> Core Backend: newer llama.cpp releases converted to RDNA Boost
+      # (hostctl/corebackend.py). llama-launch follows its "active" link on each model load.
+      - ${ROCSY_ROOT:?Set ROCSY_ROOT in .env}/llama.cpp-builds:${ROCSY_ROOT:?Set ROCSY_ROOT in .env}/llama.cpp-builds:ro
+      # Versioned llama-swap binaries built with the Rocsy Addons patch.
+      - ../llama-swap-builds:/opt/rocsy-llama-swap:ro
+      # GGUF model files, same reasoning -- mounted at matching host paths so
+      # config.yaml's model list needs no path translation.
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/llm:${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/llm:ro
+      # Edit here to add/remove selectable models -- no rebuild needed.
+      - ../Llama/config.yaml:/app/config.yaml:ro
+      # Launcher mounted over the image's copy so launcher edits need no rebuild.
+      - ../Llama/llama-launch:/usr/local/bin/llama-launch:ro
+      - ../Llama/strata-swap-bridge:/usr/local/bin/strata-swap-bridge:ro
+      # The Master Agent's saved conversation caches (llama-launch adds --slot-save-path).
+      - ../Llama/slot-saves:/app/slot-saves
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:${LLAMA_PORT:-8400}/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Hermes agent and its browser dashboard, exposed only through BunnyBytes.
+  hermes-agent:
+    # Rocsy's patched source is separate from the personal CLI/Desktop install.
+    build: ../hermes-rocsy
+    image: hermes-agent
+    container_name: hermes-agent
+    restart: unless-stopped
+    network_mode: host
+    # ROCm compute device passthrough for the laya-context plugin's GPU scoring.
+    # Same devices as the llama service; world read-write on this host, no
+    # group_add needed. The ROCm userspace runtime itself is NOT bind-mounted
+    # here (unlike llama) because the pip torch+rocm wheel bundles its own
+    # HIP/MIOpen libs -- only kernel driver access via these two nodes is needed.
+    devices:
+      - /dev/kfd
+      - /dev/dri/renderD128
+    volumes:
+      - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}:/opt/data
+      - ../H3Machine/uploads:/opt/data/rocsy-pinned:ro
+      # yt-dlp managed in Models -> Manager -> Core Backend (one copy for Hermes and the Agent; `yt-dlp` on PATH)
+      - ../core-backend-extras/yt-dlp:/opt/rocsy-tools/yt-dlp:ro
+    environment:
+      HERMES_UID: ${HERMES_UID:-1000}
+      HERMES_GID: ${HERMES_GID:-1000}
+      # Laya's checkpoint (laya-context plugin) would otherwise download into the
+      # container's ephemeral /root/.cache and be lost on every rebuild -- point it at
+      # the bind-mounted data volume so it survives.
+      HF_HOME: /opt/data/laya-cache
+      # Benchmarked ~36x faster than CPU scoring (48ms/msg vs 1.75s/msg) on this
+      # host's RX 7900 XTX; small enough footprint to coexist with the llama
+      # service's model on the same 24GB card.
+      HERMES_LAYA_DEVICE: cuda
+    command: ["gateway", "run"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import subprocess; raise SystemExit(subprocess.run(['hermes', 'gateway', 'status'], stdout=subprocess.DEVNULL).returncode)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  hermes-dashboard:
+    image: hermes-agent
+    container_name: hermes-dashboard
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - hermes-agent
+    volumes:
+      - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}:/opt/data
+    environment:
+      HERMES_UID: ${HERMES_UID:-1000}
+      HERMES_GID: ${HERMES_GID:-1000}
+    command: ["dashboard", "--host", "127.0.0.1", "--no-open"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9119/', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 30s
+
+  trainer:
+    build: ../Trainer
+    image: bunny-trainer
+    container_name: bunny-trainer
+    restart: unless-stopped
+    profiles: ["trainer"]
+    network_mode: host
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    ipc: host
+    shm_size: 8gb
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      ROCSY_PUBLIC_URL: ${ROCSY_PUBLIC_URL:-}
+      BUNNY_FRAMEWORK_URL: http://127.0.0.1:8700
+      TRAINER_HOST: 127.0.0.1
+      TRAINER_PORT: ${TRAINER_PORT:-8500}
+      TRAINER_MOUNT_PREFIX: /Trainer
+      TRAINER_DATA_DIR: /data
+      TRAINER_DATASET_ROOT: /datasets
+      TRAINER_MODEL_ROOT: /models
+      TRAINER_REPO: /opt/trainers
+      TRAINER_QUEUE_URL: http://127.0.0.1:${LOCK_PORT:-8600}
+      TRAINER_QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
+      TRAINER_H3_GALLERY_URL: http://127.0.0.1:${H3_PORT:-8000}/Vid
+      HF_HOME: /data/hf-cache
+      # Auto-tagging: vision models served by the llama service (llama-swap).
+      LLAMA_URL: http://127.0.0.1:${LLAMA_PORT:-8400}
+      LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
+      LLAMA_CONFIG: /llama-config.yaml
+      LLAMA_OVERRIDE_DIR: /llama-overrides   # per-model Parameters (Strata's Vision on/off)
+      # Clip finder (Datasets → Find clips): starts Hermes agent runs through its API server.
+      HERMES_API_URL: http://127.0.0.1:8642
+      HERMES_API_KEY: ${HERMES_API_KEY:-}
+    volumes:
+      - ../Trainer/data:/data
+      - ./Datasets:/datasets
+      - ../Llama/config.yaml:/llama-config.yaml:ro
+      - ../Llama/overrides:/llama-overrides:ro
+      - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/logs:/hermes-logs:ro
+      # Rules tab edits this one Hermes skill (SKILL.md) in place.
+      - ${ROCSY_HERMES_HOME:-${HOME}/.hermes}/skills/media/dataset-tagging:/hermes-skill
+      - ../Model Trainers:/opt/trainers
+      # kohya sd-scripts + its tested ROCm venv (Anima, SDXL, Flux.1, ...). Same path as on the host:
+      # the venv's python is an absolute symlink into this folder.
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models:/models:ro
+      # Publish to Image studio copies finished image LoRAs here (writable; the rest of /models stays read-only).
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/loras/KreaCustom:/models/loras/KreaCustom
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.getenv(\"TRAINER_PORT\", \"8500\")}/Trainer/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  framework-agentic-data:
+  motion-data:
+  rea-data:

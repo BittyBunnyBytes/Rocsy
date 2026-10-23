@@ -1,0 +1,504 @@
+#!/usr/bin/env python3
+"""rocsy - Rocsy from a terminal: chat with the Master Agent, open Rocsy Desktop, run the suite.
+
+  rocsy                      chat with the Master Agent (new session)
+  rocsy chat -q "..."        one message, print the reply, exit when the turn ends
+  rocsy chat --resume [ID]   continue a session (the latest one without an ID)
+  rocsy sessions             list Master Agent sessions
+  rocsy desktop              open Rocsy Desktop (its own app window)
+  rocsy open [PAGE]          open Rocsy (or /PAGE, e.g. Agent, Image) in the default browser
+  rocsy up | down | restart | status | logs [SERVICE]
+
+The chat talks to the Agent service on loopback (127.0.0.1:AGENT_PORT), the same API the
+Agent page uses, so a session started here shows on the page and the other way round.
+Stdlib only: this file is linked as ~/.local/bin/rocsy by the installer.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(os.getenv("ROCSY_ROOT") or Path(__file__).resolve().parents[2])
+COMPOSE_DIR = ROOT / "BunnyBytes"
+ENV_FILE = COMPOSE_DIR / ".env"
+BUSY = {"starting", "waiting_for_gpu", "thinking", "rendering"}
+DATA_HOME = Path(os.getenv("XDG_DATA_HOME") or Path.home() / ".local/share")
+DESKTOP_PROFILE = DATA_HOME / "rocsy" / "desktop-profile"
+# Chromium-family browsers can open a page as its own app window (--app), like Hermes Desktop.
+APP_BROWSERS = ("chromium", "chromium-browser", "google-chrome-stable", "google-chrome", "brave",
+                "brave-browser", "microsoft-edge-stable", "vivaldi-stable", "thorium-browser")
+TTY = sys.stdout.isatty()
+
+
+def env_setting(name: str, default: str = "") -> str:
+    if os.getenv(name):
+        return os.environ[name]
+    try:
+        lines = ENV_FILE.read_text().splitlines()
+    except OSError:
+        return default
+    for line in lines:
+        match = re.fullmatch(rf"\s*(?:export\s+)?{re.escape(name)}\s*=(.*)", line)
+        if match and match.group(1).strip():
+            return match.group(1).strip().strip("\"'")
+    return default
+
+
+GATEWAY = f"http://127.0.0.1:{env_setting('GATEWAY_PORT', '8080')}"
+AGENT = f"http://127.0.0.1:{env_setting('AGENT_PORT', '8900')}/Agent"
+
+
+def paint(code: str, text: str) -> str:
+    return f"\033[{code}m{text}\033[0m" if TTY and not os.getenv("NO_COLOR") else text
+
+
+def die(message: str, code: int = 1) -> None:
+    print(paint("31", "rocsy: ") + message, file=sys.stderr)
+    raise SystemExit(code)
+
+
+# ------------------------------------------------------------------ suite --
+
+def docker(args: list[str], capture: bool = False) -> subprocess.CompletedProcess:
+    if not (COMPOSE_DIR / "docker-compose.yml").is_file():
+        die(f"no Rocsy install at {ROOT} (set ROCSY_ROOT)")
+    command = ["docker", "compose", *args]
+    # Right after the installer adds this account to the docker group, only `sg docker` has it.
+    if subprocess.run(["docker", "info"], capture_output=True).returncode and shutil.which("sg"):
+        command = ["sg", "docker", "-c", shlex.join(command)]
+    return subprocess.run(command, cwd=COMPOSE_DIR, text=True, capture_output=capture)
+
+
+def reachable(url: str, timeout: float = 2) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def wait_for(url: str, seconds: int) -> bool:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if reachable(url):
+            return True
+        time.sleep(1)
+    return False
+
+
+def cmd_up(_args) -> int:
+    code = docker(["up", "-d"]).returncode
+    if not code:
+        print("Rocsy is starting: " + GATEWAY + "/" if not wait_for(GATEWAY + "/health", 60) else "Rocsy is up: " + GATEWAY + "/")
+    return code
+
+
+def cmd_down(_args) -> int:
+    return docker(["stop"]).returncode
+
+
+def cmd_restart(_args) -> int:
+    return docker(["restart"]).returncode
+
+
+def cmd_status(_args) -> int:
+    print(f"Rocsy   {ROOT}")
+    print(f"Web     {GATEWAY}/  " + (paint("32", "up") if reachable(GATEWAY + "/health") else paint("31", "down")))
+    print(f"Agent   {AGENT}  " + (paint("32", "up") if reachable(AGENT.rsplit('/', 1)[0] + "/health") else paint("31", "down")), flush=True)
+    return docker(["ps", "--format", "table {{.Service}}\t{{.Status}}"]).returncode
+
+
+def cmd_logs(args) -> int:
+    return docker(["logs", "-f", "--tail", "100", *([args.service] if args.service else [])]).returncode
+
+
+def cmd_open(args) -> int:
+    url = GATEWAY + "/" + (args.page or "").lstrip("/")
+    opener = shutil.which("xdg-open")
+    if not opener:
+        print(url)
+        return 0
+    subprocess.Popen([opener, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    return 0
+
+
+def notify(text: str) -> None:
+    # Rocsy Desktop starts from the app menu with no terminal: tell the user on the desktop too.
+    print(text, file=sys.stderr)
+    if not sys.stderr.isatty() and shutil.which("notify-send"):
+        subprocess.run(["notify-send", "-a", "Rocsy", "Rocsy", text], check=False)
+
+
+def cmd_desktop(args) -> int:
+    url = GATEWAY + "/" + (args.page or "").lstrip("/")
+    if not reachable(GATEWAY + "/health"):
+        notify("Starting Rocsy…")
+        if docker(["up", "-d"], capture=True).returncode or not wait_for(GATEWAY + "/health", 90):
+            notify("Rocsy didn't start. Run `rocsy up` in a terminal to see why.")
+            return 1
+    browser = os.getenv("ROCSY_DESKTOP_BROWSER") or next(filter(None, map(shutil.which, APP_BROWSERS)), None)
+    if not browser:
+        notify("No Chromium-based browser found for the Rocsy Desktop window; opening your default browser.")
+        return cmd_open(args)
+    DESKTOP_PROFILE.mkdir(parents=True, exist_ok=True)
+    # Its own profile keeps it a separate window (and sign-in) even while that browser is open.
+    subprocess.Popen([browser, f"--app={url}", "--class=RocsyDesktop", "--name=RocsyDesktop",
+                      f"--user-data-dir={DESKTOP_PROFILE}", "--no-first-run", "--no-default-browser-check"],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    return 0
+
+
+# ------------------------------------------------------------------- chat --
+
+def api(method: str, path: str, body: dict | None = None, timeout: float = 30) -> dict:
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(AGENT + path, data=data, method=method,
+                                     headers={"Content-Type": "application/json"} if data else {})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read()).get("detail")
+        except ValueError:
+            detail = None
+        if isinstance(detail, dict):
+            raise ApiError(exc.code, detail.get("message", str(detail)), detail) from exc
+        raise ApiError(exc.code, detail or exc.reason) from exc
+    except OSError as exc:
+        raise ApiError(0, f"the Master Agent isn't reachable at {AGENT} ({exc}). Is Rocsy running? Try `rocsy up`.") from exc
+
+
+class ApiError(Exception):
+    def __init__(self, code: int, message: str, detail: dict | None = None):
+        super().__init__(message)
+        self.code, self.detail = code, detail or {}
+
+
+def local_tz() -> str:
+    try:
+        target = os.readlink("/etc/localtime")
+        return target.split("zoneinfo/", 1)[1] if "zoneinfo/" in target else ""
+    except OSError:
+        return os.getenv("TZ", "")
+
+
+STYLE = {"assistant": ("", ""), "say": ("", ""), "think": ("2", "· "), "tool": ("36", "⚙ "),
+         "terminal": ("2", "$ "), "job": ("35", "▶ "), "ok": ("32", "✓ "), "warn": ("33", "! "),
+         "error": ("31", "✗ "), "system": ("2", "· "), "approval": ("1;33", "? "), "ask": ("1;36", "? "),
+         "review": ("1;33", "? "), "board": ("35", "▦ "), "benchmark": ("36", "≈ "), "command": ("2", "/ ")}
+
+
+class Chat:
+    def __init__(self, sid: str | None, show_thinking: bool, quiet: bool):
+        self.sid = sid
+        self.since = -1
+        self.state = ""
+        self.pending = None
+        self.live = ""
+        self.show_thinking = show_thinking
+        self.quiet = quiet
+        self.turn_done = threading.Event()
+        self.stream_stop = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.lock = threading.Lock()
+
+    # -- output
+    def write(self, text: str) -> None:
+        with self.lock:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+
+    def show(self, event: dict) -> None:
+        kind, text = event.get("kind", ""), (event.get("text") or "").rstrip()
+        if kind == "user" or (kind == "think" and not self.show_thinking):
+            return
+        if self.quiet and kind not in {"assistant", "say", "error", "approval", "ask", "review"}:
+            return
+        if kind == "assistant" and self.live:
+            # The reply was already streamed: print only what didn't arrive live.
+            rest = text[len(self.live):] if text.startswith(self.live) else "\n" + text
+            self.live = ""
+            self.write(rest + "\n")
+            return
+        code, mark = STYLE.get(kind, ("2", "· "))
+        for attachment in event.get("attachments") or []:
+            text += f"\n  [{attachment.get('kind', 'file')}] {attachment.get('name', '')} {GATEWAY}{attachment.get('url', '')}"
+        self.write(paint(code, mark + text) + "\n")
+
+    def apply(self, snap: dict) -> None:
+        for event in snap.get("events") or []:
+            self.since = max(self.since, event["i"])
+            self.show(event)
+        live = (snap.get("live") or {}).get("assistant") or ""
+        if live:
+            if live.startswith(self.live):
+                self.write(live[len(self.live):])
+            elif not self.live:
+                self.write(live)
+            self.live = live
+        pending = snap.get("pending")
+        if pending and pending.get("answer") is None and pending_key(pending) != pending_key(self.pending):
+            choices = pending.get("choices") or []
+            hint = ("/yes once · /yes session · /no" if pending.get("kind") == "command" and "session" in choices
+                    else "/yes · /no")
+            self.write(paint("1;33", f"  answer with {hint}") + "\n")
+        self.pending = pending
+        state = snap.get("state", self.state)
+        if state != self.state and state in BUSY and snap.get("stage") and not self.quiet:
+            self.write(paint("2", f"· {snap.get('stage')}") + "\n")
+        was_busy = self.state in BUSY
+        self.state = state
+        if was_busy and state not in BUSY:
+            self.turn_done.set()
+
+    # -- the event stream
+    def follow(self) -> None:
+        while not self.stream_stop.is_set():
+            try:
+                request = urllib.request.Request(f"{AGENT}/api/sessions/{self.sid}/events?since={self.since}")
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    name, data = "", []
+                    for raw in response:
+                        if self.stream_stop.is_set():
+                            return
+                        line = raw.decode("utf-8", "replace").rstrip("\n")
+                        if line.startswith("event:"):
+                            name = line[6:].strip()
+                        elif line.startswith("data:"):
+                            data.append(line[5:].strip())
+                        elif not line and data:
+                            payload = json.loads("\n".join(data))
+                            if name == "gone":
+                                self.write(paint("31", "This session was deleted.") + "\n")
+                                self.turn_done.set()
+                                return
+                            if not name:
+                                self.apply(payload)
+                            name, data = "", []
+            except (OSError, ValueError):
+                if self.stream_stop.wait(2):
+                    return
+
+    def attach(self) -> None:
+        self.stream_stop.clear()
+        self.thread = threading.Thread(target=self.follow, daemon=True)
+        self.thread.start()
+
+    def detach(self) -> None:
+        self.stream_stop.set()
+
+    # -- sending
+    def send(self, text: str) -> bool:
+        self.turn_done.clear()
+        body = {"text": text, "tz": local_tz()}
+        try:
+            if self.sid is None:
+                snap = api("POST", "/api/sessions", {"prompt": text, "tz": local_tz()})
+                self.sid, self.state = snap["id"], snap.get("state", "")
+                if not self.quiet:
+                    self.write(paint("2", f"· session {self.sid} · {GATEWAY}/Agent/?s={self.sid}") + "\n")
+                self.since = max([e["i"] for e in snap.get("events", []) if e.get("kind") == "user"] or [-1])
+                self.attach()
+                return True
+            try:
+                self.state = api("POST", f"/api/sessions/{self.sid}/message", body).get("state", self.state)
+            except ApiError as exc:
+                if exc.detail.get("code") != "jobs_rendering":
+                    raise
+                self.write(paint("33", "! " + str(exc)) + "\n")
+                answer = prompt_line("Queue it until they finish, or cancel the jobs and send now? [q/c/N] ").strip().lower()
+                if answer not in {"q", "c"}:
+                    return False
+                self.state = api("POST", f"/api/sessions/{self.sid}/message",
+                                 {**body, "on_busy": "queue" if answer == "q" else "cancel"}).get("state", self.state)
+            return True
+        except ApiError as exc:
+            self.write(paint("31", "✗ " + str(exc)) + "\n")
+            return False
+
+    def answer(self, words: list[str]) -> None:
+        if not self.pending:
+            self.write(paint("2", "· nothing is waiting for an answer") + "\n")
+            return
+        yes = words[0] == "/yes"
+        choice = ""
+        if self.pending.get("kind") == "command":
+            choice = (words[1] if len(words) > 1 and words[1] in {"once", "session"} else "once") if yes else "deny"
+        try:
+            api("POST", f"/api/sessions/{self.sid}/approve", {"approve": yes, "choice": choice})
+        except ApiError as exc:
+            self.write(paint("31", "✗ " + str(exc)) + "\n")
+
+    def stop(self) -> None:
+        if self.sid:
+            try:
+                api("POST", f"/api/sessions/{self.sid}/stop")
+                self.write(paint("2", "· stopping") + "\n")
+            except ApiError as exc:
+                self.write(paint("31", "✗ " + str(exc)) + "\n")
+
+
+def pending_key(pending: dict | None) -> tuple:
+    return (pending.get("what"), pending.get("t")) if pending else ()
+
+
+def prompt_line(text: str) -> str:
+    try:
+        return input(text)
+    except EOFError:
+        return "/quit"
+
+
+CLI_HELP = """Type a message for the Master Agent; its own commands (/goal, /model, /schedule, /help …) work here too.
+Terminal-only commands:
+  /yes [once|session]   approve what the agent is asking about     /no      deny it
+  /stop                 stop the running turn                      /new     start a new session
+  /web                  open this session on the Agent page        /quit    leave (the session keeps going)"""
+
+
+def resolve_session(value: str | None) -> str:
+    if value and value != "latest":
+        return value
+    items = api("GET", "/api/sessions?limit=1")["sessions"]
+    if not items:
+        die("there are no Master Agent sessions yet")
+    return items[0]["id"]
+
+
+def cmd_chat(args) -> int:
+    try:
+        import readline  # noqa: F401  (line editing + history for input())
+    except ImportError:
+        pass
+    sid = resolve_session(args.resume) if args.resume is not None else None
+    chat = Chat(sid, args.thinking, args.quiet)
+    if sid:
+        try:
+            snap = api("GET", f"/api/sessions/{sid}")
+        except ApiError as exc:
+            die(str(exc))
+        print(paint("1", snap.get("title") or sid) + paint("2", f"  {GATEWAY}/Agent/?s={sid}"))
+        events = snap.get("events") or []
+        for event in events[-args.history:] if args.history else []:
+            chat.show(event)
+        chat.since = events[-1]["i"] if events else -1
+        chat.state = snap.get("state", "")
+        chat.attach()
+    if args.query:
+        if not chat.send(args.query):
+            return 1
+        try:
+            asked, idle = None, 0
+            while not chat.turn_done.wait(0.5):
+                if chat.pending and pending_key(chat.pending) != asked and sys.stdin.isatty():
+                    asked = pending_key(chat.pending)
+                    chat.answer(prompt_line(paint("1;33", "› ")).split() or ["/no"])
+                # A slash command answers without starting a run: nothing turns busy, so stop waiting.
+                idle = idle + 1 if chat.state not in BUSY else 0
+                if idle >= 6:
+                    break
+        except KeyboardInterrupt:
+            print()
+        chat.detach()
+        return 0
+    if not sys.stdin.isatty():
+        text = sys.stdin.read().strip()
+        if not text:
+            die('nothing to send: pass -q "message" or pipe one in')
+        args.query = text
+        return cmd_chat(args)
+    print(paint("1", "Rocsy Master Agent") + paint("2", "  · /cli for terminal commands · Ctrl+D to leave"))
+    while True:
+        try:
+            line = prompt_line(paint("1;35", "› ")).strip()
+        except KeyboardInterrupt:
+            print()
+            if chat.state in BUSY:
+                chat.stop()
+            continue
+        if not line:
+            continue
+        words = line.split()
+        if words[0] in {"/quit", "/exit"}:
+            chat.detach()
+            if chat.sid:
+                print(paint("2", f"· resume with: rocsy chat --resume {chat.sid}"))
+            return 0
+        if words[0] == "/cli":
+            print(CLI_HELP)
+        elif words[0] in {"/yes", "/no"}:
+            chat.answer(words)
+        elif words[0] == "/stop":
+            chat.stop()
+        elif words[0] == "/new" and len(words) == 1:
+            chat.detach()
+            chat = Chat(None, args.thinking, args.quiet)
+            print(paint("2", "· your next message starts a new session"))
+        elif words[0] == "/web":
+            cmd_open(argparse.Namespace(page=f"Agent/?s={chat.sid}" if chat.sid else "Agent"))
+        else:
+            chat.send(line)
+
+
+def cmd_sessions(args) -> int:
+    try:
+        items = api("GET", f"/api/sessions?limit={args.limit}")["sessions"]
+    except ApiError as exc:
+        die(str(exc))
+    for item in items:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(item.get("updated") or 0))
+        state = paint("33", item["state"]) if item.get("busy") else paint("2", item.get("state", ""))
+        print(f"{item['id']}  {when}  {state:<20} {item.get('title', '')[:70]}")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="rocsy", description="Rocsy from the terminal.",
+                                     formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n\n")[1])
+    sub = parser.add_subparsers(dest="command")
+    chat = sub.add_parser("chat", help="chat with the Master Agent")
+    for target in (parser, chat):
+        target.add_argument("-q", "--query", help="send one message, print the reply and exit")
+        target.add_argument("-r", "--resume", nargs="?", const="latest", metavar="ID", help="continue a session (default: the latest)")
+        target.add_argument("--thinking", action="store_true", help="also print the model's thinking")
+        target.add_argument("--quiet", action="store_true", help="only the agent's replies and questions")
+        target.add_argument("--history", type=int, default=6, metavar="N", help="events to replay when resuming (default 6)")
+    listing = sub.add_parser("sessions", help="list Master Agent sessions")
+    listing.add_argument("-n", "--limit", type=int, default=20)
+    for name in ("desktop", "open"):
+        page = sub.add_parser(name, help="open Rocsy Desktop (its own window)" if name == "desktop" else "open Rocsy in the browser")
+        page.add_argument("page", nargs="?", default="", help="a page such as Agent, Image, Video, Settings")
+    sub.add_parser("up", help="start the Rocsy containers")
+    sub.add_parser("down", help="stop the Rocsy containers")
+    sub.add_parser("restart", help="restart the Rocsy containers")
+    sub.add_parser("status", help="show what is running")
+    logs = sub.add_parser("logs", help="follow container logs")
+    logs.add_argument("service", nargs="?")
+    args = parser.parse_args()
+    handlers = {"chat": cmd_chat, None: cmd_chat, "sessions": cmd_sessions, "desktop": cmd_desktop, "open": cmd_open,
+                "up": cmd_up, "down": cmd_down, "restart": cmd_restart, "status": cmd_status, "logs": cmd_logs}
+    try:
+        return handlers[args.command](args) or 0
+    except ApiError as exc:
+        die(str(exc))
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

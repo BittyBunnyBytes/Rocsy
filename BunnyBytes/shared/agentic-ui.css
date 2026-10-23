@@ -1,0 +1,153 @@
+/* Shared Agentic mode UI for Image, Music and Voice (see agentic-ui.js). Colors use the
+   studios' tokens so Settings → themes restyle it; the Hermes terminal keeps H3's look. */
+[hidden] { display: none !important; }
+
+/* H3's Agentic card is the shared Studio pattern for Image, Music and Voice. */
+body.h3-studio-ui .agentic-studio-card > .card-head { flex-wrap: nowrap; }
+/* Older Music CSS still targets .agentic-controls.is-active in running containers. */
+body.h3-studio-ui .agentic-studio-card.agentic-controls.is-active { margin: 0 0 12px; padding: 0; overflow: clip; border-color: var(--border, #25323b); background: var(--card, #151e25); }
+body.h3-studio-ui .agentic-studio-card #agentic-list { padding: 0; }
+.agentic-card-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted, #86949e); font-size: 12px; }
+.agentic-queue-badge { margin-left: auto; padding: 3px 8px; border-radius: 999px; background: rgba(165, 140, 240, .18); color: #d6c9ff; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.agentic-queue-badge:not([hidden]) + .card-chevron { margin-left: 10px; }
+.agentic-runs { padding: 10px; border: 1px solid var(--border, #25323b); border-radius: var(--radius-sm, 8px); background: var(--field, #0d1419); }
+.agentic-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 8px; font-size: 13px; }
+.agentic-heading strong { font-weight: 700; }
+#agentic-list { display: grid; gap: 6px; max-height: 420px; overflow: auto; }
+.agentic-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border, #25323b); border-radius: var(--radius-sm, 8px); background: var(--card, #151e25); }
+.agentic-loaded-wrap { align-self: flex-start; color: var(--muted, #aeb7bd); font-size: 12px; }
+.agentic-loaded-wrap b { color: var(--text, inherit); font-weight: 600; }
+.agentic-description { margin: -8px 0 0; color: var(--muted, #aeb7bd); font-size: 12px; line-height: 1.5; }
+.agentic-field-label { display: block; color: var(--muted, #86949e); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.agentic-controls textarea { width: 100%; min-height: 80px; resize: vertical; box-sizing: border-box; }
+.agentic-extra { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 12px; cursor: pointer; }
+.agentic-controls input[type="checkbox"] { width: auto; accent-color: var(--blue, #7cb3dc); }
+.agentic-controls .agentic-actions { margin: 0; }
+body.h3-studio-ui .agentic-queue-button { flex: 1 1 200px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 8px 14px; border: 1px solid transparent; border-radius: var(--radius-sm, 8px); cursor: pointer; font: inherit; font-size: 14px; font-weight: 700; color: #11111b; background: linear-gradient(135deg, color-mix(in srgb, var(--violet, #a58cf0) 75%, white), var(--violet, #a58cf0)); box-shadow: 0 4px 14px rgba(111, 91, 212, .3); }
+.agentic-queue-button:hover:not(:disabled) { filter: brightness(1.08); }
+.agentic-queue-button:disabled { opacity: .6; cursor: default; }
+.agentic-settings-button { white-space: nowrap; }
+#agentic-status { color: var(--muted, #aeb7bd); font-size: 11px; }
+.agentic-link { padding: 0; border: 0; background: none; color: var(--blue, #7cb3dc); font: inherit; font-size: 12px; cursor: pointer; }
+.agentic-link:hover { text-decoration: underline; }
+.agentic-item-head { display: flex; align-items: center; gap: 8px; }
+.agentic-item-head .agentic-link { margin-left: auto; }
+.agentic-item-model { color: var(--muted, #aeb7bd); font-size: 11px; }
+.agentic-item small { overflow-wrap: anywhere; }
+.agentic-muted { color: var(--muted, #aeb7bd); }
+.agentic-error { color: var(--red, #d86f6f); }
+.agentic-badge { padding: 1px 8px; border-radius: 999px; background: var(--raised, #1b2730); font-size: 11px; font-weight: 600; text-transform: capitalize; }
+.agentic-badge[data-state="complete"] { color: var(--green, #82c45a); }
+.agentic-badge:is([data-state="failed"], [data-state="cancelled"], [data-state="interrupted"]) { color: var(--red, #d86f6f); }
+.agentic-badge:is([data-state="awaiting_approval"], [data-state="awaiting_feedback"]) { color: var(--amber, #e5ac48); }
+.agentic-feedback { display: grid; gap: 6px; width: 100%; }
+.agentic-feedback textarea { width: 100%; box-sizing: border-box; }
+.agentic-term-outputs .agentic-feedback { margin-top: 8px; }
+.agentic-badge:is([data-state="planning"], [data-state="reviewing_plan"], [data-state="queued"], [data-state="rendering"], [data-state="reviewing_output"], [data-state="retrying"]) { color: var(--blue, #7cb3dc); }
+.agentic-plan summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+.agentic-plan pre, .agentic-preview { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.agentic-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agentic-actions button, .agentic-cancel { padding: 5px 10px; font-size: 12px; }
+.agentic-cancel { align-self: flex-start; }
+.agentic-item audio, .agentic-term-outputs audio { width: 100%; }
+.agentic-thumb img { display: block; width: 160px; height: 160px; border-radius: 8px; object-fit: contain; background: var(--field, #0d1419); }
+
+/* Prompt syntax helper under the Studio prompt */
+.agentic-syntax { margin-top: 8px; border: 1px solid var(--border, #62748766); border-radius: var(--radius-sm, 8px); background: var(--panel-soft, transparent); font-size: 12px; }
+.agentic-syntax summary { display: flex; gap: 6px; align-items: baseline; padding: 6px 10px; cursor: pointer; color: var(--muted, #aeb7bd); }
+.agentic-syntax summary b { color: var(--text, inherit); font-weight: 600; }
+.agentic-syntax ul { margin: 0; padding: 0 12px 4px 28px; line-height: 1.5; }
+.agentic-syntax li { margin: 3px 0; }
+.agentic-syntax p { margin: 0; padding: 0 12px 6px; }
+.agentic-syntax .agentic-link { margin: 0 12px 8px; }
+
+/* Hermes settings tab */
+body.agentic-view-open { overflow: hidden; }
+.agentic-view { position: fixed; inset: 0; z-index: 1000; overflow: auto; padding: 20px max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); background: var(--bg, #0a0f13); color: var(--text, #d5dde2); box-sizing: border-box; }
+.agentic-view * { box-sizing: border-box; }
+.agentic-view-top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; max-width: 1500px; margin: 0 auto; }
+.agentic-view-top h1 { margin: 0; font-size: 22px; }
+.agentic-view > .agentic-hint { max-width: 1500px; margin: 8px auto 14px; }
+.agentic-hint { display: block; color: var(--muted, #86949e); font-size: 12px; line-height: 1.45; font-weight: 400; }
+.agentic-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 40%); gap: 16px; align-items: start; max-width: 1500px; margin: 0 auto; }
+.agentic-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.agentic-card { padding: 14px; background: var(--card, #151e25); border: 1px solid var(--border, #25323b); border-radius: var(--radius, 12px); display: flex; flex-direction: column; gap: 10px; }
+.agentic-card h2 { margin: 0; font-size: 15px; }
+.agentic-card > summary { cursor: pointer; font-weight: 600; }
+details.agentic-card:not([open]) { gap: 0; }
+.agentic-field { display: flex; flex-direction: column; gap: 4px; }
+.agentic-field label { font-size: 12px; font-weight: 600; }
+.agentic-view :is(input[type="text"], input[type="number"], select, textarea) { width: 100%; min-height: 34px; padding: 6px 9px; border: 1px solid var(--border, #25323b); border-radius: var(--radius-sm, 8px); background: var(--field, #0d1419); color: var(--text, inherit); font: inherit; }
+.agentic-view textarea { resize: vertical; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.agentic-view input[readonly] { color: var(--muted, #86949e); }
+.agentic-advanced summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.agentic-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
+.agentic-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 8px 0; border-top: 1px solid var(--border, #25323b); font-weight: 600; font-size: 13px; cursor: pointer; }
+.agentic-switch-row input { flex: none; width: 18px; height: 18px; }
+.agentic-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border: 1px solid var(--border, #25323b); border-radius: 10px; background: var(--field, #0d1419); }
+.agentic-tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 0; border-radius: 8px; background: none; color: var(--muted, #86949e); font: inherit; font-size: 13px; cursor: pointer; }
+.agentic-tab.is-active { background: var(--raised, #1b2730); color: var(--text, #d5dde2); }
+.agentic-tab-loaded { padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--green, #82c45a) 22%, transparent); color: var(--green, #82c45a); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.agentic-tab-edited { color: var(--amber, #e5ac48); font-weight: 800; }
+.agentic-preview { max-height: 480px; overflow: auto; margin: 0; padding: 10px; border-radius: 8px; background: var(--field, #0d1419); }
+
+/* Hermes terminal (H3 Machine's enhance log) */
+.agentic-term { position: sticky; top: 0; height: calc(100vh - 120px); min-height: 420px; display: flex; flex-direction: column; overflow: hidden; background: #1e1e1e; border: 1px solid #cd7f32; border-radius: 10px; color: #fff8dc; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; box-shadow: 0 10px 30px #0005; }
+.agentic-term-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid #cd7f32; background: #171717; }
+.agentic-term-head strong { color: #ffd700; }
+.agentic-term-head span { margin-left: auto; color: #8fbc8f; text-transform: capitalize; }
+.agentic-term-head span:is([data-state="planning"], [data-state="reviewing_plan"], [data-state="queued"], [data-state="rendering"], [data-state="reviewing_output"], [data-state="retrying"]) { color: #ffd700; }
+.agentic-term-head span:is([data-state="failed"], [data-state="cancelled"], [data-state="interrupted"]) { color: #ff6b6b; }
+.agentic-term-head button, .agentic-term-picker button { border: 1px solid #a86b43; border-radius: 6px; background: #33231f; color: #ffd8a8; cursor: pointer; font: inherit; padding: 3px 9px; }
+.agentic-term-picker { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #5a4525; color: #c0c0c0; }
+.agentic-view .agentic-term-picker select { min-width: 0; flex: 1; min-height: 0; padding: 5px 8px; background: #292929; color: #fff8dc; border: 1px solid #65543b; border-radius: 5px; font: inherit; }
+.agentic-term-body { flex: 1; overflow: auto; padding: 10px 12px; }
+.agentic-term-empty { color: #b8860b; }
+.agentic-term-row { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; padding: 2px 0; }
+.agentic-term-time { color: #8b8682; font-size: 11px; }
+.agentic-term-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.agentic-term-row[data-kind="user"] .agentic-term-text { color: #fff8dc; font-weight: 600; }
+.agentic-term-row[data-kind="system"] .agentic-term-text { color: #b8860b; }
+.agentic-term-row[data-kind="tool"] .agentic-term-text { color: #ffbf00; }
+.agentic-term-row:is([data-kind="assistant"], [data-kind="stream"]) .agentic-term-text { padding-left: 8px; border-left: 2px solid #daa520; }
+.agentic-term-row[data-kind="thinking"] .agentic-term-text { color: #a9a1be; padding-left: 8px; border-left: 2px solid #756a91; font-style: italic; }
+.agentic-term-row[data-kind="ok"] .agentic-term-text { color: #cfe8cf; }
+.agentic-term-row[data-kind="warn"] .agentic-term-text { color: #ffd8a8; }
+.agentic-term-row[data-kind="error"] .agentic-term-text { color: #ffcdd2; }
+.agentic-term-outputs { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 0 72px; }
+.agentic-steer { position: relative; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-top: 1px solid #8b8682; background: #161616; }
+.agentic-steer-prompt { color: #cd7f32; font-weight: 700; }
+.agentic-view .agentic-steer input { flex: 1; min-width: 0; min-height: 32px; padding: 5px 8px; border: 1px solid #5a4a3a; border-radius: 6px; background: #101010; color: #fff8dc; font: inherit; }
+.agentic-view .agentic-steer input:focus { outline: none; border-color: #cd7f32; box-shadow: 0 0 0 2px #cd7f3240; }
+.agentic-steer input:disabled, .agentic-steer button:disabled { opacity: .5; }
+.agentic-steer button { border: 1px solid #a86b43; border-radius: 6px; background: #33231f; color: #ffd8a8; cursor: pointer; font: inherit; padding: 5px 11px; }
+.agentic-steer-menu { position: absolute; left: 10px; right: 10px; bottom: 100%; margin-bottom: 4px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #5a4a3a; border-radius: 8px; background: #121212; box-shadow: 0 10px 24px #0008; }
+.agentic-steer-option { display: flex; gap: 10px; padding: 6px 10px; border: 0; border-left: 3px solid transparent; background: none; color: #d8cfc0; font: inherit; text-align: left; cursor: pointer; }
+.agentic-steer-option b { color: #ffd700; min-width: 72px; }
+.agentic-steer-option.is-active, .agentic-steer-option:hover { border-left-color: #cd7f32; background: #2a2018; }
+.agentic-term-foot { padding: 6px 12px; border-top: 1px solid #8b8682; background: #1a1a2e; color: #c0c0c0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+@media (max-width: 1000px) {
+  .agentic-layout { grid-template-columns: 1fr; }
+  .agentic-term { position: relative; height: 60vh; min-height: 340px; }
+}
+@media (max-width: 600px) {
+  .agentic-view { padding: 12px 16px; }
+  .agentic-view-top h1 { font-size: 18px; flex-basis: 100%; }
+  .agentic-card-sub { display: none; }
+  .agentic-controls .agentic-actions > button { flex: 1 1 100%; }
+  .agentic-term-row { grid-template-columns: 1fr; gap: 0; }
+  .agentic-term-outputs { margin-left: 0; }
+  .agentic-view input, .agentic-view select, .agentic-view textarea { font-size: 16px; }
+}
+
+/* Studio stylesheets style bare label/button elements; keep the shared UI's own sizing. */
+.agentic-view label, .agentic-view .agentic-hint, .agentic-controls .agentic-extra, .agentic-syntax { text-transform: none; letter-spacing: normal; }
+.agentic-view .agentic-switch-row > span > .agentic-hint { margin-top: 2px; font-weight: 400; }
+:is(.agentic-controls, .agentic-syntax, .agentic-view) .agentic-link { min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--blue, #7cb3dc); font-size: 12px; font-weight: 500; }
+.agentic-view .agentic-term-row { grid-template-columns: 84px minmax(0, 1fr); }
+@media (max-width: 600px) { .agentic-view .agentic-term-row { grid-template-columns: 1fr; } }
+
+/* agentic-ui.js keeps the page still itself when the sessions box changes height above the
+   screen; the browser's own scroll anchoring would correct the same change a second time. */
+html { overflow-anchor: none; }

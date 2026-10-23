@@ -1,0 +1,279 @@
+{
+  "5": {
+    "class_type": "EmptyYuE2LatentAudio",
+    "inputs": {
+      "seconds": [
+        "22",
+        1
+      ],
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "EmptyYuE2LatentAudio"
+    }
+  },
+  "8": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "15",
+        0
+      ],
+      "positive": [
+        "22",
+        0
+      ],
+      "negative": [
+        "22",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ],
+      "seed": 7,
+      "steps": 32,
+      "cfg": 1,
+      "sampler_name": "dpm_2",
+      "scheduler": "sgm_uniform",
+      "denoise": 1
+    },
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "10": {
+    "class_type": "SaveAudioAdvanced",
+    "inputs": {
+      "audio": [
+        "17",
+        0
+      ],
+      "filename_prefix": "audio/YuE2_INT8",
+      "format": {
+        "format": "flac"
+      }
+    },
+    "_meta": {
+      "title": "SaveAudioAdvanced"
+    }
+  },
+  "15": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "yue2_3b_int8_convrot.safetensors"
+    },
+    "_meta": {
+      "title": "YuE 2 INT8 all-in-one checkpoint"
+    }
+  },
+  "17": {
+    "class_type": "VAEDecodeAudioTiled",
+    "inputs": {
+      "samples": [
+        "8",
+        0
+      ],
+      "vae": [
+        "15",
+        2
+      ],
+      "tile_size": 1920,
+      "overlap": 128
+    },
+    "_meta": {
+      "title": "VAEDecodeAudioTiled"
+    }
+  },
+  "22": {
+    "class_type": "YuE2GenerateMusic",
+    "inputs": {
+      "clip": [
+        "15",
+        1
+      ],
+      "style": "English synth-pop, warm female vocal, dreamy analog synthesizers, punchy electronic drums, 110 BPM, uplifting cinematic chorus",
+      "lyrics": "[verse]\nCity lights are fading softly\nMorning waits beyond the blue\nEvery road becomes a promise\nWhen I walk the night with you\n\n[chorus]\nCarry every spark of wonder\nLet the open sky shine through\nWe can turn the dark to color\nI will find my way with you\n\n[verse]\nQuiet streets begin to shimmer\nSilver clouds are breaking through\n\n[chorus]\nCarry every spark of wonder\nLet the open sky shine through",
+      "abc": [
+        "48",
+        0
+      ],
+      "seed": 17,
+      "mode": "full",
+      "max_duration": 200,
+      "temperature": [
+        "62",
+        1
+      ],
+      "top_p": [
+        "63",
+        1
+      ],
+      "top_k": 100,
+      "repetition_penalty": [
+        "64",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "Generate song conditioning"
+    }
+  },
+  "23": {
+    "class_type": "YuE2GenerateABC",
+    "inputs": {
+      "clip": [
+        "15",
+        1
+      ],
+      "style": "English synth-pop, warm female vocal, dreamy analog synthesizers, punchy electronic drums, 110 BPM, uplifting cinematic chorus",
+      "lyrics": "[verse]\nCity lights are fading softly\nMorning waits beyond the blue\nEvery road becomes a promise\nWhen I walk the night with you\n\n[chorus]\nCarry every spark of wonder\nLet the open sky shine through\nWe can turn the dark to color\nI will find my way with you\n\n[verse]\nQuiet streets begin to shimmer\nSilver clouds are breaking through\n\n[chorus]\nCarry every spark of wonder\nLet the open sky shine through",
+      "seed": 10,
+      "mode": "full",
+      "max_abc_tokens": 16000,
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "top_k": 30,
+      "repetition_penalty": 1.005,
+      "penalty_window": 100
+    },
+    "_meta": {
+      "title": "Compose editable ABC score"
+    }
+  },
+  "40": {
+    "class_type": "LoadAudio",
+    "inputs": {
+      "audio": "Ref Music.mp3"
+    },
+    "_meta": {
+      "title": "REFERENCE \u2014 Local File (optional)"
+    }
+  },
+  "41": {
+    "class_type": "LoadAudioFromYouTube",
+    "inputs": {
+      "url": "https://youtu.be/placeholder-unused-reference",
+      "start_time": 0,
+      "duration": 0,
+      "force_redownload": false
+    },
+    "_meta": {
+      "title": "REFERENCE \u2014 From YouTube (optional)"
+    }
+  },
+  "48": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "23",
+        0
+      ],
+      "on_true": [
+        "47",
+        0
+      ],
+      "switch": [
+        "43",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Gate: ABC (use_reference)"
+    }
+  },
+  "45": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "40",
+        0
+      ],
+      "on_true": [
+        "41",
+        0
+      ],
+      "switch": [
+        "42",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Select Source"
+    }
+  },
+  "46": {
+    "class_type": "AudioEncoderLoader",
+    "inputs": {
+      "audio_encoder_name": "sheetsage2_bf16.safetensors"
+    },
+    "_meta": {
+      "title": "Load SheetSage2"
+    }
+  },
+  "43": {
+    "class_type": "LCBooleanValue",
+    "inputs": {
+      "value": true
+    },
+    "_meta": {
+      "title": "USE REFERENCE (let audio influence ABC melody)"
+    }
+  },
+  "42": {
+    "class_type": "LCBooleanValue",
+    "inputs": {
+      "value": false
+    },
+    "_meta": {
+      "title": "USE YOUTUBE (vs local file)"
+    }
+  },
+  "47": {
+    "class_type": "SheetSage2AudioToABC",
+    "inputs": {
+      "audio_encoder": [
+        "46",
+        0
+      ],
+      "audio": [
+        "45",
+        0
+      ],
+      "mode": "full"
+    },
+    "_meta": {
+      "title": "Transcribe Reference \u2192 ABC"
+    }
+  },
+  "62": {
+    "class_type": "MathExpression|pysssss",
+    "inputs": {
+      "expression": "1.5 - max(0,min(1,a))*0.9",
+      "a": 0.9
+    },
+    "_meta": {
+      "title": "Strength \u2192 temperature"
+    }
+  },
+  "63": {
+    "class_type": "MathExpression|pysssss",
+    "inputs": {
+      "expression": "0.98 - max(0,min(1,a))*0.13",
+      "a": 0.9
+    },
+    "_meta": {
+      "title": "Strength \u2192 top_p"
+    }
+  },
+  "64": {
+    "class_type": "MathExpression|pysssss",
+    "inputs": {
+      "expression": "1.05 + max(0,min(1,a))*0.30",
+      "a": 0.9
+    },
+    "_meta": {
+      "title": "Strength \u2192 repetition_penalty"
+    }
+  }
+}

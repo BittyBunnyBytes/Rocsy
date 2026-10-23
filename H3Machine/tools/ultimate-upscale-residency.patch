@@ -1,0 +1,78 @@
+diff --git a/ComfyUI-H3-UltimateUpscale-LD/nodes.py b/ComfyUI-H3-UltimateUpscale-LD/nodes.py
+index 241ffdf..42b30d4 100644
+--- a/ComfyUI-H3-UltimateUpscale-LD/nodes.py
++++ b/ComfyUI-H3-UltimateUpscale-LD/nodes.py
+@@ -962,7 +962,8 @@ def upscale_video(video, param):
+         out = out.mul(norm_std).add(norm_mean)
+ 
+     out = out.to(device="cpu", dtype=orig_dtype)
+-    unload_upscale_model(model_name, dev, precision)
++    if not param.get("keep_upscaler_resident", False):
++        unload_upscale_model(model_name, dev, precision)
+     return out, h_out, w_out
+ 
+ 
+@@ -1442,6 +1443,12 @@ class MMH3LatentUpscaleWithModelParams(io.ComfyNode):
+                              tooltip="Target overall pixel height of the upscaled frame (snapped to a multiple of 32, the H3 upscaler's required grid). Must match the conditioning's generation size."),
+                 io.Combo.Input("device", options=["cuda", "cpu"], default="cuda"),
+                 io.Combo.Input("precision", options=["fp16", "fp32", "bf16"], default="fp16"),
++                io.Boolean.Input("keep_upscaler_resident", default=False, optional=True,
++                                 tooltip="Keep the 3D upscaler on the GPU between time chunks instead of moving it back to CPU after each one. It is still offloaded when the node finishes."),
++                io.Boolean.Input("keep_model_resident", default=False, optional=True,
++                                 tooltip="Do NOT unload the diffusion model before each chunk's upscale. Faster, but the H3 model and the upscaler's working buffer then share VRAM."),
++                io.Boolean.Input("unload_model_after", default=True, optional=True,
++                                 tooltip="Unload the diffusion model once every chunk is sampled, so the VAE decode of the large latent gets the VRAM."),
+             ],
+             outputs=[
+                 H3_UPSCALE_PARAM.Output("latent_upscale_param",
+@@ -1450,7 +1457,8 @@ class MMH3LatentUpscaleWithModelParams(io.ComfyNode):
+         )
+ 
+     @classmethod
+-    def execute(cls, model_name, width, height, device, precision) -> io.NodeOutput:
++    def execute(cls, model_name, width, height, device, precision, keep_upscaler_resident=False,
++                keep_model_resident=False, unload_model_after=True) -> io.NodeOutput:
+         width = int(round(width / 32.0)) * 32
+         height = int(round(height / 32.0)) * 32
+         param = {
+@@ -1459,6 +1467,9 @@ class MMH3LatentUpscaleWithModelParams(io.ComfyNode):
+             "height": height,
+             "device": device,
+             "precision": precision,
++            "keep_upscaler_resident": bool(keep_upscaler_resident),
++            "keep_model_resident": bool(keep_model_resident),
++            "unload_model_after": bool(unload_model_after),
+         }
+         return io.NodeOutput(param)
+ 
+@@ -1849,7 +1860,10 @@ class MMH3UltimateUpscale(io.ComfyNode):
+             upscaled = False
+             if latent_upscale_param is not None:
+                 use_model = "model_name" in latent_upscale_param
+-                if use_model and str(latent_upscale_param["device"]) == "cuda" and hasattr(model, "clone_base_uuid"):
++                # (Bunny) also before a model-free resize: a second pass on the
++                # still-loaded H3 comes out as patch noise (tested 2026-09-29).
++                if (hasattr(model, "clone_base_uuid") and not latent_upscale_param.get("keep_model_resident", False)
++                        and (not use_model or str(latent_upscale_param["device"]) == "cuda")):
+                     # the 3D upscaler is on the GPU during upscale; offload the
+                     # diffusion model so they don't reside simultaneously
+                     comfy.model_management.unload_model_and_clones(model, unload_additional_models=False)
+@@ -1897,9 +1911,14 @@ class MMH3UltimateUpscale(io.ComfyNode):
+                 "spatial_w": chunk_v.shape[4],
+             })
+ 
++        # a resident upscaler stayed on the GPU across chunks; offload it now
++        if latent_upscale_param is not None and latent_upscale_param.get("keep_upscaler_resident", False):
++            unload_upscale_model(latent_upscale_param["model_name"], latent_upscale_param["device"],
++                                 latent_upscale_param["precision"])
++
+         # all chunks sampled & stitched: the diffusion model is no longer needed,
+         # unload it so the caller (e.g. VAE decode of the large latent) gets the VRAM
+-        if hasattr(model, "clone_base_uuid"):
++        if hasattr(model, "clone_base_uuid") and (latent_upscale_param or {}).get("unload_model_after", True):
+             comfy.model_management.unload_model_and_clones(model, unload_additional_models=False)
+             comfy.model_management.soft_empty_cache()
+ 
+diff --git a/bundle_nodes/__pycache__/bundle_nodes.cpython-314.pyc b/bundle_nodes/__pycache__/bundle_nodes.cpython-314.pyc
+index ea55dd1..216c627 100644
+Binary files a/bundle_nodes/__pycache__/bundle_nodes.cpython-314.pyc and b/bundle_nodes/__pycache__/bundle_nodes.cpython-314.pyc differ

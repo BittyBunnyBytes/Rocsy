@@ -1,0 +1,27 @@
+# Local additions for this machine. Copy to docker-compose.override.yml (git-ignored);
+# docker compose merges it over docker-compose.yml automatically. Paths in here are yours:
+# anything outside ROCSY_ROOT / ROCSY_COMFY_ROOT / ROCSY_HERMES_HOME (see .env.example).
+# Everything below is an example: to use one, uncomment it and change `services: {}` to `services:`.
+services: {}
+  # GGUF folders outside ROCSY_COMFY_ROOT/models/llm, mounted at the same path
+  # (Llama/config.yaml uses host paths):
+  # llama:
+  #   volumes:
+  #     - /path/to/more-gguf:/path/to/more-gguf:ro
+
+  # Trainer: kohya sd-scripts checkout with its ROCm venv (same path inside):
+  # trainer:
+  #   environment:
+  #     TRAINER_SDSCRIPTS_DIR: /path/to/sd-scripts
+  #   volumes:
+  #     - /path/to:/path/to:ro
+
+  # REA game/program folders are added from the REA page; hostctl writes them here in a
+  # marked "rea:" block - don't add a second rea: section by hand.
+
+  # Adopt a tunnel you made by hand with `cloudflared tunnel create` (otherwise create one on
+  # the Connections page). Copy cloudflared/config.example.yml to cloudflared/config.yml.
+  # connections:
+  #   volumes:
+  #     - ./cloudflared/config.yml:/run/cloudflared/config.yml:ro
+  #     - ./cloudflared/<tunnel-name>.json:/run/cloudflared/byte.json:ro

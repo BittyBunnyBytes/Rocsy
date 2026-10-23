@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connections · Rocsy</title>
+<link rel="stylesheet" href="/Connections/app.css?v={{v}}">
+</head>
+<body>
+<header class="cx-top"><strong>Connections</strong><a href="/">Home</a></header>
+<main class="cx">
+  <section class="cx-hero">
+    <div class="cx-hero-text">
+      <h1>Connections</h1>
+      <p>Websites the Master Agent works with, and the links between Rocsy and the outside.</p>
+    </div>
+    <nav class="cx-stats" aria-label="Status">
+      <a class="cx-stat" href="#accounts" id="stat-accounts"><span class="cx-dot"></span><strong>—</strong><small>Websites</small></a>
+      <a class="cx-stat" href="#telegram" id="stat-telegram"><span class="cx-dot"></span><strong>—</strong><small>Telegram</small></a>
+      <a class="cx-stat" href="#hermes" id="stat-hermes"><span class="cx-dot"></span><strong>—</strong><small>Hermes link</small></a>
+      <a class="cx-stat" href="#tunnels" id="stat-tunnel"><span class="cx-dot"></span><strong>—</strong><small>Tunnel</small></a>
+    </nav>
+  </section>
+
+  <section class="cx-section" id="accounts" aria-labelledby="accounts-heading">
+    <div class="cx-section-head">
+      <div>
+        <h2 id="accounts-heading">Websites</h2>
+        <p>Add any site with a login. Scouting has the agent log in, work out how to do what the account is for, and note what the site needs. Later runs use the script it writes.</p>
+      </div>
+      <button type="button" class="cx-btn cx-btn-primary" id="site-add">Add a website</button>
+    </div>
+    <div class="cx-sites" id="account-list" aria-live="polite"></div>
+  </section>
+
+  <div class="cx-pair">
+    <section class="cx-section cx-card" id="telegram" aria-labelledby="telegram-heading">
+      <div class="cx-card-head">
+        <span class="cx-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M21 3L3 10.5l7 2.5 2.5 7z"/><path d="M10 13l11-10"/></svg></span>
+        <div><h2 id="telegram-heading">Telegram</h2><p>Sends new ComfyUI output to your chat.</p></div>
+        <span id="state" class="cx-pill">Checking…</span>
+      </div>
+      <p class="cx-detail" id="detail"></p>
+      <div class="cx-actions"><button type="button" class="cx-btn" id="toggle" disabled>Loading…</button><button type="button" class="cx-btn cx-btn-ghost" id="telegram-edit">Configure</button></div>
+      <form id="telegram-form" class="cx-form" hidden>
+        <label>Bot token <input id="telegram-token" type="password" autocomplete="new-password" placeholder="Keep current token"></label>
+        <small id="telegram-token-hint"></small>
+        <label>Chat ID <input id="telegram-chat" autocomplete="off" required></label>
+        <div class="cx-actions"><button type="submit" class="cx-btn cx-btn-primary">Save</button><button id="telegram-cancel" type="button" class="cx-btn cx-btn-ghost">Cancel</button></div>
+      </form>
+    </section>
+
+    <section class="cx-section cx-card" id="hermes" aria-labelledby="hermes-heading">
+      <div class="cx-card-head">
+        <span class="cx-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/></svg></span>
+        <div><h2 id="hermes-heading">Hermes ↔ llama-swap</h2><p>Hermes talking to the local models.</p></div>
+        <span id="hermes-state" class="cx-pill">Checking…</span>
+      </div>
+      <p class="cx-detail" id="hermes-detail"></p>
+      <label class="cx-field">llama-swap model <select id="hermes-model" disabled></select></label>
+      <div class="cx-actions"><button type="button" class="cx-btn" id="hermes-connect" disabled>Connect Hermes</button><button type="button" class="cx-btn cx-btn-ghost" id="hermes-disconnect" disabled>Disconnect</button></div>
+    </section>
+  </div>
+
+  <section class="cx-section cx-card" id="tunnels" aria-labelledby="tunnel-heading">
+    <div class="cx-card-head">
+      <span class="cx-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 18a4 4 0 0 1-.6-8A6 6 0 0 1 18 9a4.5 4.5 0 0 1-1 9z"/></svg></span>
+      <div><h2 id="tunnel-heading">Cloudflare tunnel</h2><p id="cf-detail">Checking…</p></div>
+      <span id="cf-state" class="cx-pill">Checking…</span>
+    </div>
+    <div class="cx-metrics">
+      <div><strong id="cf-connections">—</strong><small>Edge connections</small></div>
+      <div><strong id="cf-requests">—</strong><small>Requests since start</small></div>
+      <div><strong id="cf-errors">—</strong><small>Proxy errors</small></div>
+    </div>
+    <div class="cx-routes" id="cf-routes"></div>
+    <h3 class="cx-sub">Managed tunnels</h3>
+    <div id="tunnel-list" class="cx-tunnels"></div>
+    <details class="cx-more"><summary>Add an existing tunnel</summary>
+      <form id="import-tunnel" class="cx-form"><label>Name <input name="name" required></label><label>Credential JSON <input name="credential" type="file" accept=".json,application/json" required></label><label>Hostname and origin, one per line <textarea name="routes" rows="3" placeholder="example.com http://127.0.0.1:8080" required></textarea></label><div class="cx-actions"><button class="cx-btn cx-btn-primary">Import tunnel</button></div></form>
+    </details>
+    <details class="cx-more"><summary>Create a tunnel with the Cloudflare API</summary>
+      <form id="create-tunnel" class="cx-form"><label>Name <input name="name" required></label><label>Account ID <input name="account_id" required></label><label>Zone ID <input name="zone_id" required></label><label>API token <input name="api_token" type="password" autocomplete="off" required></label><label>Hostname and origin, one per line <textarea name="routes" rows="3" placeholder="example.com http://127.0.0.1:8080" required></textarea></label><small>The API token is used for this request only and isn't saved.</small><div class="cx-actions"><button class="cx-btn cx-btn-primary">Create tunnel and DNS routes</button></div></form>
+    </details>
+  </section>
+
+  <section class="cx-section cx-card" id="activity" aria-labelledby="activity-heading">
+    <div class="cx-card-head"><div><h2 id="activity-heading">Telegram activity</h2><p>The bot token and chat ID are never shown here.</p></div></div>
+    <pre class="cx-log" id="log">Loading…</pre>
+  </section>
+</main>
+
+<dialog class="cx-dialog" id="site-dialog" aria-labelledby="site-dialog-title">
+  <form id="site-form" class="cx-form" method="dialog">
+    <h2 id="site-dialog-title">Add a website</h2>
+    <div class="cx-grid">
+      <label>Label <input name="name" required maxlength="60" placeholder="What you call this site"></label>
+      <label>Address <input name="url" required placeholder="https://…" inputmode="url"></label>
+      <label>Username or email <input name="username" required autocomplete="off"></label>
+      <label>Password <input name="password" type="password" autocomplete="new-password"></label>
+    </div>
+    <label>What the agent should do there <textarea name="purpose" rows="2" maxlength="600" placeholder="What it should do on this site"></textarea></label>
+    <fieldset class="cx-segment"><legend>Browser</legend>
+      <label><input type="radio" name="browser" value="headed" checked><span>Headed<small>Visible Chromium on the desktop</small></span></label>
+      <label><input type="radio" name="browser" value="headless"><span>Headless<small>In the background</small></span></label>
+    </fieldset>
+    <p class="cx-form-error" id="site-error" role="alert" hidden></p>
+    <div class="cx-actions cx-actions-end"><button type="button" class="cx-btn cx-btn-ghost" id="site-cancel">Cancel</button><button type="submit" class="cx-btn cx-btn-primary" id="site-save">Save</button></div>
+  </form>
+</dialog>
+<script src="/Connections/app.js?v={{v}}" defer></script>
+</body>
+</html>

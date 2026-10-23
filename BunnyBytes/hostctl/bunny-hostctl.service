@@ -1,0 +1,15 @@
+# Template: BunnyBytes/install-units.sh fills in @ROCSY_ROOT@ and installs it.
+[Unit]
+Description=Rocsy host services helper (Settings -> Services: supervisors, ComfyUI, containers, boot toggles)
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 @ROCSY_ROOT@/BunnyBytes/hostctl/hostctl.py
+EnvironmentFile=@ROCSY_ROOT@/BunnyBytes/hostctl/hostctl.env
+WorkingDirectory=@ROCSY_ROOT@/BunnyBytes/hostctl
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

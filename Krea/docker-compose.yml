@@ -1,0 +1,10 @@
+# Krea is defined ONCE, in ../BunnyBytes/docker-compose.yml (service krea).
+# This file only points there, under the same project name, so running compose from
+# this folder manages that same container instead of fighting it over the name
+# "krea" (two projects defining it made `up` fail and `down` miss it).
+#   docker compose up -d --build --no-deps krea     (here or in ../BunnyBytes)
+name: bunnybytes
+include:
+  # Both files, like a plain `docker compose` in ../BunnyBytes picks up.
+  - path: [../BunnyBytes/docker-compose.yml, ../BunnyBytes/docker-compose.override.yml]
+    env_file: ../BunnyBytes/.env

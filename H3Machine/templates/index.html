@@ -1,0 +1,1712 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1418">
+  <title>H3 Machine</title>
+  <!-- Installable (Home Screen) - iOS only allows web notifications for installed apps. -->
+  <link rel="manifest" href="{{ mount_prefix }}/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="{{ mount_prefix }}/static/icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="{{ mount_prefix }}/static/icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="H3 Machine">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="{{ mount_prefix }}/static/css/app.css?v={{ app_version }}">
+  <link rel="stylesheet" href="{{ mount_prefix }}/static/css/h3-studio.css?v={{ app_version }}">
+  <link rel="stylesheet" href="{{ mount_prefix }}/static/css/missing-files.css?v={{ app_version }}">
+  <!-- Before the app scripts: it wraps fetch to catch "missing model files" answers. -->
+  <script defer src="{{ mount_prefix }}/static/js/missing-files.js?v={{ app_version }}"></script>
+  <script defer src="{{ mount_prefix }}/static/js/h3-studio.js?v={{ app_version }}"></script>
+  <script type="module" src="{{ mount_prefix }}/static/js/app.js?v={{ app_version }}"></script>
+  <link rel="stylesheet" href="{{ mount_prefix }}/static/css/workflow-models.css?v={{ app_version }}">
+  <script defer src="{{ mount_prefix }}/static/js/workflow-models.js?v={{ app_version }}"></script>
+  {# init()'s first requests start while app.js downloads instead of after it (same URLs, so fetch() reuses them). #}
+  {% for api in ["settings/options", "references", "jobs", "status", "presets", "trigger-aliases", "upscale-presets", "multi-gpu-presets"] %}
+  <link rel="preload" as="fetch" crossorigin href="{{ mount_prefix }}/api/{{ api }}">
+  {% endfor %}
+</head>
+<body data-app-prefix="{{ mount_prefix }}" data-mobile-tab="create">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">H3</span>
+      <span class="brand-name">H3 Machine</span>
+    </div>
+    <!-- Studio (the normal page) / Best settings / Post-Edit (see setView in app.js). The
+         Enhancement settings view has no tab: it opens from the gear next to Enhance. -->
+    <nav class="view-tabs" role="tablist" aria-label="Views">
+      <button type="button" class="view-tab is-active" role="tab" aria-selected="true" data-view="studio">Studio</button>
+      <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="best"><span data-icon="star"></span> Best settings</button>
+      <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="postedit"><span data-icon="scissors"></span> Post-Edit</button>
+      <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="settings"><span data-icon="settings"></span> Settings</button>
+    </nav>
+    <div class="topbar-status">
+      <div class="service-state" id="comfy-status"><span class="status-dot"></span><span>ComfyUI</span><strong>Checking</strong></div>
+      <div class="service-state" id="qwen-status"><span class="status-dot"></span><span>Qwen</span><strong>Checking</strong></div>
+      <button class="icon-button" id="alerts-toggle" type="button" aria-pressed="false" title="Enable completion alerts" aria-label="Completion alerts"><span data-icon="bell"></span></button>
+    </div>
+  </header>
+
+  <!-- Phones/narrow screens: one panel at a time (see setMobileTab in app.js). -->
+  <nav class="mobile-tabs" role="tablist" aria-label="Sections">
+    <button type="button" class="mobile-tab is-active" role="tab" aria-selected="true" data-mobile-tab="create">Create</button>
+    <button type="button" class="mobile-tab" role="tab" aria-selected="false" data-mobile-tab="jobs">Generations <span class="mobile-tab-badge" id="mobile-jobs-badge"></span></button>
+  </nav>
+
+  <!-- Only filled while the Best settings tab is open (loadBestSettings). -->
+  <section class="best-view" id="best-view" aria-label="Best settings" hidden>
+    <div class="best-head">
+      <div>
+        <h1>Best settings</h1>
+        <p class="hint">Rated setting combos, highest scoring first. Score is the average rating (<span data-icon="star"></span> 2, <span data-icon="thumbsUp"></span> 1, <span data-icon="thumbsDown"></span> &minus;1) with one extra neutral vote, so one lucky render can't beat a combo proven over many. Time is the average render time of its rated videos.</p>
+      </div>
+      <button type="button" class="secondary-button" id="best-refresh">Refresh</button>
+    </div>
+    <ol class="best-list" id="best-list"></ol>
+  </section>
+
+  <!-- Enhancement settings: what the Studio's Enhance button sends, and where (see backend/enhancer.py).
+       Opened from the gear next to Enhance; "Back to Studio" returns. -->
+  <section class="enhance-view" id="enhance-view" aria-label="Enhancement" hidden>
+    <button type="button" class="button ghost enhance-back" id="enhance-back">&larr; Back to Studio</button>
+    <h1>Hermes prompt refinement</h1>
+    <p class="hint">Enhance sends the Studio prompt as a Hermes refinement task to the selected model in the local Llama service. It includes the additional syntax, H3 guide and example files and waits for the shared GPU queue.</p>
+    <span class="enhance-save-state" id="enhance-save-state" aria-live="polite"></span>
+    <div class="enhance-layout">
+      <div class="enhance-main">
+    <form id="enhance-form" class="enhance-grid" autocomplete="off">
+      <div class="card card-body settings-card">
+        <h2>Hermes model</h2>
+        <p class="hint">The local Llama model that plans, reviews and rewrites prompts for Enhance and Agentic.</p>
+        <div class="field-row"><label for="enhance-model">Llama model</label><select id="enhance-model"><option value="">Loading Llama models…</option></select></div>
+        <div class="enhance-actions"><button type="button" class="secondary-button" id="enhance-test">Refresh models</button><span class="hint" id="enhance-test-result" aria-live="polite"></span></div>
+        <p class="hint">Multi-GPU is a per-model setting: Llama Swap → the model → Parameters → Multi-GPU.</p>
+        <div class="field-row"><label for="enhance-thinking-level">Thinking level</label><select id="enhance-thinking-level"><option value="none">Off</option><option value="default">Model default</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Maximum</option></select><span class="hint">Available levels depend on the model. Output continues until the model finishes or reaches its context limit.</span></div>
+        <details class="settings-advanced">
+          <summary>Thinking per Agentic stage</summary>
+          <div class="settings-grid" id="agentic-thinking-stages"></div>
+        </details>
+        <div class="field-row"><label for="enhance-context-size">Agent context (tokens)</label><input id="enhance-context-size" type="number" min="8192" max="262144" step="1024"><span class="hint">How much text the model can hold at once (prompt + guides + thinking + answer). Default 65536 (64k). A new value reloads the model on the next request; larger values use more VRAM.</span></div>
+        <div class="field-row"><label for="enhance-base-url">Llama service</label><input id="enhance-base-url" type="text" readonly></div>
+        <details class="settings-advanced">
+          <summary>Advanced sampling</summary>
+          <div class="settings-grid">
+            <div class="field-row"><label for="enhance-temperature">Temperature</label><input id="enhance-temperature" type="number" min="0" max="2" step="0.05"></div>
+            <div class="field-row"><label for="enhance-top-p">Top P</label><input id="enhance-top-p" type="number" min="0" max="1" step="0.01"></div>
+            <div class="field-row"><label for="enhance-top-k">Top K</label><input id="enhance-top-k" type="number" min="0" max="1000" step="1"></div>
+            <div class="field-row"><label for="enhance-min-p">Min P</label><input id="enhance-min-p" type="number" min="0" max="1" step="0.01"></div>
+            <div class="field-row"><label for="enhance-repeat-penalty">Repeat penalty</label><input id="enhance-repeat-penalty" type="number" min="0" max="4" step="0.01"></div>
+            <div class="field-row"><label for="enhance-seed">Seed (-1 = random)</label><input id="enhance-seed" type="number" min="-1" max="2147483647" step="1"></div>
+          </div>
+          <label for="enhance-extra-body">Other llama settings (JSON object)</label><textarea id="enhance-extra-body" rows="4" spellcheck="false">{}</textarea>
+        </details>
+      </div>
+
+      <div class="card card-body settings-card">
+        <h2>Agentic rendering</h2>
+        <p class="hint">Hermes picks each clip's length and mode itself unless your request says otherwise; presets decide quality and size.</p>
+        <div class="field-row"><label for="agentic-full-preset">Final video preset</label><select id="agentic-full-preset"><option value="">Use current Studio settings</option></select><span class="hint">Used for every final clip, continuations included.</span></div>
+        <label class="switch-row" for="agentic-stage-enabled"><span class="switch-label">Staging previews <span class="switch-hint">Render every clip with a fast preset first, before the final renders</span></span><input type="checkbox" id="agentic-stage-enabled"></label>
+        <div class="settings-subgroup" id="agentic-stage-options">
+          <div class="field-row"><label for="agentic-stage-preset">Staging preset</label><select id="agentic-stage-preset"><option value="">Choose a saved MiniMax H3 preset</option></select><span class="hint">A fast, low-resolution preset. Clip lengths and references stay as planned.</span></div>
+          <label class="switch-row" for="agentic-stage-review"><span class="switch-label">Hermes reviews the previews <span class="switch-hint">Sampled frames are checked and failed clips get revised prompts (needs a vision model)</span></span><input type="checkbox" id="agentic-stage-review"></label>
+          <div class="settings-subgroup" id="agentic-stage-review-options">
+            <label class="switch-row" for="agentic-stage-series-review"><span class="switch-label">Series consistency pass <span class="switch-hint">After every clip passes on its own, Hermes looks at all clips together for drift in characters, outfits, style, lighting and the cuts between clips</span></span><input type="checkbox" id="agentic-stage-series-review"></label>
+            <label class="switch-row" for="agentic-stage-best-of-two"><span class="switch-label">Best of 2 for flagged clips <span class="switch-hint">A clip being redone renders with two seeds and Hermes keeps the better one (one extra render per flagged clip)</span></span><input type="checkbox" id="agentic-stage-best-of-two"></label>
+          </div>
+          <label class="switch-row" for="agentic-whisper-check"><span class="switch-label">Check preview dialogue with Whisper <span class="switch-hint">Transcribes each preview on the GPU; gibberish, missing or unplanned speech gets a fixed prompt and a re-render (up to 2 times)</span></span><input type="checkbox" id="agentic-whisper-check"></label>
+          <label class="switch-row" for="agentic-stage-approval"><span class="switch-label">Wait for my approval <span class="switch-hint">Accept to render the finals, or Exclude with notes (Hermes may restructure the plan) to redo the previews</span></span><input type="checkbox" id="agentic-stage-approval"></label>
+        </div>
+        <label class="switch-row" for="agentic-final-review"><span class="switch-label">Hermes reviews the final clips <span class="switch-hint">Same frame review after the final renders; clips it still flags after the last review round are kept as rendered</span></span><input type="checkbox" id="agentic-final-review"></label>
+        <div class="settings-subgroup" id="agentic-final-review-options">
+          <label class="switch-row" for="agentic-final-whisper-check"><span class="switch-label">Check final dialogue with Whisper <span class="switch-hint">Transcribes each final clip on the GPU; gibberish, missing or unplanned speech gets a fixed prompt and a re-render (up to 2 times)</span></span><input type="checkbox" id="agentic-final-whisper-check"></label>
+          <label class="switch-row" for="agentic-final-series-review"><span class="switch-label">Series consistency pass <span class="switch-hint">After every clip passes on its own, Hermes looks at all clips together for drift in characters, outfits, style, lighting and the cuts between clips</span></span><input type="checkbox" id="agentic-final-series-review"></label>
+          <label class="switch-row" for="agentic-final-best-of-two"><span class="switch-label">Best of 2 for flagged clips <span class="switch-hint">A clip being redone renders with two seeds and Hermes keeps the better one (one extra render per flagged clip)</span></span><input type="checkbox" id="agentic-final-best-of-two"></label>
+        </div>
+        <label class="switch-row" for="agentic-review-cap"><span class="switch-label">Cap review rounds <span class="switch-hint">Limit how many times Hermes may revise after a review (clip plan, previews and finals, each); off = keep revising until the review passes (safety stop after 25 rounds)</span></span><input type="checkbox" id="agentic-review-cap"></label>
+        <div class="settings-subgroup" id="agentic-review-cap-options">
+          <div class="field-row"><label for="agentic-review-rounds">Max review rounds</label><input id="agentic-review-rounds" type="number" min="0" max="10" step="1"><span class="hint">0 = review once and keep the result as is. After the last round Agentic keeps the latest version. Default 1.</span></div>
+        </div>
+      </div>
+
+      <div class="card card-body settings-card">
+        <h2>Research &amp; references</h2>
+        <p class="hint">What Hermes may fetch while planning. References you attach are never edited or swapped, and links you paste (YouTube, TikTok, Instagram) are always downloadable.</p>
+        <label class="switch-row" for="agentic-browser-enabled"><span class="switch-label">Web research <span class="switch-hint">Search and read public web pages (one subject or place per search)</span></span><input type="checkbox" id="agentic-browser-enabled"></label>
+        <div class="settings-subgroup">
+          <label class="switch-row" for="agentic-video-search"><span class="switch-label">YouTube search <span class="switch-hint">Also search YouTube for videos; off by default because Hermes over-used it</span></span><input type="checkbox" id="agentic-video-search"></label>
+        </div>
+        <label class="switch-row" for="agentic-manage-references"><span class="switch-label">Download and prepare references <span class="switch-hint">Fetch media Hermes finds, trim, crop or keep only the audio, and scan long videos</span></span><input type="checkbox" id="agentic-manage-references"></label>
+        <p class="hint">This web reader is separate from Hermes CLI's <code>/browser connect</code>.</p>
+      </div>
+
+      <div class="card card-body settings-card">
+        <h2>Experimental</h2>
+        <label class="switch-row" for="agentic-character-screenshots"><span class="switch-label">Keep fictional characters consistent <span class="switch-hint">Hermes saves a clear frame of a text-defined original character and reuses it as an image reference. Not for real people or characters that already have a reference.</span></span><input type="checkbox" id="agentic-character-screenshots"></label>
+        <label class="switch-row" for="agentic-continuation-tail"><span class="switch-label">Analyze the last 5 s for motion <span class="switch-hint">Hermes examines sampled frames from the end of the source clip to carry subject and camera motion into the next prompt. Only the final frame is sent to H3; the previous footage is never attached</span></span><input type="checkbox" id="agentic-continuation-tail"></label>
+        <label class="switch-row" for="agentic-continuation-tail-audio"><span class="switch-label">Use the last 5 s of audio <span class="switch-hint">Extracts sound only for voice and ambience continuity. The source video frames are never sent to H3. Uses an audio slot when available; applies when motion analysis is on</span></span><input type="checkbox" id="agentic-continuation-tail-audio"></label>
+        <label class="switch-row" for="agentic-scene-screenshots"><span class="switch-label">Keep backgrounds consistent across shots <span class="switch-hint">Hermes names each clip's location; after the first clip in a place renders it saves the frame that shows the most of the setting and attaches it to later clips there as an image reference (setting only, not the people). Later clips in a known place render in Reference mode</span></span><input type="checkbox" id="agentic-scene-screenshots"></label>
+        <label class="switch-row" for="agentic-rushed-dialogue-check"><span class="switch-label">Catch sped-up dialogue <span class="switch-hint">Rejects plans that cram too many words into a clip, then times every rendered clip's speech with Whisper on the GPU. Rushed lines (well above a natural 4-5.5 syllables a second) mean the clip was too short for its dialogue: it gets more time (up to 15 s) or tighter lines and re-renders, up to 2 times</span></span><input type="checkbox" id="agentic-rushed-dialogue-check"></label>
+        <label class="switch-row" for="agentic-lora-gallery"><span class="switch-label">Let Hermes choose from the LoRA gallery <span class="switch-hint">Shares the installed H3 LoRA names, triggers and descriptions so Hermes can enable one relevant LoRA per clip</span></span><input type="checkbox" id="agentic-lora-gallery"></label>
+      </div>
+
+      <details class="card settings-card settings-prompts">
+        <summary class="card-head"><span class="card-title">Prompts</span><span class="card-sub">what Hermes is told for reviews and tasks</span><span class="card-chevron" aria-hidden="true"></span></summary>
+        <div class="card-body">
+          <label for="agentic-refinement-prompt">Footage review prompt</label><textarea id="agentic-refinement-prompt" rows="6" spellcheck="false"></textarea>
+          <p class="hint">Used when Hermes reviews sampled frames of previews or finals. Each review phase can revise prompts twice; clips it still flags are kept as rendered.</p>
+          <label for="enhance-instructions">Hermes task instructions</label><textarea id="enhance-instructions" rows="8" spellcheck="false"></textarea>
+          <div class="enhance-actions"><button type="button" class="secondary-button" id="enhance-instructions-reset">Reset to default</button></div>
+        </div>
+      </details>
+    </form>
+    <details class="card" id="enhance-preview-card"><summary class="card-head"><span class="card-title">Preview</span><span class="card-sub">exact messages sent with the current Studio prompt</span></summary><div class="card-body"><div class="enhance-actions"><button type="button" class="secondary-button" id="enhance-preview-refresh">Refresh preview</button><span class="hint" id="enhance-preview-size"></span></div><pre class="enhance-preview" id="enhance-preview"></pre></div></details>
+      </div>
+      <aside class="enhance-log" aria-label="Hermes prompt refinement log">
+        <div class="enhance-log-head"><strong>☤ Hermes Agent</strong><span id="enhance-log-state">Idle</span><button type="button" id="enhance-log-cancel" hidden>Cancel</button></div>
+        <div class="enhance-log-picker"><label for="enhance-log-job">Session</label><select id="enhance-log-job"><option value="">No recent sessions</option></select></div>
+        <div class="enhance-log-body" id="enhance-log-body" role="log" aria-live="polite"><p class="enhance-log-empty">Run Enhance in the Studio to see its queue and model activity here.</p></div>
+        <form class="enhance-steer" id="enhance-steer" autocomplete="off">
+          <div class="alias-menu enhance-steer-menu" id="enhance-steer-menu" role="listbox" hidden></div>
+          <span class="enhance-steer-prompt" aria-hidden="true">❯</span>
+          <input id="enhance-steer-input" type="text" enterkeyhint="send" placeholder="Steer Hermes… (/ for commands)" aria-label="Steer the running Agentic session">
+          <button type="submit" id="enhance-steer-send">Send</button>
+        </form>
+        <div class="enhance-log-foot" id="enhance-log-foot">Waiting for a prompt</div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- Post-Edit tab: re-render a finished video with ffmpeg (backend/postedit.py). The
+       preview approximates look/speed/crop live; the render is exact. TTS clips come
+       from backend/tts.py and are stored as audio references (role postedit-voice). -->
+  <section class="postedit-view" id="postedit-view" aria-label="Post-Edit" hidden>
+    <div class="best-head pe-head">
+      <div>
+        <h1>Post-Edit</h1>
+        <p class="hint">Trim, retime, crop, grade, add effects, voice-over (Edge or TikTok TTS), music, captions and text, then render a new video. The original is never changed. The preview approximates color and speed; the render is exact.</p>
+      </div>
+      <div class="pe-head-actions">
+        <button type="button" class="secondary-button" id="pe-reset" title="Put every setting back to its default (keeps the source video and your voice clips)">&#8634; Reset edits</button>
+        <button type="button" class="primary-button" id="pe-render" disabled>Render edit</button>
+      </div>
+    </div>
+
+    <div class="field-row pe-source-row">
+      <label for="pe-source">Source video <span class="hint">finished generations, newest first (Post-Edit renders included)</span></label>
+      <select id="pe-source"></select>
+    </div>
+
+    <div class="pe-reedit" id="pe-reedit" hidden>
+      <span>This video is a Post-Edit render. Edits made here stack on top of it.</span>
+      <button type="button" class="secondary-button" id="pe-reedit-button"><span data-icon="pencil"></span> Re-edit from the original with its saved settings</button>
+    </div>
+
+    <div class="pe-empty" id="pe-empty">Pick a finished video above, or press the <b><span data-icon="scissors"></span></b> button on any finished generation.</div>
+
+    <div class="pe-layout" id="pe-layout" hidden>
+      <div class="pe-preview-col">
+        <div class="pe-stage" id="pe-stage">
+          <div class="pe-frame" id="pe-frame">
+            <video id="pe-video" playsinline preload="auto"></video>
+            <div class="pe-crop-box" id="pe-crop-box" hidden></div>
+            <div class="pe-vignette" id="pe-vignette" hidden></div>
+          </div>
+          <div class="pe-letterbox" id="pe-letterbox" aria-hidden="true" hidden><i></i><i></i></div>
+          <div class="pe-overlays" id="pe-overlays" aria-hidden="true"></div>
+          <div class="pe-fade" id="pe-fade" aria-hidden="true"></div>
+        </div>
+        <div class="pe-transport">
+          <button type="button" class="icon-button" id="pe-play" aria-label="Play" title="Play / pause (Space)"><span data-icon="play"></span></button>
+          <span class="pe-time" id="pe-time">0:00.0 / 0:00.0</span>
+          <label class="pe-inline-check" title="Play the music and voice clips along with the video"><input type="checkbox" id="pe-mix-preview" checked> Mix</label>
+          <label class="pe-inline-check" title="Loop the trimmed part"><input type="checkbox" id="pe-loop" checked> Loop</label>
+          <span class="hint pe-preview-note" id="pe-preview-note"></span>
+        </div>
+        <div class="pe-timeline-bar">
+          <button type="button" class="icon-button pe-zoom-button" id="pe-zoom-out" title="Zoom out" aria-label="Zoom out">&minus;</button>
+          <button type="button" class="icon-button pe-zoom-button" id="pe-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+          <button type="button" class="secondary-button pe-zoom-fit" id="pe-zoom-fit" title="Show the whole timeline (double-click the timeline)">Fit</button>
+          <span class="pe-zoom-readout" id="pe-zoom-readout">1x</span>
+        </div>
+        <div class="pe-timeline" id="pe-timeline">
+          <div class="pe-lane pe-lane-source" data-lane="source"><span class="pe-lane-label">Source</span><div class="pe-lane-track" id="pe-source-track"><div class="pe-trim" id="pe-trim"><span class="pe-handle" data-handle="start"></span><span class="pe-handle" data-handle="end"></span></div><div class="pe-source-head" id="pe-source-head"></div></div></div>
+          <div class="pe-lane" data-lane="voice"><span class="pe-lane-label">Voice</span><div class="pe-lane-track pe-output-track" id="pe-voice-track"></div></div>
+          <div class="pe-lane" data-lane="music"><span class="pe-lane-label">Music</span><div class="pe-lane-track pe-output-track" id="pe-music-track"></div></div>
+          <div class="pe-lane" data-lane="text"><span class="pe-lane-label">Text</span><div class="pe-lane-track pe-output-track" id="pe-text-track"></div></div>
+          <div class="pe-lane pe-lane-ruler"><span class="pe-lane-label"></span><div class="pe-ruler" id="pe-ruler"></div></div>
+          <div class="pe-lane pe-lane-overview"><span class="pe-lane-label">View</span><div class="pe-overview" id="pe-overview" title="Drag the window to scroll the timeline"><div class="pe-overview-window" id="pe-overview-window"></div><div class="pe-overview-head" id="pe-overview-head"></div></div></div>
+          <div class="pe-playhead" id="pe-playhead"></div>
+          <div class="pe-snap-line" id="pe-snap-line" hidden></div>
+        </div>
+        <p class="hint">Top lane: the whole source, with the kept part highlighted (drag its edges). Below: the output timeline. <b>Click</b> to seek, drag empty space to scrub, <b>click and hold</b> to zoom in there (keep holding to zoom further, drag to move around). Ctrl+scroll zooms; the View bar scrolls. Drag voice and text blocks to move them (they snap to clip edges and the playhead; hold Alt to stop snapping). Drop a voice clip <b>onto another</b> to swap their places.</p>
+      </div>
+
+      <div class="pe-controls" id="pe-controls">
+        <div class="pe-tabs" id="pe-tabs" role="tablist" aria-label="Post-Edit sections">
+          <button type="button" role="tab" class="pe-tab is-active" data-pe-tab="edit" aria-selected="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="7" r="2.6"/><circle cx="6" cy="17" r="2.6"/><path d="M8.2 8.4L20 16M8.2 15.6L20 8"/></svg><span>Edit</span><i class="pe-tab-dot" aria-hidden="true"></i></button>
+          <button type="button" role="tab" class="pe-tab" data-pe-tab="effects" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.4L18 9.2l-4.2 1.8L12 15.4l-1.8-4.4L6 9.2l4.2-1.8z"/><path d="M18.5 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg><span>Effects</span><i class="pe-tab-dot" aria-hidden="true"></i></button>
+          <button type="button" role="tab" class="pe-tab" data-pe-tab="audio" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 6v12M12 9v6M16 4v16M20 10v4"/></svg><span>Audio</span><i class="pe-tab-dot" aria-hidden="true"></i></button>
+          <button type="button" role="tab" class="pe-tab" data-pe-tab="text" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg><span>Text</span><i class="pe-tab-dot" aria-hidden="true"></i></button>
+          <button type="button" role="tab" class="pe-tab" data-pe-tab="export" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M7.5 8.5L12 4l4.5 4.5M5 14v5h14v-5"/></svg><span>Export</span></button>
+        </div>
+        <details class="card" data-pe-group="edit" open>
+          <summary class="card-head"><span class="card-title">Timing</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <div class="field-grid pe-grid-2">
+              <div class="field-row"><label for="pe-trim-start">Start (s)</label><div class="seed-control"><input id="pe-trim-start" type="number" min="0" step="0.05" value="0"><button type="button" class="icon-button" data-pe-mark="start" title="Set to the playhead">&#8676;</button></div></div>
+              <div class="field-row"><label for="pe-trim-end">End (s)</label><div class="seed-control"><input id="pe-trim-end" type="number" min="0" step="0.05"><button type="button" class="icon-button" data-pe-mark="end" title="Set to the playhead">&#8677;</button></div></div>
+            </div>
+            <div class="field-row"><label for="pe-speed">Speed <span class="field-readout" id="pe-speed-readout">1x</span></label><input id="pe-speed" type="range" min="0.25" max="4" step="0.05" value="1" list="pe-speed-marks"><datalist id="pe-speed-marks"><option value="0.5"><option value="1"><option value="1.5"><option value="2"></datalist></div>
+            <label class="switch-row" for="pe-reverse"><span class="switch-label">Reverse <span class="switch-hint">video and audio play backwards (render only)</span></span><input type="checkbox" id="pe-reverse"></label>
+            <div class="field-grid pe-grid-2">
+              <div class="field-row"><label for="pe-hold-end">Hold last frame (s)</label><div class="seed-control"><input id="pe-hold-end" type="number" min="0" max="60" step="0.1" value="0"><button type="button" class="secondary-button" id="pe-fit-voice" title="Hold the last frame long enough for every voice clip to finish">Fit voice</button></div></div>
+              <div class="field-row"><label for="pe-fade-color">Fade color</label><select id="pe-fade-color"><option value="black">Black</option><option value="white">White</option></select></div>
+              <div class="field-row"><label for="pe-fade-in">Fade in (s)</label><input id="pe-fade-in" type="number" min="0" max="10" step="0.1" value="0"></div>
+              <div class="field-row"><label for="pe-fade-out">Fade out (s)</label><input id="pe-fade-out" type="number" min="0" max="10" step="0.1" value="0"></div>
+            </div>
+            <p class="hint" id="pe-length-readout"></p>
+          </div>
+        </details>
+
+        <details class="card" data-pe-group="edit" open>
+          <summary class="card-head"><span class="card-title">Fade into another video</span><span class="card-sub">joined at the end with a transition (render only)</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <div class="field-row"><label for="pe-next-video">Next video</label>
+              <div class="upscale-preset-control">
+                <select id="pe-next-video"></select>
+                <button type="button" class="button" id="pe-next-upload">+ Upload video&hellip;</button>
+                <button type="button" class="secondary-button danger" id="pe-next-delete" hidden title="Delete this uploaded video">Delete</button>
+              </div>
+              <input id="pe-next-file" type="file" accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mp4,.mov,.webm,.mkv" hidden>
+            </div>
+            <div class="field-grid pe-grid-2" id="pe-next-options" hidden>
+              <div class="field-row"><label for="pe-next-transition">Transition</label>
+                <select id="pe-next-transition">
+                  <option value="fade">Crossfade</option>
+                  <option value="fadeblack">Through black</option>
+                  <option value="fadewhite">Through white</option>
+                  <option value="dissolve">Dissolve</option>
+                </select>
+              </div>
+              <div class="field-row"><label for="pe-next-transition-duration">Transition (s)</label><input id="pe-next-transition-duration" type="number" min="0.1" max="5" step="0.1" value="1"></div>
+              <div class="field-row"><label for="pe-next-fade-out">Fade out the next video (s) <span class="hint">0 = off; uses the fade color</span></label><input id="pe-next-fade-out" type="number" min="0" max="10" step="0.1" value="0"></div>
+              <label class="switch-row" for="pe-next-match-loudness"><span class="switch-label">Match loudness to this edit <span class="switch-hint">turns the next video's audio up or down so it isn't louder or quieter than your edit</span></span><input type="checkbox" id="pe-next-match-loudness" checked></label>
+            </div>
+            <p class="hint" id="pe-next-readout"></p>
+          </div>
+        </details>
+
+        <details class="card" data-pe-group="edit" open>
+          <summary class="card-head"><span class="card-title">Frame</span><span class="card-sub">crop, flip, rotate, size, frame rate</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <div class="field-row"><label>Crop</label>
+              <div class="segmented pe-segmented" id="pe-aspect" role="radiogroup" aria-label="Crop aspect">
+                <button type="button" class="segment is-active" data-aspect="none">Off</button>
+                <button type="button" class="segment" data-aspect="16:9">16:9</button>
+                <button type="button" class="segment" data-aspect="9:16">9:16</button>
+                <button type="button" class="segment" data-aspect="1:1">1:1</button>
+                <button type="button" class="segment" data-aspect="4:5">4:5</button>
+                <button type="button" class="segment" data-aspect="4:3">4:3</button>
+                <button type="button" class="segment" data-aspect="21:9">21:9</button>
+                <button type="button" class="segment" data-aspect="free">Zoom</button>
+              </div>
+            </div>
+            <div id="pe-crop-controls" hidden>
+              <div class="field-row"><label for="pe-zoom">Zoom <span class="field-readout" id="pe-crop-zoom-readout">1x</span></label><input id="pe-zoom" type="range" min="1" max="4" step="0.01" value="1"></div>
+              <div class="field-grid pe-grid-2">
+                <div class="field-row"><label for="pe-pan-x">Pan left / right</label><input id="pe-pan-x" type="range" min="0" max="1" step="0.005" value="0.5"></div>
+                <div class="field-row"><label for="pe-pan-y">Pan up / down</label><input id="pe-pan-y" type="range" min="0" max="1" step="0.005" value="0.5"></div>
+              </div>
+              <p class="hint">Drag inside the preview to move the crop.</p>
+            </div>
+            <div class="field-grid pe-grid-3">
+              <label class="switch-row" for="pe-flip-h"><span class="switch-label">Flip &harr;</span><input type="checkbox" id="pe-flip-h"></label>
+              <label class="switch-row" for="pe-flip-v"><span class="switch-label">Flip &varr;</span><input type="checkbox" id="pe-flip-v"></label>
+              <div class="field-row"><select id="pe-rotate" aria-label="Rotate"><option value="0">No rotation</option><option value="90">Rotate 90&deg;</option><option value="180">Rotate 180&deg;</option><option value="270">Rotate 270&deg;</option></select></div>
+            </div>
+            <div class="field-grid pe-grid-2">
+              <div class="field-row"><label>Output size <span class="hint">(blank = keep)</span></label><div class="resolution-inputs"><input id="pe-width" type="number" min="64" max="4096" step="2" placeholder="auto" aria-label="Output width"><span aria-hidden="true">&times;</span><input id="pe-height" type="number" min="64" max="4096" step="2" placeholder="auto" aria-label="Output height"></div></div>
+              <div class="field-row"><label for="pe-size-preset">Size preset</label><select id="pe-size-preset"><option value="">Custom / keep</option><option value="1920x1080">1080p 16:9</option><option value="1280x720">720p 16:9</option><option value="1080x1920">1080&times;1920 (Shorts / TikTok)</option><option value="720x1280">720&times;1280 vertical</option><option value="1080x1080">1080 square</option><option value="1080x1350">1080&times;1350 (4:5)</option><option value="3840x2160">4K UHD</option></select></div>
+              <div class="field-row"><label for="pe-fps">Frame rate</label><select id="pe-fps"><option value="">Keep source</option><option>12</option><option>24</option><option>25</option><option>30</option><option>48</option><option>50</option><option>60</option></select></div>
+              <label class="switch-row" for="pe-interpolate"><span class="switch-label">Motion interpolation <span class="switch-hint">smooth new frames (slow)</span></span><input type="checkbox" id="pe-interpolate"></label>
+            </div>
+            <label class="switch-row" for="pe-stabilize"><span class="switch-label">Stabilize <span class="switch-hint">reduce shake (ffmpeg deshake)</span></span><input type="checkbox" id="pe-stabilize"></label>
+          </div>
+        </details>
+
+        <details class="card" data-pe-group="effects" open>
+          <summary class="card-head"><span class="card-title">Look</span><span class="card-sub">color and texture</span><span class="card-badge" id="pe-look-badge"></span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <div class="pe-look-presets" id="pe-look-presets">
+              <button type="button" class="button ghost" data-look="none">Neutral</button>
+              <button type="button" class="button ghost" data-look="cinematic">Cinematic</button>
+              <button type="button" class="button ghost" data-look="warm">Warm</button>
+              <button type="button" class="button ghost" data-look="cool">Cool</button>
+              <button type="button" class="button ghost" data-look="vivid">Vivid</button>
+              <button type="button" class="button ghost" data-look="faded">Faded</button>
+              <button type="button" class="button ghost" data-look="noir">B&amp;W</button>
+              <button type="button" class="button ghost" data-look="vhs">VHS</button>
+              <button type="button" class="button ghost" data-look="teal">Teal &amp; orange</button>
+              <button type="button" class="button ghost" data-look="dreamy">Dreamy</button>
+              <button type="button" class="button ghost" data-look="retro">Retro</button>
+              <button type="button" class="button ghost" data-look="bleach">Bleach bypass</button>
+              <button type="button" class="button ghost" data-look="glitch">Glitch</button>
+              <button type="button" class="button ghost" data-look="matte">Matte</button>
+            </div>
+            <div class="pe-sliders" id="pe-look-sliders"></div>
+          </div>
+        </details>
+
+        <details class="card" data-pe-group="effects" open>
+          <summary class="card-head"><span class="card-title">Effects</span><span class="card-sub">tone curve, glow, RGB split, bars, zoom</span><span class="card-badge" id="pe-fx-badge"></span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <div class="field-grid pe-grid-2">
+              <div class="field-row"><label for="pe-tone-curve">Tone curve</label><select id="pe-tone-curve">
+                <option value="none">None</option><option value="lighter">Lighter</option><option value="darker">Darker</option>
+                <option value="increase_contrast">More contrast</option><option value="medium_contrast">Medium contrast</option><option value="strong_contrast">Strong contrast</option>
+                <option value="vintage">Vintage</option><option value="cross_process">Cross-process</option><option value="color_negative">Color negative</option>
+              </select></div>
+              <div class="field-row"><label>Cinema bars</label>
+                <div class="segmented pe-segmented" id="pe-letterbox" role="radiogroup" aria-label="Cinema bars">
+                  <button type="button" class="segment is-active" data-letterbox="off">Off</button>
+                  <button type="button" class="segment" data-letterbox="1.85">1.85</button>
+                  <button type="button" class="segment" data-letterbox="2.00">2.00</button>
+                  <button type="button" class="segment" data-letterbox="2.39">2.39</button>
+                </div>
+              </div>
+            </div>
+            <div class="pe-sliders">
+              <div class="field-row"><label class="pe-slider-label" for="pe-teal-orange"><span>Teal &amp; orange <span class="field-readout" id="pe-teal-orange-readout"></span></span><button type="button" data-pe-reset="pe-teal-orange:0" title="Reset">reset</button></label><input id="pe-teal-orange" type="range" min="0" max="1" step="0.01" value="0"></div>
+              <div class="field-row"><label class="pe-slider-label" for="pe-glow"><span>Glow <span class="field-readout" id="pe-glow-readout"></span></span><button type="button" data-pe-reset="pe-glow:0" title="Reset">reset</button></label><input id="pe-glow" type="range" min="0" max="1" step="0.01" value="0"></div>
+              <div class="field-row"><label class="pe-slider-label" for="pe-rgb-split"><span>RGB split <span class="field-readout" id="pe-rgb-split-readout"></span></span><button type="button" data-pe-reset="pe-rgb-split:0" title="Reset">reset</button></label><input id="pe-rgb-split" type="range" min="0" max="20" step="1" value="0"></div>
+              <div class="field-row"><label class="pe-slider-label" for="pe-pixelate"><span>Pixelate <span class="field-readout" id="pe-pixelate-readout"></span></span><button type="button" data-pe-reset="pe-pixelate:0" title="Reset">reset</button></label><input id="pe-pixelate" type="range" min="0" max="64" step="1" value="0"></div>
+            </div>
+            <div class="field-row"><label class="pe-slider-label" for="pe-slow-zoom"><span>Slow zoom <span class="field-readout" id="pe-slow-zoom-readout"></span></span><button type="button" data-pe-reset="pe-slow-zoom:0" title="Reset">reset</button></label><input id="pe-slow-zoom" type="range" min="-0.5" max="0.5" step="0.01" value="0" list="pe-zoom-marks"><datalist id="pe-zoom-marks"><option value="0"></datalist><span class="hint">Right pushes in over the clip, left pulls out (Ken Burns).</span></div>
+          </div>
+        </details>
+
+        <details class="card" data-pe-group="audio" open>
+          <summary class="card-head"><span class="card-title">Original sound</span><span class="card-sub">the video's own audio</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <div class="field-row"><label for="pe-orig-volume">Original volume <span class="field-readout" id="pe-orig-volume-readout">100%</span></label><input id="pe-orig-volume" type="range" min="0" max="3" step="0.05" value="1"></div>
+            <div class="field-grid pe-grid-3">
+              <label class="switch-row" for="pe-mute"><span class="switch-label">Mute</span><input type="checkbox" id="pe-mute"></label>
+              <label class="switch-row" for="pe-audio-denoise"><span class="switch-label">Denoise</span><input type="checkbox" id="pe-audio-denoise"></label>
+              <label class="switch-row" for="pe-normalize"><span class="switch-label">Normalize <span class="switch-hint">-16 LUFS</span></span><input type="checkbox" id="pe-normalize"></label>
+            </div>
+            <div class="field-row"><label for="pe-remove-music">Remove music <span class="hint">GPU, waits for any render to finish</span></label>
+              <select id="pe-remove-music">
+                <option value="off">Off (keep the original audio)</option>
+                <option value="no_music">Remove music (keep speech + sound effects)</option>
+                <option value="voices">Voices only (remove music + sound effects)</option>
+              </select>
+            </div>
+            <div class="field-grid pe-grid-2">
+              <div class="field-row"><label for="pe-orig-eq">Tone</label><select id="pe-orig-eq">
+                <option value="off">Unchanged</option><option value="voice">Voice clarity</option><option value="bass">Bass boost</option><option value="bright">Brighter</option>
+                <option value="telephone">Telephone</option><option value="radio">Old radio</option><option value="muffled">Muffled (next room)</option>
+              </select></div>
+              <div class="field-row"><label for="pe-orig-echo">Space</label><select id="pe-orig-echo">
+                <option value="off">Dry</option><option value="room">Small room</option><option value="hall">Hall</option><option value="echo">Echo</option><option value="stadium">Stadium</option>
+              </select></div>
+            </div>
+            <div class="field-row"><label class="pe-slider-label" for="pe-orig-pitch"><span>Pitch <span class="field-readout" id="pe-orig-pitch-readout"></span></span><button type="button" data-pe-reset="pe-orig-pitch:0" title="Reset">reset</button></label><input id="pe-orig-pitch" type="range" min="-12" max="12" step="0.5" value="0" list="pe-pitch-marks"><datalist id="pe-pitch-marks"><option value="0"></datalist><span class="hint">Semitones, the speed stays the same (render only).</span></div>
+          </div>
+        </details>
+
+        <details class="card" data-pe-group="audio" open>
+          <summary class="card-head"><span class="card-title">Voice-over</span><span class="card-sub">text-to-speech or your own recordings</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <div class="field-row"><label>Voice engine</label>
+              <div class="segmented pe-segmented" id="pe-tts-provider" role="radiogroup" aria-label="TTS engine">
+                <button type="button" class="segment is-active" data-provider="edge">Edge (Microsoft)</button>
+                <button type="button" class="segment" data-provider="tiktok">TikTok</button>
+              </div>
+            </div>
+            <div class="field-grid pe-grid-2">
+              <div class="field-row" id="pe-tts-locale-row"><label for="pe-tts-locale">Language</label><select id="pe-tts-locale"></select></div>
+              <div class="field-row"><label for="pe-tts-voice">Voice</label><select id="pe-tts-voice"></select></div>
+              <div class="field-row"><label for="pe-tts-rate">Speed <span class="field-readout" id="pe-tts-rate-readout">+0%</span></label><input id="pe-tts-rate" type="range" min="-50" max="100" step="5" value="10"></div>
+              <div class="field-row" id="pe-tts-pitch-row"><label for="pe-tts-pitch">Pitch <span class="field-readout" id="pe-tts-pitch-readout">+0Hz</span></label><input id="pe-tts-pitch" type="range" min="-50" max="50" step="2" value="0"></div>
+            </div>
+            <div class="field-row"><label for="pe-tts-text">Script <span class="hint" id="pe-tts-count">0 / 5000</span></label><textarea id="pe-tts-text" rows="5" maxlength="5000" placeholder="He was the weakest hunter in the guild. Then the red gate opened..."></textarea></div>
+            <div class="button-row pe-tts-actions">
+              <button type="button" class="primary-button" id="pe-tts-generate">Generate voice at playhead</button>
+              <button type="button" class="secondary-button" id="pe-tts-sample" title="Hear the selected voice say one short line">Hear voice</button>
+              <button type="button" class="button" id="pe-voice-upload">+ Upload audio&hellip;</button>
+              <input id="pe-voice-file" type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/flac,audio/ogg" hidden>
+            </div>
+            <p class="hint" id="pe-tts-status" aria-live="polite"></p>
+            <div class="button-row" id="pe-voice-clear-row" hidden>
+              <button type="button" class="secondary-button danger" id="pe-voice-clear" title="Delete every narration and voice clip in this list (music and other references are kept)">Delete all voice clips</button>
+            </div>
+            <div class="pe-track-list" id="pe-voice-list"></div>
+            <label class="switch-row" for="pe-duck"><span class="switch-label">Duck under voice <span class="switch-hint">lower the video's sound and music while a voice clip plays</span></span><input type="checkbox" id="pe-duck" checked></label>
+            <div class="field-row" id="pe-duck-row"><label for="pe-duck-strength">Duck strength <span class="field-readout" id="pe-duck-strength-readout">60%</span></label><input id="pe-duck-strength" type="range" min="0" max="1" step="0.05" value="0.6"></div>
+            <div class="field-grid pe-grid-2">
+              <div class="field-row"><label for="pe-voice-fx">Voice effect <span class="hint">all voice clips</span></label><select id="pe-voice-fx">
+                <option value="off">None</option><option value="clear">Clear &amp; present</option><option value="deep">Deeper</option><option value="high">Higher</option>
+                <option value="radio">Radio</option><option value="telephone">Telephone</option><option value="echo">Echo</option><option value="hall">Hall reverb</option><option value="robot">Robot</option>
+              </select></div>
+              <label class="switch-row" for="pe-voice-deess"><span class="switch-label">De-ess <span class="switch-hint">soften sharp "s" sounds</span></span><input type="checkbox" id="pe-voice-deess"></label>
+            </div>
+            <details class="pe-subcard" id="pe-tiktok-settings" hidden>
+              <summary>TikTok connection <span class="hint" id="pe-tiktok-state"></span></summary>
+              <p class="hint">TikTok has no public TTS API, so voices come through an unofficial route. <b>Public</b> uses the free LazyPy service (no login). <b>Direct</b> calls TikTok itself with the <code>sessionid</code> cookie of a logged-in TikTok account (browser dev tools &rarr; Application &rarr; Cookies &rarr; tiktok.com &rarr; sessionid). <b>Custom proxy</b> is for a Weilbyte-style proxy you host. Any of them can break without notice.</p>
+              <div class="field-row"><label>Route</label>
+                <div class="segmented pe-segmented" id="pe-tiktok-mode">
+                  <button type="button" class="segment" data-mode="public">Public (no login)</button>
+                  <button type="button" class="segment" data-mode="direct">Direct (session id)</button>
+                  <button type="button" class="segment" data-mode="proxy">Custom proxy</button>
+                </div>
+              </div>
+              <label class="switch-row" for="pe-tiktok-fallback" id="pe-tiktok-fallback-row"><span class="switch-label">Fall back to Public if this route fails</span><input type="checkbox" id="pe-tiktok-fallback"></label>
+              <div class="field-row" id="pe-tiktok-session-row"><label for="pe-tiktok-session">sessionid cookie</label><div class="enhance-key-row"><input id="pe-tiktok-session" type="password" autocomplete="new-password" spellcheck="false" placeholder="paste the sessionid value"><button type="button" class="secondary-button" id="pe-tiktok-session-clear" hidden>Remove</button></div><span class="hint">Stored on this server only; never sent back to the browser.</span></div>
+              <div class="field-row" id="pe-tiktok-proxy-row"><label for="pe-tiktok-proxy">Proxy URL</label><input id="pe-tiktok-proxy" type="url" spellcheck="false"></div>
+              <div class="button-row"><button type="button" class="secondary-button" id="pe-tiktok-save">Save</button></div>
+            </details>
+          </div>
+        </details>
+
+        <details class="card" data-pe-group="audio" open>
+          <summary class="card-head"><span class="card-title">Music</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <input id="pe-music-search" class="pe-music-search" type="text" role="searchbox" enterkeyhint="search" placeholder="Search music…" aria-label="Search music" autocomplete="off" hidden>
+            <div class="pe-track-list pe-music-list" id="pe-music-list"></div>
+            <div class="button-row"><button type="button" class="button" id="pe-music-upload">+ Add music&hellip;</button><input id="pe-music-file" type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/flac,audio/ogg" hidden></div>
+            <div class="url-music-row"><input id="pe-music-url" type="url" inputmode="url" placeholder="or paste a YouTube, TikTok or Instagram link" aria-label="YouTube, TikTok or Instagram link for music"><button type="button" class="button" id="pe-music-url-add">Download</button></div>
+            <div id="pe-music-controls" hidden>
+              <div class="field-row"><label for="pe-music-volume">Music volume <span class="field-readout" id="pe-music-volume-readout">30%</span></label><input id="pe-music-volume" type="range" min="0" max="1.5" step="0.05" value="0.3"></div>
+              <div class="field-grid pe-grid-3">
+                <div class="field-row"><label for="pe-music-start">Starts at (s)</label><input id="pe-music-start" type="number" min="0" step="0.1" value="0"></div>
+                <div class="field-row"><label for="pe-music-fade-in">Fade in (s)</label><input id="pe-music-fade-in" type="number" min="0" max="10" step="0.1" value="0"></div>
+                <div class="field-row"><label for="pe-music-fade">Fade out (s)</label><input id="pe-music-fade" type="number" min="0" max="10" step="0.1" value="1.5"></div>
+              </div>
+              <div class="field-row">
+                <label>Part of the song <span class="hint" id="pe-music-range-readout"></span></label>
+                <div class="pe-wave" id="pe-wave" title="Click to set where the music starts; drag the handles to adjust the start and end">
+                  <canvas id="pe-wave-canvas"></canvas>
+                  <div class="pe-wave-sel" id="pe-wave-sel"><span class="pe-handle" data-wave-handle="in"></span><span class="pe-handle" data-wave-handle="out"></span></div>
+                  <div class="pe-wave-head" id="pe-wave-head" hidden></div>
+                </div>
+                <div class="pe-grid-3 field-grid pe-wave-fields">
+                  <div class="field-row"><label for="pe-music-in">Starts from (s)</label><input id="pe-music-in" type="number" min="0" step="0.1" value="0"></div>
+                  <div class="field-row"><label for="pe-music-out">Stops at (s)</label><input id="pe-music-out" type="number" min="0" step="0.1" placeholder="end"></div>
+                  <button type="button" class="secondary-button" id="pe-music-listen" title="Play the music from the selected start">&#9654; Listen</button>
+                </div>
+              </div>
+              <label class="switch-row" for="pe-music-loop"><span class="switch-label">Loop to fill the video <span class="switch-hint">repeats the selected part</span></span><input type="checkbox" id="pe-music-loop" checked></label>
+            </div>
+          </div>
+        </details>
+
+        <details class="card" data-pe-group="text" open>
+          <summary class="card-head"><span class="card-title">Captions &amp; text</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <label class="switch-row" for="pe-captions"><span class="switch-label">Burn in captions</span><input type="checkbox" id="pe-captions"></label>
+            <div id="pe-caption-options" hidden>
+            <div class="field-row"><label for="pe-caption-source">Caption text from</label><select id="pe-caption-source"><option value="tts">TTS voice clips</option><option value="whisper">Whisper · source video audio</option></select></div>
+            <div id="pe-whisper-options" hidden><div class="button-row"><button type="button" class="secondary-button" id="pe-whisper-transcribe">Transcribe source audio</button><span class="hint" id="pe-whisper-status" aria-live="polite"></span></div><p class="hint">Uses the source video's audio before Post Edit adds music. Whisper large-v3 runs locally; the first transcription may take a few minutes.</p></div>
+            <div class="field-row"><label>Caption style</label>
+              <div class="segmented pe-segmented" id="pe-caption-kind" role="radiogroup" aria-label="Caption style">
+                <button type="button" class="segment" data-caption-style="classic">Classic subtitles</button>
+                <button type="button" class="segment" data-caption-style="pop">Pop (TikTok)</button>
+              </div>
+            </div>
+            <div class="field-grid pe-grid-3" id="pe-pop-options" hidden>
+              <div class="field-row"><label for="pe-pop-words">Words at a time</label><select id="pe-pop-words"><option value="1">1 (fastest)</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></div>
+              <div class="field-row"><label for="pe-pop-highlight">Spoken word</label><input id="pe-pop-highlight" type="color" value="#ffe14d"></div>
+              <div class="field-row pe-pop-switches">
+                <label class="pe-inline-check"><input type="checkbox" id="pe-pop-uppercase" checked> ALL CAPS</label>
+                <label class="pe-inline-check"><input type="checkbox" id="pe-pop-tilt" checked> Tilt</label>
+              </div>
+            </div>
+            <div class="field-grid pe-grid-3" id="pe-caption-style">
+              <div class="field-row"><label for="pe-caption-size">Size</label><input id="pe-caption-size" type="number" min="8" max="80" value="22"></div>
+              <div class="field-row"><label for="pe-caption-position">Position</label><select id="pe-caption-position"><option value="bottom">Bottom</option><option value="middle">Middle</option><option value="top">Top</option></select></div>
+              <div class="field-row"><label for="pe-caption-color">Color</label><input id="pe-caption-color" type="color" value="#ffffff"></div>
+            </div>
+            </div>
+            <div class="pe-track-list" id="pe-text-list"></div>
+            <div class="button-row"><button type="button" class="button" id="pe-text-add">+ Add text at playhead</button></div>
+          </div>
+        </details>
+
+        <details class="card" data-pe-group="audio" open>
+          <summary class="card-head"><span class="card-title">Mix &amp; master</span><span class="card-sub">the finished soundtrack</span><span class="card-badge" id="pe-master-badge"></span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <div class="pe-sliders">
+              <div class="field-row"><label class="pe-slider-label" for="pe-master-bass"><span>Bass <span class="field-readout" id="pe-master-bass-readout"></span></span><button type="button" data-pe-reset="pe-master-bass:0" title="Reset">reset</button></label><input id="pe-master-bass" type="range" min="-12" max="12" step="0.5" value="0"></div>
+              <div class="field-row"><label class="pe-slider-label" for="pe-master-treble"><span>Treble <span class="field-readout" id="pe-master-treble-readout"></span></span><button type="button" data-pe-reset="pe-master-treble:0" title="Reset">reset</button></label><input id="pe-master-treble" type="range" min="-12" max="12" step="0.5" value="0"></div>
+              <div class="field-row"><label class="pe-slider-label" for="pe-stereo-width"><span>Stereo width <span class="field-readout" id="pe-stereo-width-readout"></span></span><button type="button" data-pe-reset="pe-stereo-width:1" title="Reset">reset</button></label><input id="pe-stereo-width" type="range" min="0" max="2" step="0.05" value="1"></div>
+              <div class="field-row"><label for="pe-master-compress">Compressor</label><select id="pe-master-compress">
+                <option value="off">Off</option><option value="light">Light (gentle glue)</option><option value="punchy">Punchy</option><option value="broadcast">Broadcast (loud &amp; even)</option>
+              </select></div>
+            </div>
+            <p class="hint">Applied to everything at the end (original sound, music and voice-over), before Normalize.</p>
+          </div>
+        </details>
+
+        <details class="card" data-pe-group="export" open>
+          <summary class="card-head"><span class="card-title">Output</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <div class="field-row"><label for="pe-quality">Quality</label><select id="pe-quality"><option value="standard">Standard (CRF 18)</option><option value="high" selected>High (CRF 12)</option><option value="near_lossless">Near-lossless (CRF 4, big files)</option></select></div>
+            <p class="hint">Renders appear in the Studio's generations list as "Post-Edit" jobs, and can be edited again.</p>
+          </div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- Settings for alerts and processed downloads. Saved on the server. -->
+  <section class="settings-view" id="settings-view" aria-label="Settings" hidden>
+    <div class="ds-layout">
+      <nav class="settings-index" aria-label="Settings sections">
+        <span class="settings-index-label">SETTINGS</span>
+        <a class="settings-index-link is-active" href="#settings-general" data-settings-link="settings-general" aria-current="location"><span class="settings-index-number">01</span><span><strong>General</strong><small>Alerts & downloads</small></span></a>
+        <a class="settings-index-link" href="#settings-visual" data-settings-link="settings-visual"><span class="settings-index-number">02</span><span><strong>Visual marks</strong><small>Text, logo & tiles</small></span></a>
+        <a class="settings-index-link" href="#settings-audio" data-settings-link="settings-audio"><span class="settings-index-number">03</span><span><strong>Audio marks</strong><small>Tags & marker tone</small></span></a>
+        <a class="settings-index-link" href="#settings-finish" data-settings-link="settings-finish"><span class="settings-index-number">04</span><span><strong>Finishing</strong><small>Outro & metadata</small></span></a>
+      </nav>
+      <div class="ds-controls">
+        <section class="ds-group" id="settings-general" aria-labelledby="settings-general-title">
+          <div class="ds-group-head"><span class="ds-group-number">01</span><div><h2 id="settings-general-title">General</h2><p>How H3 Machine alerts you and prepares files for download.</p></div><div class="settings-save-indicator"><span class="settings-save-dot" aria-hidden="true"></span><span class="enhance-save-state" id="ds-save-state" aria-live="polite">Auto-save</span></div></div>
+        <details class="card" open>
+          <summary class="card-head"><span class="card-title">Completion sound</span><span class="card-sub">the ping when a generation finishes (alerts on)</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <div class="field-grid">
+              <div class="field-row"><label for="ping-sound">Sound</label><select id="ping-sound">
+                <option value="chime">Chime (default)</option>
+                <option value="ding">Ding</option>
+                <option value="bell">Bell</option>
+                <option value="marimba">Marimba</option>
+                <option value="rise">Rising arpeggio</option>
+                <option value="coin">Arcade coin</option>
+                <option value="triple">Triple beep</option>
+                <option value="pop">Pop</option>
+                <option value="custom">Your sound (upload one below)</option>
+                <option value="none">None (silent)</option>
+              </select></div>
+              <div class="field-row"><label for="ping-volume">Volume <span class="field-readout" id="ping-volume-readout"></span></label><input id="ping-volume" type="range" min="0" max="1" step="0.05"></div>
+            </div>
+            <div class="ds-outro-actions">
+              <button type="button" class="button" id="ping-test"><span data-icon="play"></span> Test</button>
+              <button type="button" class="button ghost" id="ping-upload">Upload sound&hellip;</button>
+              <button type="button" class="secondary-button danger" id="ping-remove" hidden>Remove</button>
+              <input id="ping-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.opus,.flac" hidden>
+              <span class="hint">Your own sound: MP3, WAV, M4A, AAC, OGG, OPUS or FLAC, up to 10 s. Saved for every device. Push notifications use the phone's own notification sound.</span>
+            </div>
+          </div>
+        </details>
+        <details class="card" open>
+          <summary class="card-head"><span class="card-title">Downloads</span><span class="card-sub">Processing, last frames, and file names</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <label class="switch-row" for="ds-enabled"><span class="switch-label">Process downloads <span class="switch-hint">off = you get the untouched original file</span></span><input type="checkbox" id="ds-enabled" data-ds="enabled"></label>
+            <label class="switch-row" for="ds-frames"><span class="switch-label">Also watermark "last frame" PNGs</span><input type="checkbox" id="ds-frames" data-ds="apply_to_frames"></label>
+            <div class="field-row"><label for="ds-pattern">File name <span class="hint">{model} {date} {id} {prompt} {duration} {size}</span></label><input id="ds-pattern" type="text" maxlength="120" data-ds="filename_pattern" spellcheck="false"><span class="hint" id="ds-pattern-example"></span></div>
+          </div>
+        </details>
+        </section>
+        <section class="ds-group" id="settings-visual" aria-labelledby="settings-visual-title">
+          <div class="ds-group-head"><span class="ds-group-number">02</span><div><h2 id="settings-visual-title">Visual watermarks</h2><p>Choose the marks viewers can see on your video.</p></div></div>
+        <details class="card">
+          <summary class="card-head"><span class="card-title">Text watermark</span><span class="card-sub">A readable signature on every frame</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <label class="switch-row" for="ds-text-on"><span class="switch-label">Draw text on the video</span><input type="checkbox" id="ds-text-on" data-ds="text.enabled"></label>
+            <div class="field-row"><label for="ds-text">Text</label><input id="ds-text" type="text" maxlength="200" data-ds="text.text"></div>
+            <div class="field-grid">
+              <div class="field-row"><label for="ds-text-pos">Position</label><select id="ds-text-pos" data-ds="text.position"><option value="bottom-right">Bottom right</option><option value="bottom-left">Bottom left</option><option value="top-right">Top right</option><option value="top-left">Top left</option><option value="bottom">Bottom center</option><option value="top">Top center</option><option value="center">Center</option><option value="bounce">Moving: bounces around (hard to crop)</option><option value="jump">Moving: jumps to a new spot</option></select></div>
+              <div class="field-row"><label for="ds-text-color">Color</label><input id="ds-text-color" type="color" data-ds="text.color"></div>
+              <div class="field-row"><label for="ds-text-size">Size <span class="field-readout" data-ds-readout="text.size" data-unit="% of height"></span></label><input id="ds-text-size" type="range" min="1" max="20" step="0.5" data-ds="text.size"></div>
+              <div class="field-row"><label for="ds-text-opacity">Opacity <span class="field-readout" data-ds-readout="text.opacity" data-unit="%" data-scale="100"></span></label><input id="ds-text-opacity" type="range" min="0.05" max="1" step="0.05" data-ds="text.opacity"></div>
+              <div class="field-row" data-ds-moving="text" data-ds-move="bounce"><label for="ds-text-speed">Speed <span class="field-readout" data-ds-readout="text.speed" data-unit="x"></span></label><input id="ds-text-speed" type="range" min="0.1" max="5" step="0.1" data-ds="text.speed"></div>
+              <div class="field-row" data-ds-moving="text" data-ds-move="jump"><label for="ds-text-interval">Jump every (s)</label><input id="ds-text-interval" type="number" min="0.5" max="30" step="0.5" data-ds="text.interval"></div>
+              <div class="field-row" data-ds-static="text"><label for="ds-text-margin">Edge margin <span class="field-readout" data-ds-readout="text.margin" data-unit="%"></span></label><input id="ds-text-margin" type="range" min="0" max="20" step="0.5" data-ds="text.margin"></div>
+            </div>
+            <div class="field-grid">
+              <label class="switch-row" for="ds-text-outline"><span class="switch-label">Outline</span><input type="checkbox" id="ds-text-outline" data-ds="text.outline"></label>
+              <label class="switch-row" for="ds-text-box"><span class="switch-label">Background box</span><input type="checkbox" id="ds-text-box" data-ds="text.box"></label>
+            </div>
+          </div>
+        </details>
+        <details class="card">
+          <summary class="card-head"><span class="card-title">Logo watermark</span><span class="card-sub">Place your image over the video</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <label class="switch-row" for="ds-logo-on"><span class="switch-label">Overlay a logo image</span><input type="checkbox" id="ds-logo-on" data-ds="logo.enabled"></label>
+            <div class="ds-logo-row">
+              <img id="ds-logo-img" alt="Current logo" hidden>
+              <button type="button" class="button" id="ds-logo-upload">Upload logo&hellip;</button>
+              <button type="button" class="secondary-button danger" id="ds-logo-remove" hidden>Remove</button>
+              <input id="ds-logo-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+              <span class="hint">PNG with transparency looks best.</span>
+            </div>
+            <div class="field-grid">
+              <div class="field-row"><label for="ds-logo-pos">Position</label><select id="ds-logo-pos" data-ds="logo.position"><option value="bottom-right">Bottom right</option><option value="bottom-left">Bottom left</option><option value="top-right">Top right</option><option value="top-left">Top left</option><option value="bottom">Bottom center</option><option value="top">Top center</option><option value="center">Center</option><option value="bounce">Moving: bounces around (hard to crop)</option><option value="jump">Moving: jumps to a new spot</option></select></div>
+              <div class="field-row"><label for="ds-logo-width">Width <span class="field-readout" data-ds-readout="logo.width" data-unit="% of width"></span></label><input id="ds-logo-width" type="range" min="2" max="60" step="1" data-ds="logo.width"></div>
+              <div class="field-row"><label for="ds-logo-opacity">Opacity <span class="field-readout" data-ds-readout="logo.opacity" data-unit="%" data-scale="100"></span></label><input id="ds-logo-opacity" type="range" min="0.05" max="1" step="0.05" data-ds="logo.opacity"></div>
+              <div class="field-row" data-ds-static="logo"><label for="ds-logo-margin">Edge margin <span class="field-readout" data-ds-readout="logo.margin" data-unit="%"></span></label><input id="ds-logo-margin" type="range" min="0" max="20" step="0.5" data-ds="logo.margin"></div>
+              <div class="field-row" data-ds-moving="logo" data-ds-move="bounce"><label for="ds-logo-speed">Speed <span class="field-readout" data-ds-readout="logo.speed" data-unit="x"></span></label><input id="ds-logo-speed" type="range" min="0.1" max="5" step="0.1" data-ds="logo.speed"></div>
+              <div class="field-row" data-ds-moving="logo" data-ds-move="jump"><label for="ds-logo-interval">Jump every (s)</label><input id="ds-logo-interval" type="number" min="0.5" max="30" step="0.5" data-ds="logo.interval"></div>
+            </div>
+          </div>
+        </details>
+        <details class="card">
+          <summary class="card-head"><span class="card-title">Tiled watermark</span><span class="card-sub">repeated diagonal text over the whole frame</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <label class="switch-row" for="ds-tiled-on"><span class="switch-label">Tile text across the video <span class="switch-hint">at 2&ndash;5% opacity it's nearly invisible but can't be cropped out</span></span><input type="checkbox" id="ds-tiled-on" data-ds="tiled.enabled"></label>
+            <div class="field-row"><label for="ds-tiled-text">Text</label><input id="ds-tiled-text" type="text" maxlength="200" data-ds="tiled.text"></div>
+            <div class="field-grid">
+              <div class="field-row"><label for="ds-tiled-opacity">Opacity <span class="field-readout" data-ds-readout="tiled.opacity" data-unit="%" data-scale="100"></span></label><input id="ds-tiled-opacity" type="range" min="0.01" max="0.6" step="0.01" data-ds="tiled.opacity"></div>
+              <div class="field-row"><label for="ds-tiled-size">Size <span class="field-readout" data-ds-readout="tiled.size" data-unit="%"></span></label><input id="ds-tiled-size" type="range" min="1" max="15" step="0.5" data-ds="tiled.size"></div>
+              <div class="field-row"><label for="ds-tiled-angle">Angle <span class="field-readout" data-ds-readout="tiled.angle" data-unit="&deg;"></span></label><input id="ds-tiled-angle" type="range" min="-90" max="90" step="5" data-ds="tiled.angle"></div>
+              <div class="field-row"><label for="ds-tiled-spacing">Spacing <span class="field-readout" data-ds-readout="tiled.spacing" data-unit="x"></span></label><input id="ds-tiled-spacing" type="range" min="1.1" max="6" step="0.1" data-ds="tiled.spacing"></div>
+              <div class="field-row"><label for="ds-tiled-color">Color</label><input id="ds-tiled-color" type="color" data-ds="tiled.color"></div>
+            </div>
+          </div>
+        </details>
+        </section>
+        <section class="ds-group" id="settings-audio" aria-labelledby="settings-audio-title">
+          <div class="ds-group-head"><span class="ds-group-number">03</span><div><h2 id="settings-audio-title">Audio watermarks</h2><p>Add an audible signature or a subtle marker tone.</p></div></div>
+        <details class="card">
+          <summary class="card-head"><span class="card-title">Audio watermark</span><span class="card-sub">Spoken tags and hidden marker tones</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <label class="switch-row" for="ds-tag-on"><span class="switch-label">Audio tag <span class="switch-hint">a spoken phrase or your own sound, mixed into the video's audio</span></span><input type="checkbox" id="ds-tag-on" data-ds="audio_tag.enabled"></label>
+            <div class="field-row"><label for="ds-tag-source">Sound</label><select id="ds-tag-source" data-ds="audio_tag.source"><option value="tts">A voice says a phrase (Edge TTS)</option><option value="file">An uploaded sound file</option></select></div>
+            <div class="field-row" data-ds-tag-source="tts"><label for="ds-tag-text">Phrase</label><input id="ds-tag-text" type="text" maxlength="200" data-ds="audio_tag.text"></div>
+            <div class="ds-audio-row" data-ds-tag-source="file">
+              <audio id="ds-tag-audio" controls preload="none" hidden></audio>
+              <div class="ds-outro-actions">
+                <button type="button" class="button" id="ds-tag-upload">Upload sound&hellip;</button>
+                <button type="button" class="secondary-button danger" id="ds-tag-remove" hidden>Remove</button>
+                <input id="ds-tag-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.opus,.flac" hidden>
+                <span class="hint" id="ds-tag-info">MP3, WAV, M4A, AAC, OGG, OPUS or FLAC, up to 60 s and 20 MB.</span>
+              </div>
+            </div>
+            <div class="field-grid">
+              <div class="field-row" data-ds-tag-source="tts"><label for="ds-tag-voice">Voice</label><select id="ds-tag-voice" data-ds="audio_tag.voice"></select></div>
+              <div class="field-row"><label for="ds-tag-where">When</label><select id="ds-tag-where" data-ds="audio_tag.where"><option value="start">At the start</option><option value="middle">In the middle</option><option value="end">At the end</option><option value="random">Random (a different spot per video)</option></select></div>
+              <div class="field-row"><label for="ds-tag-volume">Volume <span class="field-readout" data-ds-readout="audio_tag.volume" data-unit="%" data-scale="100"></span></label><input id="ds-tag-volume" type="range" min="0.05" max="2" step="0.05" data-ds="audio_tag.volume"></div>
+            </div>
+            <label class="switch-row" for="ds-marker-on"><span class="switch-label">Hidden marker tone <span class="switch-hint">a quiet high-pitched tone most people can't hear; heavy re-compression may remove it</span></span><input type="checkbox" id="ds-marker-on" data-ds="audio_marker.enabled"></label>
+            <div class="field-grid">
+              <div class="field-row"><label for="ds-marker-freq">Frequency <span class="field-readout" data-ds-readout="audio_marker.frequency" data-unit=" Hz"></span></label><input id="ds-marker-freq" type="range" min="15000" max="21000" step="250" data-ds="audio_marker.frequency"></div>
+              <div class="field-row"><label for="ds-marker-volume">Level <span class="field-readout" data-ds-readout="audio_marker.volume" data-unit="%" data-scale="100"></span></label><input id="ds-marker-volume" type="range" min="0.001" max="0.05" step="0.001" data-ds="audio_marker.volume"></div>
+            </div>
+          </div>
+        </details>
+        </section>
+        <section class="ds-group" id="settings-finish" aria-labelledby="settings-finish-title">
+          <div class="ds-group-head"><span class="ds-group-number">04</span><div><h2 id="settings-finish-title">Finishing & metadata</h2><p>Append an end card and choose which file details to keep.</p></div></div>
+        <details class="card">
+          <summary class="card-head"><span class="card-title">Video at the end</span><span class="card-sub">an outro / end card appended to every download</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <label class="switch-row" for="ds-outro-on"><span class="switch-label">Append a video at the end <span class="switch-hint">plays after your video; the other watermarks aren't drawn on it</span></span><input type="checkbox" id="ds-outro-on" data-ds="outro.enabled"></label>
+            <div class="ds-outro-row">
+              <video id="ds-outro-video" controls playsinline preload="none" hidden></video>
+              <div class="ds-outro-actions">
+                <button type="button" class="button" id="ds-outro-upload">Upload video&hellip;</button>
+                <button type="button" class="secondary-button danger" id="ds-outro-remove" hidden>Remove</button>
+                <input id="ds-outro-file" type="file" accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mp4,.mov,.webm,.mkv" hidden>
+                <span class="hint" id="ds-outro-info">MP4, MOV, WEBM or MKV, up to 60 s and 50 MB.</span>
+              </div>
+            </div>
+            <div class="field-grid">
+              <div class="field-row"><label for="ds-outro-fit">If its shape differs</label><select id="ds-outro-fit" data-ds="outro.fit"><option value="fit">Fit (black bars)</option><option value="fill">Fill (crop the edges)</option></select></div>
+              <div class="field-row"><label for="ds-outro-fade">Fade through black <span class="field-readout" data-ds-readout="outro.fade" data-unit=" s"></span></label><input id="ds-outro-fade" type="range" min="0" max="2" step="0.1" data-ds="outro.fade"></div>
+              <label class="switch-row" for="ds-outro-audio"><span class="switch-label">Keep the outro's sound <span class="switch-hint">off = silence</span></span><input type="checkbox" id="ds-outro-audio" data-ds="outro.keep_audio"></label>
+              <div class="field-row"><label for="ds-outro-volume">Outro volume <span class="field-readout" data-ds-readout="outro.volume" data-unit="%" data-scale="100"></span></label><input id="ds-outro-volume" type="range" min="0" max="2" step="0.05" data-ds="outro.volume"></div>
+            </div>
+          </div>
+        </details>
+        <details class="card">
+          <summary class="card-head"><span class="card-title">Metadata</span><span class="card-sub">Control the details embedded in files</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <label class="switch-row" for="ds-strip"><span class="switch-label">Strip all metadata <span class="switch-hint">removes the embedded ComfyUI workflow, prompt, encoder and dates</span></span><input type="checkbox" id="ds-strip" data-ds="metadata.strip"></label>
+            <p class="hint">Then write these (blank fields are left out):</p>
+            <div class="field-grid">
+              <div class="field-row"><label for="ds-meta-title">Title</label><input id="ds-meta-title" type="text" maxlength="500" data-ds="metadata.title"></div>
+              <div class="field-row"><label for="ds-meta-artist">Author / artist</label><input id="ds-meta-artist" type="text" maxlength="500" data-ds="metadata.artist"></div>
+              <div class="field-row"><label for="ds-meta-copyright">Copyright</label><input id="ds-meta-copyright" type="text" maxlength="500" data-ds="metadata.copyright"></div>
+              <div class="field-row"><label for="ds-meta-description">Description</label><input id="ds-meta-description" type="text" maxlength="500" data-ds="metadata.description"></div>
+            </div>
+            <div class="field-row"><label for="ds-meta-comment">Message <span class="hint">(written as the comment)</span></label><textarea id="ds-meta-comment" rows="2" maxlength="500" data-ds="metadata.comment"></textarea></div>
+          </div>
+        </details>
+        </section>
+      </div>
+      <aside class="ds-preview-col" aria-label="Download preview">
+        <div class="settings-preview-head"><span class="settings-index-label">LIVE PREVIEW</span><strong>See it before download</strong><p>Check how visual marks appear on a frame.</p></div>
+        <div class="ds-preview">
+          <img id="ds-preview-img" alt="Watermark preview">
+          <div class="ds-preview-empty" id="ds-preview-empty">Turn on a visual watermark to see it here.</div>
+        </div>
+        <div class="field-row"><label for="ds-preview-at">Preview time <span class="field-readout" id="ds-preview-at-readout">1.0s</span></label><input id="ds-preview-at" type="range" min="0" max="15" step="0.25" value="1"><span class="hint">Moving watermarks change position over time: drag to check.</span></div>
+        <div class="button-row">
+          <button type="button" class="secondary-button" id="ds-preview-refresh">Refresh preview</button>
+          <a class="secondary-button" id="ds-test-download" href="#" download>Test download (newest video)</a>
+        </div>
+        <p class="hint" id="ds-preview-note"></p>
+      </aside>
+    </div>
+  </section>
+
+  <main class="app-shell">
+    <section class="composer-panel" aria-label="Generation controls">
+      <h1>Create a video</h1>
+      <form id="generate-form">
+        <div class="field-grid model-mode">
+          <div class="field-row">
+            <label for="model">Model</label>
+            <select id="model">
+              <option value="minimax_h3">MiniMax H3</option>
+              <option value="ltx_2_5">LTX 2.5</option>
+              <option value="wan_2_2">Wan 2.2</option>
+            </select>
+          </div>
+          <div class="field-row" id="mode-row">
+            <label for="mode">Mode</label>
+            <select id="mode">
+              <option value="text">Text</option>
+              <option value="fl2v">Keyframe</option>
+              <option value="ref2v">Reference</option>
+            </select>
+          </div>
+        </div>
+        <div class="settings-reset-row">
+          <span class="hint">Settings are kept when you refresh.</span>
+          <button type="button" class="button ghost settings-reset" id="settings-reset" title="Go back to the selected preset, or the defaults if no preset is selected (prompt and references are kept)">&#8634; Reset</button>
+        </div>
+
+        <!-- MiniMax H3 / LTX 2.5 only. The selected preset is remembered per model in a cookie. -->
+        <div class="field-row preset-row" id="preset-row" hidden>
+          <label for="preset">Preset <span class="hint" id="preset-status"></span></label>
+          <div class="seed-control">
+            <select id="preset"></select>
+            <button type="button" class="icon-button" id="preset-save" title="Update this preset with the current settings" aria-label="Save preset"><span data-icon="save"></span></button>
+            <button type="button" class="icon-button preset-save-as" id="preset-new" title="Save the current settings as a new or existing preset">Save as&hellip;</button>
+            <button type="button" class="icon-button" id="preset-rename" title="Rename this preset" aria-label="Rename preset"><span data-icon="pencil"></span></button>
+            <button type="button" class="icon-button" id="preset-delete" title="Delete this preset" aria-label="Delete preset"><span data-icon="trash"></span></button>
+          </div>
+        </div>
+
+        <!-- Right under Model/Mode, and sticky, so Generate is always in reach. -->
+        <div class="composer-footer">
+          <div class="eta" id="eta" aria-live="polite">
+            <span class="eta-label">Estimated time to complete</span>
+            <span class="eta-value" id="eta-value">—</span>
+            <span class="eta-basis" id="eta-basis"></span>
+            <span class="eta-score is-empty" id="eta-score" title=""></span>
+            <span class="eta-compile" id="eta-compile" hidden></span>
+          </div>
+          <button type="submit" class="primary-button" id="generate-button">Generate</button>
+        </div>
+
+        <!-- Agentic card (2026-10-18): titled like Prompt so it's clear this is the Agentic part; the guide box,
+             Queue button, settings and the list of queued Agentic runs live inside. Enhance sits in the Prompt header. -->
+        <details class="card enhance-composer agentic-card" id="enhance-composer">
+          <summary class="card-head"><span class="card-title">Agentic</span><span class="card-sub agentic-card-sub">Hermes plans, renders and checks the clips for you</span><span class="agentic-session-status" id="agentic-session-status" hidden></span><span class="agentic-queue-badge" id="agentic-queue-badge" hidden></span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <div class="agentic-queue" id="agentic-queue" hidden>
+              <div class="agentic-queue-head"><strong>Agentic runs</strong><span class="hint" id="agentic-queue-count"></span></div>
+              <ol class="agentic-queue-list" id="agentic-queue-list"></ol>
+            </div>
+            <label for="enhance-extra-prompt">Agentic instructions</label>
+            <p class="hint agentic-guide-hint">What Hermes should make: number of clips, total length, continuity, references to use or exclude, what to preserve. If the Prompt below is empty, this is the whole brief.</p>
+            <div class="guide-editor"><pre class="prompt-highlight" id="guide-highlight" aria-hidden="true"></pre><textarea id="enhance-extra-prompt" rows="4" spellcheck="false" placeholder="e.g. 3 clips, about 30 s total, same woman in a red coat in every clip. Say post edit and/or stitch to have Agentic finish the clips."></textarea><div class="alias-menu" id="guide-menu" role="listbox" hidden></div></div>
+            <div class="agentic-actions">
+              <button type="button" class="agentic-queue-button" id="agentic" title="Queue an Agentic run: Hermes plans the clips from the Prompt and these instructions, renders and reviews them"><span data-icon="sparkles"></span> Queue Agentic run</button>
+              <button type="button" class="secondary-button agentic-settings-button" id="enhance-settings" title="Hermes model, Agentic steps and the live log"><span data-icon="settings"></span> Agentic settings</button>
+            </div>
+            <p class="hint">Supports multi-clip videos.</p>
+          </div>
+        </details>
+
+        <!-- Every workflow uses the same cards in the same order: Prompt, Inputs,
+             Output, Model & sampling, LoRAs, then its extras. Model-specific blocks inside a card are shown
+             and hidden by setModel(). -->
+        <details class="card" open>
+          <summary class="card-head"><span class="card-title">Prompt</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <div class="field-row field-row-prompt" id="prompt-suite">
+            <div class="prompt-toolbar">
+              <span class="prompt-toolbar-title">Prompt</span>
+              <button type="button" class="button ghost prompt-refs-button" id="prompt-refs-toggle" aria-pressed="false" title="Show the attached references next to the prompt"><span data-icon="images"></span> Show references</button>
+              <button type="button" class="button ghost prompt-keyboard-button" id="prompt-keyboard-hide" title="Hide the keyboard" aria-label="Hide the keyboard"><svg class="prompt-fs-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="11" rx="2"/><path d="M7 8h.01M11 8h.01M15 8h.01M8 11.5h8M9 19l3 2 3-2"/></svg></button>
+              <button type="button" class="button ghost prompt-undo-button" id="enhance-undo" hidden title="Put back the prompt from before the last Enhance">&#8630; Undo</button>
+              <button type="button" class="button ghost prompt-enhance-button" id="enhance" title="Enhance: Hermes rewrites this prompt for H3 (nothing is rendered)"><span data-icon="sparkles"></span> Enhance</button>
+              <button type="button" class="button ghost prompt-fullscreen-button" id="prompt-fullscreen" aria-pressed="false" title="Edit the prompt full screen (Esc to exit)"><svg class="prompt-fs-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg> Fullscreen</button>
+            </div>
+            <div class="prompt-ref-audio" id="prompt-ref-audio" hidden></div>
+            <div class="prompt-workspace">
+            <div class="prompt-editor">
+              <pre class="prompt-highlight" id="prompt-highlight" aria-hidden="true"></pre>
+              <textarea id="prompt" rows="6" maxlength="20000" placeholder="Describe your video..." required spellcheck="false" aria-label="Prompt"></textarea>
+              <div class="alias-menu" id="alias-menu" role="listbox" hidden></div>
+            </div>
+            <div class="prompt-ref-split" id="prompt-ref-split" role="separator" aria-label="Prompt / reference split" title="Drag to resize: snaps to the perfect fit (pink) and half and half (green). Double-click: back to the fit." aria-valuemin="20" aria-valuemax="80" tabindex="0" hidden></div>
+            <div class="prompt-ref-stage" id="prompt-ref-stage" hidden></div>
+            <div class="prompt-ref-list" id="prompt-ref-list" role="list" aria-label="References" hidden></div>
+            </div>
+            <div class="prompt-snippets-resize" id="prompt-snippets-resize" role="separator" aria-orientation="horizontal" aria-label="Hotbar rows" aria-valuemin="1" aria-valuemax="8" tabindex="0"></div>
+            <div class="prompt-snippets" id="prompt-snippets" role="toolbar" aria-label="Insert into prompt"></div>
+            <div class="prompt-snippet-hint" id="prompt-snippet-hint" aria-live="polite"></div>
+          </div>
+          </div>
+        </details>
+
+        <details class="card card-inputs" id="keyframe-panel" open hidden>
+          <summary class="card-head"><span class="card-title">Keyframes</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <div class="anchor-block">
+            <span class="hint">First frame &mdash; required</span>
+            <div class="anchor-upload" data-drop-role="first">
+              <img id="first-frame-preview" class="anchor-preview" hidden>
+              <button class="button" type="button" id="first-frame-upload">Upload&hellip;</button>
+              <button class="button ghost" type="button" id="first-frame-match" hidden>Match resolution</button>
+              <button class="button ghost" type="button" id="first-frame-remove" hidden>Remove</button>
+              <input id="first-frame-file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" hidden>
+            </div>
+          </div>
+          <div class="anchor-block">
+            <span class="hint">Last frame &mdash; optional</span>
+            <div class="anchor-upload" data-drop-role="last">
+              <img id="last-frame-preview" class="anchor-preview" hidden>
+              <button class="button" type="button" id="last-frame-upload">Upload&hellip;</button>
+              <button class="button ghost" type="button" id="last-frame-remove" hidden>Remove</button>
+              <input id="last-frame-file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" hidden>
+            </div>
+          </div>
+          </div>
+        </details>
+
+        <details class="card card-inputs" id="reference-panel" open hidden>
+          <summary class="card-head"><span class="card-title">References</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <p class="hint" id="reference-hint" hidden>LTX 2.5 Reference mode (MSR V2): Images 1&ndash;4 are subjects, Image 5 is the background/scene. Audio 1 is Image 1's voice and Audio 2 is Image 2's. Describe each one in the prompt, e.g. &ldquo;&lt;Picture 1&gt;: young man in a leather jacket&hellip;&rdquo; &mdash; tokens are sent as Image 1, Image 2&hellip;</p>
+          <div class="reference-totals" id="reference-count"></div>
+          <div class="reference-list" id="reference-list"></div>
+          <div class="button-row">
+            <button class="button" type="button" id="reference-upload">+ Add reference&hellip;</button>
+            <input id="reference-file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp,video/mp4,video/webm,video/quicktime,video/x-matroska,audio/mpeg,audio/wav,audio/mp4,audio/flac,audio/ogg" multiple hidden>
+          </div>
+          <div class="url-music-row"><input id="reference-url" type="url" inputmode="url" placeholder="or paste a YouTube, TikTok or Instagram video link" aria-label="Video link to add as a reference"><button type="button" class="button" id="reference-url-add">Download</button></div>
+          <div class="drop-zone" id="reference-drop-zone" data-drop-role="references">Drop reference images, videos, or audio here</div>
+          </div>
+        </details>
+
+        <details class="card card-inputs" id="sh-references-card" hidden>
+          <summary class="card-head"><span class="card-title" id="sh-reference-summary">References &mdash; optional</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <div id="seedhunter-reference-panel" class="stack">
+            <div class="field-row"><span class="hint">Images <span id="sh-image-count"></span></span></div>
+            <div class="reference-list" id="sh-image-list"></div>
+            <div class="button-row">
+              <button class="button" type="button" id="sh-image-upload">+ Add image&hellip;</button>
+              <input id="sh-image-file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" multiple hidden>
+            </div>
+            <div class="drop-zone" id="sh-image-drop-zone" data-drop-role="sh-images">Drop reference images here</div>
+
+            <div class="field-row"><span class="hint">Videos <span id="sh-video-count"></span></span></div>
+            <div class="reference-list" id="sh-video-list"></div>
+            <div class="button-row">
+              <button class="button" type="button" id="sh-video-upload">+ Add video&hellip;</button>
+              <input id="sh-video-file" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska" multiple hidden>
+            </div>
+
+            <div class="field-row"><span class="hint">Audio <span id="sh-audio-count"></span></span></div>
+            <div class="reference-list" id="sh-audio-list"></div>
+            <div class="button-row">
+              <button class="button" type="button" id="sh-audio-upload">+ Add audio&hellip;</button>
+              <input id="sh-audio-file" type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/flac,audio/ogg" multiple hidden>
+            </div>
+
+            <div class="anchor-block">
+              <span class="hint">First frame guide &mdash; optional</span>
+              <div class="anchor-upload" data-drop-role="sh-first">
+                <img id="sh-first-frame-preview" class="anchor-preview" hidden>
+                <button class="button" type="button" id="sh-first-frame-upload">Upload&hellip;</button>
+                <button class="button ghost" type="button" id="sh-first-frame-remove" hidden>Remove</button>
+                <input id="sh-first-frame-file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" hidden>
+              </div>
+            </div>
+            <div class="anchor-block">
+              <span class="hint">Last frame guide &mdash; optional</span>
+              <div class="anchor-upload" data-drop-role="sh-last">
+                <img id="sh-last-frame-preview" class="anchor-preview" hidden>
+                <button class="button" type="button" id="sh-last-frame-upload">Upload&hellip;</button>
+                <button class="button ghost" type="button" id="sh-last-frame-remove" hidden>Remove</button>
+                <input id="sh-last-frame-file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" hidden>
+              </div>
+            </div>
+          </div>
+          </div>
+        </details>
+
+        <details class="card" open>
+          <summary class="card-head"><span class="card-title">Output</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+        <div class="field-grid sizing-grid">
+          <div class="field-row">
+            <label for="aspect">Aspect ratio</label>
+            <select id="aspect"></select>
+          </div>
+          <div class="sizing-control">
+            <div class="field-row">
+              <label for="megapixels">Megapixels</label>
+              <input id="megapixels" type="number" min="0.004" max="2.5" step="0.001" value="0.92">
+            </div>
+            <div class="field-row resolution-row">
+              <label>Resolution</label>
+              <div class="resolution-inputs">
+                <input id="width" type="number" min="64" max="2048" step="32" value="1280" aria-label="Resolution width">
+                <span aria-hidden="true">×</span>
+                <input id="height" type="number" min="64" max="2048" step="32" value="704" aria-label="Resolution height">
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="hint" id="resolution-detail"></p>
+        <div class="field-row">
+          <label for="duration">Duration (seconds)</label>
+          <div class="duration-meter" id="duration-meter">
+            <div class="duration-track" aria-hidden="true">
+              <div class="duration-fill"></div>
+              <span class="duration-value" id="duration-readout">15s</span>
+            </div>
+            <input id="duration" type="range" min="1" max="15" step="1" value="15">
+          </div>
+          <div class="duration-ruler" id="duration-ruler" aria-hidden="true"></div>
+          <p class="hint" id="duration-hint" hidden></p>
+        </div>
+          </div>
+        </details>
+
+        <details class="card" open>
+          <summary class="card-head"><span class="card-title">Model &amp; sampling <span class="card-sub" id="sampling-model-label">MiniMax H3</span></span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+        <div class="field-row" id="minimax-checkpoint-row">
+          <label for="minimax-checkpoint">Model checkpoint</label>
+          <div class="seed-control">
+            <select id="minimax-checkpoint"></select>
+            <button type="button" class="icon-button" id="checkpoint-rescan" title="Rescan for newly downloaded H3 models and re-check which support Ref2V">&#8635;</button>
+          </div>
+          <p class="hint" id="checkpoint-ref2v-hint" hidden></p>
+        </div>
+        <div class="field-row">
+          <label for="seed">Seed</label>
+          <div class="seed-control">
+            <input id="seed" type="number" min="0" max="2147483647" value="20260909">
+            <button type="button" class="icon-button" id="random-seed" title="Randomize seed">&#8635;</button>
+          </div>
+        </div>
+          <div id="h3-advanced" class="stack">
+          <div class="field-grid">
+            <div class="field-row"><label for="steps">Steps</label><input id="steps" type="number" min="1" max="100" value="6"></div>
+            <div class="field-row"><label for="sampler">Sampler</label><select id="sampler"></select></div>
+          </div>
+          <div class="field-grid">
+            <div class="field-row"><label for="scheduler">Scheduler</label><select id="scheduler"></select></div>
+            <div class="field-row"><label for="ref-size">Reference sizing</label><select id="ref-size"></select></div>
+          </div>
+          <div class="field-grid">
+            <div class="field-row"><label for="cfg">CFG scale</label><input id="cfg" type="number" min="1" max="1.5" step="0.05" value="1"></div>
+            <div class="field-row"><label for="shift-video">Video shift</label><input id="shift-video" type="number" min="1" max="20" step="0.5" placeholder="8"></div>
+          </div>
+          <div class="field-grid">
+            <div class="field-row"><label for="shift-audio">Audio shift</label><input id="shift-audio" type="number" min="1" max="20" step="0.5" placeholder="5"></div>
+            <div class="field-row"><label for="output-quality">Output quality</label>
+              <select id="output-quality">
+                <option value="standard" selected>Standard (H.264, CRF 19)</option>
+                <option value="high">High (H.264, CRF 12)</option>
+                <option value="near_lossless">Near-lossless (H.264, CRF 4, large files)</option>
+                <option value="hevc_10bit">10-bit HEVC (CRF 12, less banding; may not preview)</option>
+              </select>
+            </div>
+          </div>
+          <p class="hint">Shift: leave blank for the mode's default. Higher spends more steps on composition and motion, lower on fine detail.</p>
+          <div class="field-row" id="negative-prompt-row" hidden>
+            <label for="negative-prompt">Negative prompt</label>
+            <textarea id="negative-prompt" rows="3" maxlength="5000" placeholder="What to steer away from, e.g. blurry, warped hands, extra limbs, flicker, watermark"></textarea>
+          </div>
+          <p class="hint" id="cfg-hint">CFG 1 = off. Above 1, a negative prompt is used and sampling takes about twice as long.</p>
+          <div class="field-row">
+            <label for="h3-fps">Frame rate</label>
+            <select id="h3-fps">
+              <option value="12">12 fps (drops every other frame)</option>
+              <option value="16">16 fps (RIFE 2x, every 3rd frame)</option>
+              <option value="24" selected>24 fps (native)</option>
+              <option value="30">30 fps (RIFE 5x, every 4th frame)</option>
+              <option value="48">48 fps (RIFE 2x)</option>
+              <option value="60">60 fps (RIFE 5x, every 2nd frame)</option>
+            </select>
+          </div>
+          <p class="hint">MiniMax H3 always renders at 24 fps; other rates are made after decoding with RIFE interpolation, so motion and duration stay the same.</p>
+          </div>
+          <div id="ltx-advanced" class="stack" hidden>
+            <div class="field-row"><label for="ltx-workflow">Workflow</label><select id="ltx-workflow"></select></div>
+          <div class="field-row"><label for="ltx-tiles">VAE decode tiles</label><select id="ltx-tiles"></select></div>
+          <p class="hint" id="ltx-tile-detail"></p>
+          <div class="field-row"><label for="ltx-fps">Frame rate</label><input id="ltx-fps" type="number" min="1" max="30" step="1" value="24"></div>
+          </div>
+          <div id="wan-advanced" class="stack" hidden>
+            <div class="field-row"><label for="wan-turbo">Turbo</label>
+              <select id="wan-turbo">
+                <option value="lightx2v" selected>lightx2v 4-step (CFG 1)</option>
+                <option value="motionfix">Slow-Mo Fix 4-step (Keyframe; Text uses lightx2v)</option>
+                <option value="off">Off - full model (about 20 steps, CFG 3.5)</option>
+              </select>
+            </div>
+            <div class="field-grid">
+              <div class="field-row"><label for="wan-steps">Steps</label><input id="wan-steps" type="number" min="2" max="60" value="4"></div>
+              <div class="field-row"><label for="wan-high-steps">High-noise steps</label><input id="wan-high-steps" type="number" min="1" max="59" placeholder="half"></div>
+            </div>
+            <div class="field-grid">
+              <div class="field-row"><label for="wan-sampler">Sampler</label><select id="wan-sampler"></select></div>
+              <div class="field-row"><label for="wan-scheduler">Scheduler</label><select id="wan-scheduler"></select></div>
+            </div>
+            <div class="field-grid">
+              <div class="field-row"><label for="wan-cfg">CFG scale</label><input id="wan-cfg" type="number" min="1" max="10" step="0.1" value="1"></div>
+              <div class="field-row"><label for="wan-shift">Shift</label><input id="wan-shift" type="number" min="1" max="20" step="0.5" value="8"></div>
+            </div>
+            <div class="field-row"><label for="wan-fps">Frame rate</label>
+              <select id="wan-fps">
+                <option value="16" selected>16 fps (native)</option>
+                <option value="24">24 fps (RIFE 3x, every 2nd frame)</option>
+                <option value="32">32 fps (RIFE 2x)</option>
+              </select>
+            </div>
+            <div class="field-row"><label for="wan-output-quality">Output quality</label>
+              <select id="wan-output-quality">
+                <option value="standard" selected>Standard (H.264, CRF 19)</option>
+                <option value="high">High (H.264, CRF 12)</option>
+                <option value="near_lossless">Near-lossless (H.264, CRF 4, large files)</option>
+                <option value="hevc_10bit">10-bit HEVC (CRF 12, less banding; may not preview)</option>
+              </select>
+            </div>
+            <div class="field-row">
+              <label for="wan-negative-prompt">Negative prompt</label>
+              <textarea id="wan-negative-prompt" rows="2" maxlength="5000" placeholder="Blank = Wan's official negative prompt (only used above CFG 1)"></textarea>
+            </div>
+            <p class="hint">The high-noise expert lays out composition and motion for the first steps, then the low-noise expert adds detail. Text uses the T2V experts, Keyframe the I2V experts (first frame, or first + last). Wan renders 16 fps video with no sound, up to 10 s at 720p.</p>
+          </div>
+          <div id="seedhunter-advanced" class="stack" hidden>
+          <p class="hint">Renders 3 candidates from your seed (+0/+1/+2). Pick one, then finalize with optional upscale and interpolation.</p>
+          <div class="field-row" id="sh-continue-banner" hidden>
+            <span class="hint" id="sh-continue-banner-text"></span>
+            <button type="button" class="icon-button" id="sh-continue-clear" title="Stop continuing from this video">&#10005;</button>
+          </div>
+          <div class="field-grid">
+            <div class="field-row"><label for="sh-steps">Steps</label><input id="sh-steps" type="number" min="1" max="40" value="8"></div>
+            <div class="field-row"><label for="sh-sampler">Sampler</label><select id="sh-sampler"></select></div>
+          </div>
+          <div class="field-grid">
+            <div class="field-row"><label for="sh-scheduler">Scheduler</label><select id="sh-scheduler"></select></div>
+            <div class="field-row"><label for="sh-candidate-count">Candidates</label>
+              <select id="sh-candidate-count">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3" selected>3</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-row" id="sh-overlap-row" hidden>
+            <label for="sh-overlap-frames">Continuation overlap (frames)</label>
+            <select id="sh-overlap-frames"></select>
+          </div>
+            <label class="switch-row" for="sh-preview-enable"><span class="switch-label">Live sampling preview <span class="switch-hint">ComfyUI's own window only, ~6&ndash;16% slower</span></span><input type="checkbox" id="sh-preview-enable"></label>
+          </div>
+          </div>
+        </details>
+
+        <details class="card" id="lora-card">
+          <summary class="card-head"><span class="card-title">LoRAs</span><span class="card-badge" id="lora-count"></span><span class="hint" id="ltx-lora-count" hidden></span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <div id="minimax-model-details" class="stack">
+            <div class="lora-list-head"><span class="hint">Slots load in this order. Hover <b>!</b> for trigger words.</span><span class="lora-head-buttons"><button type="button" class="secondary-button lora-reset" data-lora-gallery title="Browse these LoRAs with previews and descriptions">&#9638; Gallery</button><button type="button" class="secondary-button lora-reset" data-lora-aliases title="Short words you type in the prompt that stand for a LoRA's trigger keyword">&#8644; Aliases</button><button type="button" class="secondary-button lora-reset" data-lora-reset="#minimax-lora-list" title="Set every strength back to its recommended value">&#8635; Recommended strengths</button></span></div>
+            <div id="minimax-lora-list" class="lora-list"></div>
+          </div>
+          <div id="ltx-lora-details" class="stack" hidden>
+            <div class="lora-list-head"><span class="hint">Stack up to <span id="ltx-lora-max">4</span>. Hover <b>!</b> for trigger words.</span><span class="lora-head-buttons"><button type="button" class="secondary-button lora-reset" data-lora-gallery title="Browse these LoRAs with previews and descriptions">&#9638; Gallery</button><button type="button" class="secondary-button lora-reset" data-lora-aliases title="Short words you type in the prompt that stand for a LoRA's trigger keyword">&#8644; Aliases</button><button type="button" class="secondary-button lora-reset" data-lora-reset="#ltx-lora-list" title="Set every strength back to its recommended value">&#8635; Recommended strengths</button></span></div>
+            <div id="ltx-lora-list" class="lora-list"></div>
+          </div>
+          <div id="wan-lora-details" class="stack" hidden>
+            <div class="lora-list-head"><span class="hint">Stack up to <span id="wan-lora-max">4</span>. Pairs load their high- and low-noise files on the matching expert. Hover <b>!</b> for trigger words.</span><span class="lora-head-buttons"><button type="button" class="secondary-button lora-reset" data-lora-gallery title="Browse these LoRAs with previews and descriptions">&#9638; Gallery</button><button type="button" class="secondary-button lora-reset" data-lora-aliases title="Short words you type in the prompt that stand for a LoRA's trigger keyword">&#8644; Aliases</button><button type="button" class="secondary-button lora-reset" data-lora-reset="#wan-lora-list" title="Set every strength back to its recommended value">&#8635; Recommended strengths</button></span></div>
+            <div id="wan-lora-list" class="lora-list"></div>
+          </div>
+          </div>
+        </details>
+
+        <details class="card" id="h3-multi-gpu-card" open>
+          <summary class="card-head"><span class="card-title">Multi GPU</span><span class="card-sub">MiniMax H3</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <div class="field-row"><label for="multi-gpu-preset">Multi GPU preset</label>
+              <div class="seed-control"><select id="multi-gpu-preset" aria-describedby="multi-gpu-preset-hint"></select>
+                <button type="button" class="secondary-button" id="multi-gpu-preset-save">Save as&hellip;</button>
+                <button type="button" class="secondary-button" id="multi-gpu-preset-delete" hidden>Delete</button></div>
+              <span class="hint" id="multi-gpu-preset-hint"></span>
+            </div>
+            <div class="field-row"><label for="multi-gpu-offload">Offloading extent</label><select id="multi-gpu-offload">
+              <option value="off">Off — GPU 0 only</option>
+              <option value="conditioning">Text conditioning on GPU 1</option>
+              <option value="conditioning_vae">Text conditioning and video/audio VAEs on GPU 1</option>
+              <option value="split">Split H3 diffusion weights across both GPUs</option>
+              <option value="parallel">Split H3 computation across both GPUs (1 GiB GPU 1 free target)</option>
+            </select></div>
+            <div class="field-row" id="multi-gpu-split-row" hidden><label for="multi-gpu-split-gb">GPU 1 weight quota</label><select id="multi-gpu-split-gb">
+              <option value="2">2 GiB</option><option value="4">4 GiB</option><option value="6">6 GiB</option>
+              <option value="8" selected>8 GiB</option><option value="10">10 GiB</option><option value="12">12 GiB</option>
+            </select><span class="hint">8 GiB is validated on this machine. The amount placed on GPU 1 may be lower because whole model layers are allocated together.</span></div>
+            <p class="hint">GPU 0 is always the first slot. Split weights uses GPU 1 for model storage; Parallel split runs H3 attention on both GPUs and targets 1 GiB free on GPU 1 during sampling. Text conditioning may still use system RAM. This choice is saved with overall H3 presets.</p>
+          </div>
+        </details>
+
+        <details class="card" id="h3-speedups" open>
+          <summary class="card-head"><span class="card-title">Speedup &amp; Saves</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <div class="speedup-tier">
+            <h4 class="speedup-tier-title">Turbo LoRA</h4>
+            <div class="speedup-row" data-speedup="parasyte">
+              <div class="field-row">
+                <label for="parasyte">Parasyte Turbo 6-step</label>
+                <div class="toggle-number">
+                  <input type="checkbox" id="parasyte-enabled" checked aria-label="Enable Parasyte Turbo LoRA">
+                  <input id="parasyte" type="number" min="0.1" max="1.2" step="0.05" value="0.6" aria-label="Parasyte Turbo strength">
+                </div>
+              </div>
+              <p class="speedup-why"></p>
+            </div>
+            <div class="speedup-row" data-speedup="lightx">
+              <div class="field-row">
+                <label for="ref2v-turbo">Reference turbo 8-step</label>
+                <div class="toggle-number">
+                  <input type="checkbox" id="ref2v-turbo-enabled" checked aria-label="Enable the Reference turbo LoRA">
+                  <select id="ref2v-turbo" aria-label="Reference turbo LoRA">
+                    <option value="pdd" selected>PDD (official)</option>
+                    <option value="lightx">LightX</option>
+                  </select>
+                  <input id="ref-strength" type="number" min="0.1" max="1.2" step="0.05" value="0.6" aria-label="LightX strength">
+                </div>
+              </div>
+              <p class="speedup-why"></p>
+            </div>
+          </div>
+          <div class="speedup-tier">
+            <h4 class="speedup-tier-title">Inference</h4>
+            <div class="speedup-row" id="experimental-ref-speedups-row">
+              <div class="field-row">
+                <label for="experimental-ref-speedups">Unlock experimental Reference speedups</label>
+                <div class="toggle-number"><input type="checkbox" id="experimental-ref-speedups"></div>
+              </div>
+              <p class="speedup-why">SLA and Spectrum changed or damaged Reference output in tests. Enable only to compare them.</p>
+            </div>
+            <div class="speedup-row" data-speedup="sla">
+              <div class="field-row">
+                <label for="sla">SLA sparse attention</label>
+                <div class="toggle-number">
+                  <input type="checkbox" id="sla-enabled" checked aria-label="Enable SLA sparse attention">
+                  <input id="sla" type="number" min="0.6" max="0.95" step="0.05" value="0.9" aria-label="SLA sparsity">
+                </div>
+              </div>
+              <p class="speedup-why"></p>
+            </div>
+            <div class="speedup-row" data-speedup="sladense">
+              <div class="field-row">
+                <label for="sla-dense-step">SLA dense first step</label>
+                <div class="toggle-number">
+                  <input type="checkbox" id="sla-dense-step" checked>
+                </div>
+              </div>
+              <p class="speedup-why"></p>
+            </div>
+            <div class="speedup-row" data-speedup="compile">
+              <div class="field-row">
+                <label for="torch-compile-enabled">torch.compile</label>
+                <div class="toggle-number">
+                  <input type="checkbox" id="torch-compile-enabled">
+                </div>
+              </div>
+              <p class="speedup-why"></p>
+            </div>
+            <div class="speedup-row" data-speedup="attention">
+              <div class="field-row">
+                <label for="attention-backend">Attention</label>
+                <select id="attention-backend">
+                  <option value="flash">Flash (fastest)</option>
+                  <option value="kitchen">Comfy-Kitchen INT8</option>
+                  <option value="pytorch">PyTorch (exact, slow)</option>
+                </select>
+              </div>
+              <p class="speedup-why"></p>
+            </div>
+          </div>
+          <div class="speedup-tier">
+            <h4 class="speedup-tier-title">Caching</h4>
+            <div class="speedup-row" data-speedup="spectrum">
+              <div class="field-row">
+                <label for="spectrum-enabled">Spectrum forecasting</label>
+                <div class="toggle-number">
+                  <input type="checkbox" id="spectrum-enabled">
+                </div>
+              </div>
+              <p class="speedup-why"></p>
+            </div>
+            <div class="speedup-row" data-speedup="blockcache">
+              <div class="field-row">
+                <label for="block-cache-enabled">H3 block cache</label>
+                <div class="toggle-number">
+                  <input type="checkbox" id="block-cache-enabled">
+                </div>
+              </div>
+              <p class="speedup-why"></p>
+            </div>
+          </div>
+          <div class="speedup-tier">
+            <h4 class="speedup-tier-title">Savings</h4>
+            <div class="speedup-row" data-speedup="chunking">
+              <div class="field-row">
+                <label for="ffn-chunking-enabled">Chunked feed-forward</label>
+                <div class="toggle-number">
+                  <input type="checkbox" id="ffn-chunking-enabled">
+                </div>
+              </div>
+              <p class="speedup-why"></p>
+            </div>
+            <div class="speedup-row" data-speedup="lowvram">
+              <div class="field-row">
+                <label for="low-vram-attention-chunks">Low-VRAM attention</label>
+                <div class="toggle-number">
+                  <input type="checkbox" id="low-vram-attention-enabled" aria-label="Enable low-VRAM attention">
+                  <input id="low-vram-attention-chunks" type="number" min="2" max="56" step="1" value="4" aria-label="Attention head groups">
+                </div>
+              </div>
+              <p class="speedup-why"></p>
+            </div>
+            <div class="speedup-row" data-speedup="refvideo">
+              <div class="field-row">
+                <label for="ref-video-downscale">Downscale reference videos</label>
+                <div class="toggle-number">
+                  <input type="checkbox" id="ref-video-downscale" checked>
+                </div>
+              </div>
+              <p class="speedup-why"></p>
+            </div>
+          </div>
+          </div>
+        </details>
+
+        <details class="card" id="h3-upscale-card">
+          <summary class="card-head"><span class="card-title">Latent upscale <span class="card-sub">H3 3D upscaler + second pass</span></span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <label class="switch-row" for="h3-upscale-enable"><span class="switch-label">Upscale after rendering</span><input type="checkbox" id="h3-upscale-enable"></label>
+            <div id="h3-upscale-params" hidden>
+              <div class="field-row">
+                <label for="h3-upscale-preset">Upscale preset</label>
+                <div class="upscale-preset-control">
+                  <select id="h3-upscale-preset" aria-describedby="h3-upscale-preset-hint"></select>
+                  <button type="button" class="secondary-button" id="h3-upscale-preset-save">Save as&hellip;</button>
+                  <button type="button" class="secondary-button" id="h3-upscale-preset-delete" hidden>Delete</button>
+                </div>
+                <p class="hint" id="h3-upscale-preset-hint"></p>
+              </div>
+              <div class="field-grid">
+                <div class="field-row"><label for="h3-upscale-factor">Upscale factor</label><input id="h3-upscale-factor" type="number" min="1.1" max="4" step="0.05" value="1.5"></div>
+                <div class="field-row"><label for="h3-upscale-steps">Second-pass steps</label><input id="h3-upscale-steps" type="number" min="1" max="40" value="1"></div>
+                <div class="field-row"><label for="h3-upscale-denoise">Second-pass denoise</label><input id="h3-upscale-denoise" type="number" min="0.05" max="1" step="0.05" value="0.2"></div>
+                <div class="field-row">
+                  <label for="h3-upscale-seed">Second-pass seed</label>
+                  <div class="seed-control">
+                    <input id="h3-upscale-seed" type="number" min="0" max="2147483647" value="20260909">
+                    <button type="button" class="icon-button" id="h3-random-upscale-seed" title="Randomize seed">&#8635;</button>
+                  </div>
+                </div>
+              </div>
+              <label class="switch-row" for="h3-upscale-chunking"><span class="switch-label">Chunk over time <span class="switch-hint">Upscales and re-samples long clips in overlapping ~5 s pieces so the 3D upscaler fits in VRAM</span></span><input type="checkbox" id="h3-upscale-chunking" checked></label>
+              <details class="pe-subcard upscale-advanced" id="h3-ua-models">
+                <summary>Models &amp; VRAM</summary>
+                <div class="field-grid">
+                  <div class="field-row"><label for="h3-ua-upscaler-device">Upscaler device</label>
+                    <select id="h3-ua-upscaler-device" data-ua="upscaler_device"><option value="cuda">GPU</option><option value="cpu">CPU (slow, no VRAM)</option></select></div>
+                  <div class="field-row"><label for="h3-ua-upscaler-precision">Upscaler precision</label>
+                    <select id="h3-ua-upscaler-precision" data-ua="upscaler_precision"><option>fp16</option><option>bf16</option><option>fp32</option></select></div>
+                </div>
+                <label class="switch-row" for="h3-ua-keep-upscaler"><span class="switch-label">Keep upscaler resident in VRAM <span class="switch-hint">Stays on the GPU between time chunks (about 0.7 GB) instead of going back to RAM after each one; offloaded when the pass ends</span></span><input type="checkbox" id="h3-ua-keep-upscaler" data-ua="keep_upscaler_resident"></label>
+                <label class="switch-row" for="h3-ua-unload-after"><span class="switch-label">Unload H3 before VAE decode <span class="switch-hint">Frees H3's VRAM for decoding the upscaled video</span></span><input type="checkbox" id="h3-ua-unload-after" data-ua="unload_model_after" checked></label>
+                <label class="switch-row" for="h3-ua-chunks-first"><span class="switch-label">Upscale all chunks first <span class="switch-hint">Unloads H3 once, upscales every time chunk, then loads H3 once to re-sample them, instead of a reload per chunk. Not render-tested yet: turn off if chunks come out noisy</span></span><input type="checkbox" id="h3-ua-chunks-first" data-ua="upscale_chunks_first"></label>
+              </details>
+              <details class="pe-subcard upscale-advanced" id="h3-ua-temporal">
+                <summary>Temporal chunking <span class="hint" id="h3-ua-temporal-state"></span></summary>
+                <div class="field-grid">
+                  <div class="field-row"><label for="h3-ua-chunk-frames">Chunk length (frames)</label>
+                    <select id="h3-ua-chunk-frames" data-ua="chunk_frames" data-ua-number></select></div>
+                  <div class="field-row"><label for="h3-ua-chunk-overlap">Overlap (frames)</label>
+                    <select id="h3-ua-chunk-overlap" data-ua="chunk_overlap" data-ua-number></select></div>
+                  <div class="field-row"><label for="h3-ua-anchor">Anchor strength</label>
+                    <input id="h3-ua-anchor" type="number" min="0" max="1" step="0.001" value="0.999" data-ua="anchor_strength" data-ua-number></div>
+                </div>
+                <p class="hint">Lengths are whole 17-frame steps (24 fps, so 136 ≈ 5.7 s). Auto picks the longest chunk that fits the 3D upscaler in about 9 GiB. Anchor strength sets how closely each chunk's first frame follows the previous chunk (0.999 = node default).</p>
+              </details>
+              <details class="pe-subcard upscale-advanced" id="h3-ua-spatial">
+                <summary>Spatial tiling <span class="hint" id="h3-ua-spatial-state"></span></summary>
+                <div class="field-grid">
+                  <div class="field-row"><label for="h3-ua-tiling">Tiling</label>
+                    <select id="h3-ua-tiling" data-ua="tiling"><option value="off">Off (whole frame)</option><option value="auto">Auto (token budget)</option><option value="rows_cols">Rows × columns</option><option value="specific_size">Fixed tile size</option></select></div>
+                  <div class="field-row" data-ua-when="tiling=auto"><label for="h3-ua-token-budget">Token budget per tile</label>
+                    <input id="h3-ua-token-budget" type="number" min="4096" max="1000000" step="1" value="70000" data-ua="token_budget" data-ua-number></div>
+                  <div class="field-row" data-ua-when="tiling=rows_cols"><label for="h3-ua-grid-rows">Rows</label>
+                    <input id="h3-ua-grid-rows" type="number" min="1" max="9" value="2" data-ua="grid_rows" data-ua-number></div>
+                  <div class="field-row" data-ua-when="tiling=rows_cols"><label for="h3-ua-grid-cols">Columns</label>
+                    <input id="h3-ua-grid-cols" type="number" min="1" max="9" value="2" data-ua="grid_cols" data-ua-number></div>
+                  <div class="field-row" data-ua-when="tiling=specific_size"><label for="h3-ua-tile-width">Tile width (px)</label>
+                    <input id="h3-ua-tile-width" type="number" min="256" max="4096" step="32" value="768" data-ua="tile_width" data-ua-number></div>
+                  <div class="field-row" data-ua-when="tiling=specific_size"><label for="h3-ua-tile-height">Tile height (px)</label>
+                    <input id="h3-ua-tile-height" type="number" min="256" max="4096" step="32" value="768" data-ua="tile_height" data-ua-number></div>
+                  <div class="field-row" data-ua-when="tiling!=off"><label for="h3-ua-overlap-width">Overlap width (px)</label>
+                    <input id="h3-ua-overlap-width" type="number" min="0" max="2048" step="32" value="128" data-ua="overlap_width" data-ua-number></div>
+                  <div class="field-row" data-ua-when="tiling!=off"><label for="h3-ua-overlap-height">Overlap height (px)</label>
+                    <input id="h3-ua-overlap-height" type="number" min="0" max="2048" step="32" value="128" data-ua="overlap_height" data-ua-number></div>
+                  <div class="field-row" data-ua-when="tiling!=off"><label for="h3-ua-fade-width">Fade width (px)</label>
+                    <input id="h3-ua-fade-width" type="number" min="0" max="2048" step="32" value="32" data-ua="fade_width" data-ua-number></div>
+                  <div class="field-row" data-ua-when="tiling!=off"><label for="h3-ua-fade-height">Fade height (px)</label>
+                    <input id="h3-ua-fade-height" type="number" min="0" max="2048" step="32" value="32" data-ua="fade_height" data-ua-number></div>
+                  <div class="field-row" data-ua-when="tiling!=off"><label for="h3-ua-min-tile">Minimum tile (px)</label>
+                    <input id="h3-ua-min-tile" type="number" min="0" max="4096" step="32" value="256" data-ua="min_tile_size" data-ua-number></div>
+                  <div class="field-row" data-ua-when="tiling!=off"><label for="h3-ua-overlap-blend">Seam blend</label>
+                    <select id="h3-ua-overlap-blend" data-ua="overlap_blend"><option>linear</option><option>smoothstep</option><option>overwrite</option><option>midpoint</option></select></div>
+                  <div class="field-row" data-ua-when="tiling!=off"><label for="h3-ua-overlap-mode">Seam winner</label>
+                    <select id="h3-ua-overlap-mode" data-ua="overlap_mode"><option value="earlier">Earlier tile</option><option value="later">Later tile</option></select></div>
+                </div>
+                <label class="switch-row" for="h3-ua-joint-steps" data-ua-when="tiling!=off"><span class="switch-label">Joint steps <span class="switch-hint">Steps every tile together and merges them each step, so there are no seams. Off = each tile finished alone, then blended</span></span><input type="checkbox" id="h3-ua-joint-steps" data-ua="joint_steps" checked></label>
+                <p class="hint">Tiling splits the second pass into smaller pieces. It lowers the DiT's VRAM at large sizes, but the 3D upscaler still runs on whole chunks. Above about 75k tokens per tile the INT8 attention kernels crash. <b>Watch long clips:</b> 15 s renders at 379 frames (past H3's 362-frame max, capped since Sept 30) had tiles come out black or NaN; "Stable (untiled)" is the fallback.</p>
+              </details>
+              <details class="pe-subcard upscale-advanced" id="h3-ua-sampling">
+                <summary>Second-pass sampler</summary>
+                <div class="field-grid">
+                  <div class="field-row"><label for="h3-ua-sampler">Sampler</label><select id="h3-ua-sampler" data-ua="sampler"></select></div>
+                  <div class="field-row"><label for="h3-ua-scheduler">Scheduler</label><select id="h3-ua-scheduler" data-ua="scheduler"></select></div>
+                </div>
+                <p class="hint">"Same as render" reuses the first pass's choice. PDD Reference always uses its own sigma grid, so the scheduler doesn't apply there.</p>
+              </details>
+              <button type="button" class="secondary-button" id="h3-ua-reset">Reset advanced upscale settings</button>
+              <p class="hint" id="h3-upscale-detail"></p>
+              <ul class="upscale-warnings" id="h3-upscale-warnings" hidden></ul>
+            </div>
+          </div>
+        </details>
+
+        <details class="card" id="sh-finalize-card" hidden>
+          <summary class="card-head"><span class="card-title">Finalize pass <span class="card-sub">upscale &amp; interpolation, after you pick a candidate</span></span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+            <label class="switch-row" for="sh-upscale-enable"><span class="switch-label">3D latent upscale</span><input type="checkbox" id="sh-upscale-enable"></label>
+            <div class="field-grid" id="sh-upscale-params" hidden>
+              <div class="field-row"><label for="sh-upscale-model">Upscaler</label><select id="sh-upscale-model"></select></div>
+              <div class="field-row"><label for="sh-upscale-megapixels">Target megapixels</label><input id="sh-upscale-megapixels" type="number" min="0.1" max="16" step="0.1" value="1.0"></div>
+              <div class="field-row"><label for="sh-upscale-steps">Upscale steps</label><input id="sh-upscale-steps" type="number" min="1" max="40" value="6"></div>
+              <div class="field-row"><label for="sh-upscale-denoise">Upscale denoise</label><input id="sh-upscale-denoise" type="number" min="0.05" max="1" step="0.05" value="0.4"></div>
+            </div>
+            <div class="field-row" id="sh-upscale-seed-row" hidden>
+              <label for="sh-upscale-seed">Upscale seed</label>
+              <div class="seed-control">
+                <input id="sh-upscale-seed" type="number" min="0" max="2147483647" value="20260909">
+                <button type="button" class="icon-button" id="sh-random-upscale-seed" title="Randomize seed">&#8635;</button>
+              </div>
+            </div>
+            <label class="switch-row" for="sh-rife-enable"><span class="switch-label">RIFE frame interpolation</span><input type="checkbox" id="sh-rife-enable"></label>
+            <div class="field-row" id="sh-rife-params" hidden>
+              <label for="sh-rife-fps">Target FPS</label>
+              <input id="sh-rife-fps" type="number" min="1" max="120" value="48">
+            </div>
+          </div>
+        </details>
+
+      </form>
+      <!-- Per-workflow model files (VAE, text encoder, upscaler, ...): shared/ui/workflow-models.js. -->
+      <details class="card wm-card" id="workflow-models-card">
+        <summary class="card-head"><span class="card-title">Advanced workflow <span class="card-sub">model files</span></span><span class="card-badge" data-workflow-models-badge></span><span class="card-chevron" aria-hidden="true"></span></summary>
+        <div class="card-body">
+          <div data-workflow-models="{{ mount_prefix }}/api/workflow-models"></div>
+        </div>
+      </details>
+    </section>
+
+    <section class="jobs-panel" aria-label="Generations">
+      <div class="jobs-panel-head">
+        <h2>Generations</h2>
+        <div class="history-filters" role="tablist" aria-label="Generation filters">
+          <button type="button" class="is-active" data-filter="all">All <span class="filter-count" data-filter-count="all"></span></button>
+          <button type="button" data-filter="running">Running <span class="filter-count" data-filter-count="running"></span></button>
+          <button type="button" data-filter="complete">Complete <span class="filter-count" data-filter-count="complete"></span></button>
+        </div>
+        <input type="search" class="jobs-search" id="jobs-search" placeholder="Search prompts&hellip;" aria-label="Search generations by prompt">
+        <button type="button" class="secondary-button stitch-toggle-button" id="stitch-toggle"><span data-icon="film"></span> Stitch&hellip;</button>
+        <button type="button" class="secondary-button compare-toggle-button" id="compare-toggle">&#9707; Compare</button>
+      </div>
+      <div class="compare-bar" id="compare-bar" hidden>
+        <span class="stitch-summary" id="compare-summary">Pick 2 generations to compare</span>
+        <button type="button" class="secondary-button" id="compare-cancel">Cancel</button>
+      </div>
+      <div class="stitch-bar" id="stitch-bar" hidden>
+        <span class="stitch-summary" id="stitch-summary">0 selected &middot; 0.0s total</span>
+        <div class="stitch-bar-actions">
+          <button type="button" class="icon-button" id="stitch-settings-toggle" aria-pressed="false" title="Stitch settings" aria-label="Stitch settings"><span data-icon="settings"></span></button>
+          <button type="button" class="secondary-button" id="stitch-cancel">Cancel</button>
+          <button type="button" class="primary-button" id="stitch-complete" disabled>Complete Stitch</button>
+        </div>
+      </div>
+      <div class="subpanel stitch-settings" id="stitch-settings" hidden>
+        <div class="field-row">
+          <label for="stitch-transition">Transition between clips</label>
+          <select id="stitch-transition"></select>
+        </div>
+        <div class="field-row" id="stitch-transition-variant-row" hidden>
+          <label id="stitch-transition-variant-label" for="stitch-transition-variant">Direction</label>
+          <select id="stitch-transition-variant"></select>
+        </div>
+        <div class="field-row" id="stitch-crossfade-row" hidden>
+          <label for="stitch-crossfade-seconds">Transition length (seconds)</label>
+          <input id="stitch-crossfade-seconds" type="number" min="0.1" max="5" step="0.1" value="0.5">
+        </div>
+        <div class="field-row">
+          <label for="stitch-fps">Output frame rate</label>
+          <div class="stitch-fps-control">
+            <input id="stitch-fps" type="number" min="1" max="60" step="1" value="24">
+            <label class="stitch-inline-checkbox"><input type="checkbox" id="stitch-fps-match"> Match first clip</label>
+          </div>
+        </div>
+        <div class="field-row">
+          <label for="stitch-resolution-mode">Output resolution</label>
+          <select id="stitch-resolution-mode">
+            <option value="auto">Match first selected clip</option>
+            <option value="custom">Custom&hellip;</option>
+          </select>
+        </div>
+        <div class="field-row resolution-row" id="stitch-resolution-custom" hidden>
+          <label>Resolution</label>
+          <div class="resolution-inputs">
+            <input id="stitch-width" type="number" min="64" max="2048" step="2" value="1280" aria-label="Stitch output width">
+            <span aria-hidden="true">&times;</span>
+            <input id="stitch-height" type="number" min="64" max="2048" step="2" value="704" aria-label="Stitch output height">
+          </div>
+        </div>
+        <div class="field-row">
+          <label>Background music <span class="hint">(optional, mixed under the whole stitch)</span></label>
+          <div class="reference-totals" id="stitch-music-count"></div>
+          <div class="reference-list" id="stitch-music-list"></div>
+          <div class="button-row">
+            <button type="button" class="button" id="stitch-music-upload">+ Add music&hellip;</button>
+            <input id="stitch-music-file" type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/flac,audio/ogg" hidden>
+          </div>
+          <div class="url-music-row"><input id="stitch-music-url" type="url" inputmode="url" placeholder="or paste a YouTube, TikTok or Instagram link" aria-label="YouTube, TikTok or Instagram link for background music"><button type="button" class="button" id="stitch-music-url-add">Download</button></div>
+          <div class="drop-zone" id="stitch-music-drop-zone" data-drop-role="stitch-music">Drop a background music file here</div>
+        </div>
+        <div class="field-row" id="stitch-music-volume-row" hidden>
+          <label for="stitch-music-volume">Music volume</label>
+          <input id="stitch-music-volume" type="range" min="0" max="100" step="5" value="35">
+          <span class="field-readout" id="stitch-music-volume-readout">35%</span>
+        </div>
+      </div>
+      <div class="jobs-list" id="jobs-list">
+        <div class="jobs-empty">No generations yet. Describe a shot and hit Generate.</div>
+      </div>
+      <!-- Paged: only the newest page renders (each card carries a video), so the
+           list never grows the page on its own. -->
+      <div class="jobs-more" id="jobs-more" hidden>
+        <span class="jobs-more-count" id="jobs-more-count"></span>
+        <button type="button" class="secondary-button" id="jobs-show-more">Show more</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast-region" id="toasts" aria-live="polite"></div>
+
+  <div class="camera-preview" id="camera-preview" aria-hidden="true" hidden>
+    <video muted loop playsinline autoplay preload="auto"></video>
+    <img alt="" hidden>
+    <div class="camera-preview-body">
+      <b class="camera-preview-title"></b>
+      <span class="camera-preview-text"></span>
+      <span class="camera-preview-expands" hidden></span>
+      <span class="camera-preview-credit">Example: CameraBench, CC BY 4.0</span>
+    </div>
+  </div>
+  <div class="lora-hover-preview" id="lora-hover-preview" aria-hidden="true" hidden>
+    <div class="lora-hover-media"><video muted playsinline autoplay preload="auto" hidden></video><img alt="" hidden></div>
+    <div class="lora-hover-body"><b class="lora-hover-title"></b><span class="lora-hover-count"></span><span class="lora-hover-note"></span></div>
+  </div>
+  <div class="lora-hover-preview ref-hover-preview" id="ref-hover-preview" aria-hidden="true" hidden>
+    <div class="lora-hover-media"><video muted loop playsinline preload="auto" hidden></video><img alt="" hidden><div class="ref-hover-audio" hidden></div></div>
+    <div class="lora-hover-body"><b class="lora-hover-title ref-hover-token"></b><span class="lora-hover-count ref-hover-meta"></span><span class="lora-hover-note ref-hover-label"></span></div>
+  </div>
+  <div class="trigger-tip" id="trigger-tip" role="dialog" aria-label="LoRA for this trigger word" hidden></div>
+  <div class="ref-viewer" id="lora-gallery" hidden>
+    <div class="ref-viewer-backdrop" data-gallery-close></div>
+    <div class="ref-viewer-dialog lora-gallery-dialog" role="dialog" aria-modal="true" aria-labelledby="lora-gallery-title">
+      <button type="button" class="ref-viewer-close" data-gallery-close aria-label="Close">&#10005;</button>
+      <div class="lora-gallery-head">
+        <h2 class="job-info-title" id="lora-gallery-title">LoRA gallery <span class="card-sub" id="lora-gallery-model"></span></h2>
+        <div class="lora-gallery-tools" id="lora-gallery-tools">
+          <input type="search" class="jobs-search" id="lora-gallery-search" placeholder="Search names, triggers, descriptions&hellip;" aria-label="Search LoRAs">
+          <select id="lora-gallery-group" aria-label="Filter by group"></select>
+          <label class="stitch-inline-checkbox"><input type="checkbox" id="lora-gallery-enabled-only"> Enabled only</label>
+          <label class="stitch-inline-checkbox"><input type="checkbox" id="lora-gallery-by-group"> By category</label>
+          <label class="stitch-inline-checkbox"><input type="checkbox" id="lora-gallery-nsfw"> Show NSFW previews</label>
+        </div>
+        <div class="lora-gallery-manage" id="lora-gallery-manage">
+          <input type="file" id="lora-gallery-upload-file" accept=".safetensors" aria-label="LoRA file">
+          <input type="text" id="lora-gallery-upload-name" maxlength="100" placeholder="LoRA name" aria-label="LoRA name">
+          <button type="button" class="secondary-button" id="lora-gallery-upload">Upload LoRA</button>
+          <button type="button" class="secondary-button" id="lora-gallery-link-toggle" aria-expanded="false" aria-controls="lora-gallery-link-panel">Link LoRA</button>
+          <button type="button" class="secondary-button" id="lora-gallery-config-button">Config</button>
+          <span class="hint" id="lora-gallery-upload-status">For the selected H3 or LTX model</span>
+        </div>
+        <div class="lora-gallery-link-panel" id="lora-gallery-link-panel" hidden>
+          <div class="lora-gallery-link-fields">
+            <input type="url" id="lora-gallery-link-url" placeholder="Civitai or Hugging Face model link" aria-label="LoRA model link">
+            <input type="password" id="lora-gallery-link-token" placeholder="Access token, if needed" autocomplete="off" aria-label="Optional site access token">
+            <button type="button" class="primary-button" id="lora-gallery-link-add">Download with Hermes</button>
+          </div>
+          <p class="hint">Paste a Civitai model/version link or a Hugging Face repository or .safetensors file link. Hermes selects the file for the current model.</p>
+          <div class="lora-gallery-link-progress" id="lora-gallery-link-progress" hidden role="status" aria-live="polite">
+            <span id="lora-gallery-link-stage">Queued</span><progress id="lora-gallery-link-meter" max="100"></progress>
+          </div>
+        </div>
+      </div>
+      <div class="lora-gallery-grid" id="lora-gallery-grid"></div>
+      <div class="lora-gallery-detail" id="lora-gallery-detail" hidden></div>
+      <div class="lora-gallery-config" id="lora-gallery-config" hidden>
+        <div class="lora-config-actions">
+          <button type="button" class="secondary-button" id="lora-config-back">&#8592; Gallery</button>
+          <h3>Categories and LoRA order</h3>
+          <button type="button" class="secondary-button" id="lora-config-hermes">Organize with Hermes</button>
+          <button type="button" class="primary-button" id="lora-config-save">Save changes</button>
+        </div>
+        <p class="hint" id="lora-config-status" role="status" aria-live="polite">Rename, reorder, add, or remove categories. Move LoRAs between categories and set their display order.</p>
+        <div class="lora-hermes-visual" id="lora-hermes-visual" aria-live="polite"></div>
+        <div id="lora-config-categories"></div>
+        <div class="lora-config-add"><input type="text" id="lora-config-new" maxlength="60" placeholder="New category name" aria-label="New category name"><button type="button" class="secondary-button" id="lora-config-add">Add category</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Compare: two generations side by side or stacked, whichever is bigger (openCompare). -->
+  <div class="compare-viewer" id="compare-viewer" hidden>
+    <div class="compare-toolbar">
+      <button type="button" class="secondary-button" id="compare-play"><span data-icon="pause"></span> Pause</button>
+      <button type="button" class="secondary-button" id="compare-restart" title="Restart both from the start">&#8634; Restart</button>
+      <div class="compare-segment" role="group" aria-label="Sound">
+        <span>Sound</span>
+        <button type="button" data-compare-sound="off" class="is-active">Off</button>
+        <button type="button" data-compare-sound="0">A</button>
+        <button type="button" data-compare-sound="1">B</button>
+      </div>
+      <div class="compare-segment" role="group" aria-label="Layout">
+        <span>Layout</span>
+        <button type="button" data-compare-layout="auto" class="is-active">Auto</button>
+        <button type="button" data-compare-layout="row">Side by side</button>
+        <button type="button" data-compare-layout="column">Stacked</button>
+        <button type="button" data-compare-layout="single">Single</button>
+      </div>
+      <div class="compare-segment" role="group" aria-label="Showing" id="compare-show" hidden>
+        <span>Showing</span>
+        <button type="button" data-compare-show="0" class="is-active">A</button>
+        <button type="button" data-compare-show="1">B</button>
+      </div>
+      <button type="button" class="secondary-button" id="compare-swap" title="Swap A and B">&#8646; Swap</button>
+      <button type="button" class="ref-viewer-close compare-close" id="compare-close" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="compare-stage" id="compare-stage">
+      <figure class="compare-pane"><video muted loop playsinline preload="auto"></video><figcaption></figcaption></figure>
+      <figure class="compare-pane"><video muted loop playsinline preload="auto"></video><figcaption></figcaption></figure>
+    </div>
+  </div>
+
+  <!-- LoRA trigger aliases (openAliasDialog): an alias typed in the prompt is
+       highlighted like its trigger and swapped for it on Generate. -->
+  <div class="ref-viewer" id="alias-dialog" hidden>
+    <div class="ref-viewer-backdrop" data-alias-close></div>
+    <div class="ref-viewer-dialog preset-dialog alias-dialog" role="dialog" aria-modal="true" aria-labelledby="alias-dialog-title">
+      <button type="button" class="ref-viewer-close" data-alias-close aria-label="Close">&#10005;</button>
+      <h2 class="job-info-title" id="alias-dialog-title">Trigger aliases <span class="card-sub" id="alias-dialog-model"></span></h2>
+      <p class="hint">Type an alias in the prompt instead of a long trigger keyword; one keyword can have several (<code>tag, tag2</code> or <code>tag,tag2</code>). It's highlighted like the trigger (on/off with its LoRA), and Generate swaps in the keyword.</p>
+      <form class="alias-form" id="alias-form">
+        <label class="alias-kind-field">Type <select id="alias-kind">
+          <option value="lora">LoRA trigger</option>
+          <option value="camera">Camera move (unofficial)</option>
+          <option value="shot">Shot composition (unofficial)</option>
+        </select></label>
+        <label>Aliases, comma-separated <input type="text" id="alias-name" maxlength="600" placeholder="e.g. anim, 2d" autocomplete="off" spellcheck="false" required></label>
+        <label id="alias-lora-field">LoRA <select id="alias-lora"></select></label>
+        <label><span id="alias-trigger-label">Trigger</span> <select id="alias-trigger"></select></label>
+        <label>Becomes <input type="text" id="alias-target" maxlength="400" placeholder="The keyword that goes in the prompt" autocomplete="off" spellcheck="false" required></label>
+        <div class="alias-form-buttons">
+          <button type="button" class="secondary-button alias-show-all" id="alias-show-all"></button>
+          <button type="button" class="secondary-button" id="alias-cancel" hidden>Cancel edit</button>
+          <button type="submit" class="primary-button" id="alias-save">Add alias</button>
+        </div>
+      </form>
+      <!-- "Show all aliases": the whole list replaces the form until Back / Edit. -->
+      <div class="alias-list-view" id="alias-list-view" hidden>
+        <div class="alias-list-head">
+          <button type="button" class="secondary-button" id="alias-list-back">&#8592; Back</button>
+          <span class="hint" id="alias-list-hint"></span>
+        </div>
+        <button type="button" class="secondary-button" id="alias-restore-camera" hidden>Restore built-ins</button>
+        <ul class="preset-list alias-list" id="alias-list"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Presets "Save as": new name, overwrite any preset, or rename one (openPresetDialog). -->
+  <div class="ref-viewer" id="preset-dialog" hidden>
+    <div class="ref-viewer-backdrop" id="preset-dialog-backdrop"></div>
+    <div class="ref-viewer-dialog preset-dialog" role="dialog" aria-modal="true" aria-labelledby="preset-dialog-title">
+      <button type="button" class="ref-viewer-close" id="preset-dialog-close" aria-label="Close">&#10005;</button>
+      <h2 class="job-info-title" id="preset-dialog-title">Save settings as</h2>
+      <form class="preset-new-row" id="preset-new-form">
+        <input type="text" id="preset-new-name" maxlength="60" placeholder="New preset name" aria-label="New preset name" autocomplete="off">
+        <button type="submit" class="primary-button">Save new</button>
+      </form>
+      <p class="hint" id="preset-list-hint">Or save over an existing preset:</p>
+      <ul class="preset-list" id="preset-list"></ul>
+    </div>
+  </div>
+
+  <!-- Extreme thumbs up questionnaire (openBestReasons in app.js). -->
+  <div class="ref-viewer" id="best-reasons" hidden>
+    <div class="ref-viewer-backdrop" id="best-reasons-backdrop"></div>
+    <div class="ref-viewer-dialog best-reasons-dialog" role="dialog" aria-modal="true" aria-labelledby="best-reasons-title">
+      <button type="button" class="ref-viewer-close" id="best-reasons-close" aria-label="Close">&#10005;</button>
+      <h2 class="job-info-title best-reasons-title" id="best-reasons-title"><span data-icon="star"></span> Best quality possible</h2>
+      <div class="best-reasons-stage">
+        <video id="best-reasons-video" muted loop autoplay playsinline preload="auto"></video>
+        <button type="button" class="best-reasons-sound" id="best-reasons-sound" aria-pressed="false"><span data-icon="volumeOff"></span> Tap for sound</button>
+      </div>
+      <p class="hint">What made it the best? Tap all that apply.</p>
+      <div class="best-reasons-options" id="best-reasons-options"></div>
+      <button type="button" class="primary-button best-reasons-save" id="best-reasons-save">Save extreme thumbs up</button>
+    </div>
+  </div>
+
+  <div class="ref-viewer" id="job-info" hidden>
+    <div class="ref-viewer-backdrop" id="job-info-backdrop"></div>
+    <div class="ref-viewer-dialog job-info-dialog" role="dialog" aria-modal="true" aria-labelledby="job-info-title">
+      <button type="button" class="ref-viewer-close" id="job-info-close" aria-label="Close">&#10005;</button>
+      <h2 class="job-info-title" id="job-info-title">Generation details</h2>
+      <div class="job-info-body" id="job-info-body"></div>
+    </div>
+  </div>
+
+  <div class="ref-viewer" id="ref-viewer" hidden>
+    <div class="ref-viewer-backdrop" id="ref-viewer-backdrop"></div>
+    <div class="ref-viewer-dialog" role="dialog" aria-modal="true">
+      <button type="button" class="ref-viewer-close" id="ref-viewer-close" aria-label="Close">&#10005;</button>
+      <button type="button" class="ref-viewer-nav ref-viewer-prev" id="ref-viewer-prev" aria-label="Previous reference">&#10094;</button>
+      <button type="button" class="ref-viewer-nav ref-viewer-next" id="ref-viewer-next" aria-label="Next reference">&#10095;</button>
+      <div class="ref-viewer-stage" id="ref-viewer-stage"></div>
+      <div class="ref-viewer-toolbar" id="ref-viewer-toolbar"></div>
+      <div class="ref-viewer-position" id="ref-viewer-position"></div>
+    </div>
+  </div>
+</body>
+</html>

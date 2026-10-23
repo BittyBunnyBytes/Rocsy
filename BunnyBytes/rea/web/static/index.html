@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>REA · Reverse Engineer Anything</title>
+  <link rel="stylesheet" href="/REA/static/app.css?v=32">
+  <link rel="stylesheet" href="/REA/static/scene.css?v=1">
+</head>
+<body>
+  <header class="topbar">
+    <button type="button" class="icon-button sidebar-open" id="sidebar-open" aria-controls="files" aria-expanded="true" title="Show the file list" aria-label="Show the file list" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M9 4H6a2 2 0 0 0-2 2v3M15 4h3a2 2 0 0 1 2 2v3M9 20H6a2 2 0 0 1-2-2v-3M15 20h3a2 2 0 0 0 2-2v-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="11.5" cy="11.5" r="3.2" stroke="currentColor" stroke-width="1.8"/><path d="M14 14l2.6 2.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+      <span class="brand-text"><strong>REA</strong><span>Reverse Engineer Anything</span></span>
+    </div>
+    <nav class="top-tabs" id="top-tabs" aria-label="REA sections">
+      <button type="button" data-top="work" aria-pressed="true">Games &amp; files</button>
+      <button type="button" data-top="library" aria-pressed="false">Saved functions</button>
+    </nav>
+    <span class="chip" id="status-chip"><span class="dot"></span><span id="status-text">Connecting…</span></span>
+    <button type="button" class="button" id="models-button" title="The model and thinking level the Master Agent uses for all REA tasks">Models</button>
+  </header>
+
+  <main class="layout">
+    <aside class="files" id="files">
+      <div class="files-head">
+        <h2>Library <span class="count" id="files-count"></span></h2>
+        <button type="button" class="icon-button sidebar-close" id="sidebar-close" aria-controls="files" title="Hide the file list (the ☰ button brings it back)" aria-label="Hide the file list"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+      <div class="files-actions">
+        <button type="button" class="button primary" id="folder-button" title="Mount a game or program folder read-only">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 10.5v5M9.5 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Add folder</button>
+        <label class="button" for="upload-input" title="Upload a binary, app, APK, archive or script">Upload
+          <input type="file" id="upload-input" hidden>
+        </label>
+        <button type="button" class="button" id="pick-button" title="Pick a file the Master Agent made or received">From Agent</button>
+      </div>
+      <div class="drop" id="drop">or drop a file here</div>
+      <div class="upload-progress" id="upload-progress" hidden><span id="upload-name"></span><progress id="upload-bar" max="1" value="0"></progress></div>
+      <div class="files-tools">
+        <input type="search" id="file-filter" placeholder="Filter" aria-label="Filter the library" autocomplete="off">
+        <select id="file-sort" aria-label="Sort files and folders" title="Sort">
+          <option value="modified">Last modified</option>
+          <option value="name">Name</option>
+          <option value="added">Date added</option>
+        </select>
+      </div>
+      <ul class="file-list" id="file-list"><li class="empty">No files yet.</li></ul>
+    </aside>
+
+    <section class="work" id="work">
+      <div class="intro" id="intro">
+        <section class="hero">
+          <span class="eyebrow">Reverse Engineer Anything</span>
+          <h1>Look inside any program</h1>
+          <p>Add a game folder or a single file. REA sorts every file, spots the engine, decompiles it, and helps the
+            Master Agent build, test and install mods against the game's own code.</p>
+          <div class="hero-actions">
+            <button type="button" class="button primary" data-proxy="folder-button">Add a game folder</button>
+            <button type="button" class="button" data-proxy="upload-input">Upload a file</button>
+            <button type="button" class="button" data-proxy="pick-button">Pick from the agent</button>
+          </div>
+        </section>
+        <section class="intro-section" id="intro-games" hidden>
+          <div class="section-head"><h2>Your games and programs</h2><span class="hint" id="intro-games-count"></span></div>
+          <ul class="game-grid" id="intro-game-list"></ul>
+        </section>
+        <section class="intro-section">
+          <div class="section-head"><h2>How it works</h2></div>
+          <ol class="flow">
+            <li><span class="flow-n">1</span><strong>Add</strong><span>Mount a game folder read-only, or upload a binary, APK or archive.</span></li>
+            <li><span class="flow-n">2</span><strong>Explore</strong><span>Ranked files, engine detection, a Decompiled explorer with scripts, assets and 3D previews.</span></li>
+            <li><span class="flow-n">3</span><strong>Build</strong><span>Describe a mod or rewrite; the agent plans it, you approve, it builds against the game's code.</span></li>
+            <li><span class="flow-n">4</span><strong>Test &amp; install</strong><span>Headless test runs next to the unmodified game, then install and play. Uninstall restores the game.</span></li>
+          </ol>
+        </section>
+        <section class="intro-section">
+          <div class="section-head"><h2>What REA can open</h2></div>
+          <ul class="caps">
+            <li><span class="cap-ic games" aria-hidden="true">▣</span><strong>Games and programs</strong> Unity (Mono / IL2CPP), Unreal, Godot, RPG Maker, Ren'Py, Electron and more: every file sorted by what it really is, opened with one click.</li>
+            <li><span class="cap-ic native" aria-hidden="true">⌘</span><strong>Native binaries</strong> ELF, PE, Mach-O through Ghidra: functions, pseudocode, assembly, strings, callers, xrefs.</li>
+            <li><span class="cap-ic agent" aria-hidden="true">✦</span><strong>Everything else</strong> APKs, JS apps, .NET, firmware, captures, websites: ask the Master Agent, which has all 170 REA tools.</li>
+          </ul>
+        </section>
+        <p class="hint">Uploads are saved in the agent's workspace (rea/) so the Master Agent can open them too. Analysis runs on the CPU in the REA container; nothing leaves this computer.</p>
+      </div>
+
+      <div class="target" id="target" hidden>
+        <div class="target-head">
+          <span class="t-kind" id="t-kind" aria-hidden="true"></span>
+          <div class="target-title">
+            <h1 id="t-name"></h1>
+            <p class="hint" id="t-meta"></p>
+          </div>
+          <div class="target-actions">
+            <button type="button" class="button primary" id="ask-button">Ask the Master Agent</button>
+            <button type="button" class="button" id="open-button" hidden title="Open in this computer's file manager">Open folder</button>
+            <button type="button" class="button" id="close-button">Close</button>
+            <button type="button" class="button danger" id="remove-button">Remove</button>
+          </div>
+        </div>
+
+        <div class="state" id="t-state"></div>
+
+        <div class="folder-view" id="folder-view" hidden>
+          <nav class="fv-tabs" id="fv-tabs" aria-label="Game sections">
+            <div class="tab-group" data-group="Explore">
+              <button type="button" data-fvtab="files" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Files</span></button>
+              <button type="button" data-fvtab="decomp" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14"/></svg><span>Decompiled</span></button>
+            </div>
+            <div class="tab-group" data-group="Make">
+              <button type="button" data-fvtab="builds" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6.5a4 4 0 0 0-5.3 5.3L4 17l3 3 5.2-5.2a4 4 0 0 0 5.3-5.3l-2.5 2.5-2.5-.5-.5-2.5z"/></svg><span>Mods &amp; rewrites</span></button>
+            </div>
+            <div class="tab-group" data-group="Knowledge">
+              <button type="button" data-fvtab="notes" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h5"/></svg><span>Notes</span></button>
+              <button type="button" data-fvtab="arch" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 14h6v6h-6zM14 4h6v6h-6zM10 7h4M17 10v4M7 10v7h7"/></svg><span>Architecture</span></button>
+              <button type="button" data-fvtab="rules" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6zM8.5 12l2.5 2.5 4.5-5"/></svg><span>Rules</span></button>
+            </div>
+            <div class="tab-group" data-group="Activity">
+              <button type="button" data-fvtab="sessions" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg><span>Sessions</span></button>
+              <button type="button" data-fvtab="logs" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 10l2.5 2L8 14M12 15h4"/></svg><span>Logs</span></button>
+            </div>
+          </nav>
+          <div class="kb-panel" id="fv-logs" hidden>
+            <div class="panel-head">
+              <div><h2>Logs</h2><p class="hint">Test runs of this game's mods (build, syntax check, headless run, baseline and engine logs) plus each mod's latest decompile, build and loader logs. Kept until you delete them.</p></div>
+              <div class="step-actions">
+                <button type="button" class="button" id="logs-refresh">Refresh</button>
+                <button type="button" class="button danger" id="logs-clear">Delete all logs</button>
+              </div>
+            </div>
+            <ul class="sess-list decomp-list" id="logs-list"></ul>
+            <div class="decomp-viewer" id="logs-viewer" hidden>
+              <div class="code-head">
+                <p class="hint" id="logs-path"></p>
+                <button type="button" class="button" id="logs-close">Close</button>
+              </div>
+              <pre class="code" id="logs-code"></pre>
+            </div>
+          </div>
+          <div class="kb-panel" id="fv-decomp" hidden>
+            <div class="panel-head">
+              <div>
+                <h2>Decompiled</h2>
+                <p class="hint">Everything recovered so far: Ghidra pseudocode, ILSpy / GDRE / asar output and what the agent recorded. Kept in this game's knowledge base, so later sessions continue instead of starting over. A record goes stale when the game file changes.</p>
+              </div>
+              <div class="step-actions">
+                <button type="button" class="button primary" id="decomp-continue">Continue decompiling</button>
+                <button type="button" class="button" id="decomp-check-go" title="Check that everything is decompiled, compiles with the game's own engine/assemblies, and (Godot) runs like the original">Validate build</button>
+                <button type="button" class="button" id="decomp-open" hidden>Open folder</button>
+                <button type="button" class="button" id="decomp-refresh">Refresh</button>
+              </div>
+            </div>
+            <div class="panel-facts">
+              <p class="hint decomp-storage-path" id="decomp-storage-path"></p>
+              <div class="engines" id="decomp-languages" aria-label="Detected programming languages"></div>
+            </div>
+            <div class="status-stack">
+            <details class="decomp-errors" id="decomp-errors">
+              <summary id="decomp-errors-summary">Checking source syntax…</summary>
+              <div class="decomp-errors-body">
+                <p class="hint" id="decomp-validation-meta"></p>
+                <p class="hint" id="decomp-repair-status" role="status"></p>
+                <div class="step-actions">
+                  <button type="button" class="button primary" id="decomp-address" disabled>Address errors</button>
+                  <button type="button" class="button" id="decomp-stop" hidden>Stop after this run</button>
+                  <a class="button" id="decomp-agent" target="_blank" rel="noopener" hidden>Open agent session</a>
+                </div>
+                <ul class="decomp-diagnostics" id="decomp-diagnostics"></ul>
+              </div>
+            </details>
+            <details class="decomp-errors decomp-check" id="decomp-check" hidden></details>
+            </div>
+            <nav class="seg" id="decomp-views">
+              <button type="button" data-dview="explorer" aria-pressed="true">Explorer</button>
+              <button type="button" data-dview="progress" aria-pressed="false">Progress</button>
+            </nav>
+            <div class="dx" id="decomp-explorer">
+              <div class="dx-bar">
+                <input type="search" id="dx-filter" placeholder="Find a script or asset by name or path" aria-label="Find a script or asset">
+                <div class="chips" id="dx-kinds" aria-label="Show"></div>
+                <label class="toggle"><input type="checkbox" id="dx-engine"> Engine &amp; import files</label>
+                <button type="button" class="button" id="dx-extract-toggle">Extract assets…</button>
+              </div>
+              <div class="dx-extract" id="dx-extract" hidden>
+                <p class="hint">Pulls the resources embedded in a Windows <code>.exe</code>/<code>.dll</code> (icons, bitmaps, cursors, version info, string tables, manifests, embedded data) into files under Assets. Engine packs (Godot <code>.pck</code>, asar, RPG Maker, Ren'Py, Unreal dumps) are unpacked by the Mods tab's decompile step and show up here on their own.</p>
+                <div class="dx-extract-row">
+                  <select id="dx-extract-file" aria-label="File to extract from"></select>
+                  <button type="button" class="button primary" id="dx-extract-go">Extract</button>
+                </div>
+              </div>
+              <p class="hint" id="dx-summary"></p>
+              <div class="dx-main">
+                <ul class="dx-tree" id="dx-tree" role="tree" aria-label="Decompiled files"></ul>
+                <section class="dx-view" id="dx-view" aria-live="polite"></section>
+              </div>
+            </div>
+            <div id="decomp-progress" hidden>
+            <p class="hint" id="decomp-summary"></p>
+            <ul class="sess-list decomp-list" id="decomp-list"></ul>
+            <div class="decomp-viewer" id="decomp-viewer" hidden>
+              <div class="code-head">
+                <p class="hint" id="decomp-path"></p>
+                <button type="button" class="button" id="decomp-close">Close</button>
+              </div>
+              <ul class="decomp-dir" id="decomp-dir" hidden></ul>
+              <pre class="code" id="decomp-code" hidden></pre>
+            </div>
+            <details class="decomp-log">
+              <summary>Activity</summary>
+              <ul id="decomp-log"></ul>
+            </details>
+            </div>
+          </div>
+          <div class="kb-panel" id="fv-sessions" hidden>
+            <div class="panel-head">
+              <div><h2>Agent sessions</h2><p class="hint">Every Master Agent (Hermes) session REA started for this game: mod steps, questions and architecture mapping. Open one to follow or continue it.</p></div>
+              <div class="step-actions"><button type="button" class="button" id="sess-refresh">Refresh</button></div>
+            </div>
+            <ul class="sess-list" id="sess-list"></ul>
+          </div>
+          <div class="kb-panel" id="fv-notes" hidden>
+            <div class="panel-head">
+              <div><h2>Notes</h2><p class="hint">The Master Agent's memory for this game: it searches these notes, the architecture page and the decompiled code at the start of every session and writes down what it learns. Your own notes count as instructions.</p></div>
+            </div>
+            <div class="filter-row">
+              <input type="search" id="kb-q" placeholder="Search the knowledge base, e.g. how is the game paused?" autocomplete="off">
+              <button type="button" class="button primary" id="kb-new">New note</button>
+            </div>
+            <div class="chips kb-scope" id="kb-scope">
+              <button type="button" data-scope="notes" aria-pressed="true">Notes</button>
+              <button type="button" data-scope="architecture" aria-pressed="true">Architecture</button>
+              <button type="button" data-scope="mods" aria-pressed="true">Mod architectures</button>
+              <button type="button" data-scope="code" aria-pressed="true">Decompiled code</button>
+            </div>
+            <ul class="kb-results" id="kb-results" hidden></ul>
+            <div class="kb-editor" id="kb-editor" hidden>
+              <input type="search" id="kb-title" placeholder="Title" autocomplete="off">
+              <input type="search" id="kb-tags" placeholder="Tags, comma separated" autocomplete="off">
+              <textarea id="kb-body" rows="12" placeholder="Markdown"></textarea>
+              <div class="dialog-foot">
+                <button type="button" class="button" id="kb-cancel">Cancel</button>
+                <button type="button" class="button primary" id="kb-save">Save note</button>
+              </div>
+            </div>
+            <article class="kb-note" id="kb-note" hidden>
+              <div class="code-head">
+                <div><h2 id="kb-note-title"></h2><p class="hint" id="kb-note-meta"></p></div>
+                <div class="step-actions">
+                  <button type="button" class="button" id="kb-edit">Edit</button>
+                  <button type="button" class="button danger" id="kb-delete">Delete</button>
+                  <button type="button" class="button" id="kb-close">Close</button>
+                </div>
+              </div>
+              <div class="md" id="kb-note-body"></div>
+            </article>
+            <ul class="kb-list" id="kb-list"></ul>
+          </div>
+          <div class="kb-panel" id="fv-rules" hidden>
+            <div class="panel-head">
+              <div><h2>Rules</h2><p class="hint">Hot files per engine: where a game's own code lives, so the mod agent reads, patches and hooks those and leaves SDKs and libraries alone. Every mod brief and test-run report carries this engine's rules, and the Unity decompile step only decompiles the hot files.</p><p class="hint" id="rules-meta"></p></div>
+              <div class="step-actions">
+                <select id="rules-engine" aria-label="Engine"></select>
+                <button type="button" class="button" id="rules-edit">Edit</button>
+                <button type="button" class="button" id="rules-reset" hidden>Reset to defaults</button>
+              </div>
+            </div>
+            <div id="rules-view">
+              <h3 class="rules-h">Hot files <span class="hint">read, patch and hook these</span></h3>
+              <ul class="sess-list rules-list" id="rules-focus"></ul>
+              <h3 class="rules-h">Leave alone <span class="hint">SDKs, libraries and engine code; their errors in the baseline are noise</span></h3>
+              <ul class="sess-list rules-list" id="rules-skip"></ul>
+              <div class="md" id="rules-notes"></div>
+            </div>
+            <div class="kb-editor" id="rules-editor" hidden>
+              <p class="hint">One rule per line: <code>pattern — why</code>. <code>Name*.dll</code> matches a file anywhere, a pattern with <code>/</code> matches the end of its path, <code>**</code> spans folders. A plain description (with spaces) is a rule for the agent only.</p>
+              <label class="hint" for="rules-focus-text">Hot files</label>
+              <textarea id="rules-focus-text" rows="7"></textarea>
+              <label class="hint" for="rules-skip-text">Leave alone</label>
+              <textarea id="rules-skip-text" rows="10"></textarea>
+              <label class="hint" for="rules-notes-text">Notes for the agent</label>
+              <textarea id="rules-notes-text" rows="3"></textarea>
+              <div class="dialog-foot">
+                <button type="button" class="button" id="rules-cancel">Cancel</button>
+                <button type="button" class="button primary" id="rules-save">Save</button>
+              </div>
+            </div>
+          </div>
+          <div class="kb-panel" id="fv-arch" hidden>
+            <div class="panel-head">
+              <div><h2>Architecture</h2><p class="hint">How the game itself is built, from its decompiled files: engine, modules, core systems, data, hook points. Each mod keeps its own design in its mod architecture, so this page stays about the game.</p><p class="hint" id="arch-meta"></p></div>
+              <div class="step-actions">
+                <button type="button" class="button primary" id="arch-agent">Ask the agent to map it</button>
+                <button type="button" class="button" id="arch-edit">Edit</button>
+              </div>
+            </div>
+            <div class="md arch" id="arch-view"></div>
+            <div class="kb-editor" id="arch-editor" hidden>
+              <textarea id="arch-text" rows="24"></textarea>
+              <div class="dialog-foot">
+                <button type="button" class="button" id="arch-cancel">Cancel</button>
+                <button type="button" class="button primary" id="arch-save">Save</button>
+              </div>
+            </div>
+            <div class="arch-mods" id="arch-mods" hidden>
+              <h3>Mod architectures</h3>
+              <ul class="kb-list" id="arch-mod-list"></ul>
+            </div>
+          </div>
+          <div class="mods-panel" id="fv-builds" hidden>
+            <div class="panel-head">
+              <div><h2>Mods &amp; rewrites</h2><p class="hint">A mod changes this game using its own code and assets; a rewrite rebuilds it in another language or engine. Each project has one agent session that plans, builds and tests it.</p></div>
+              <nav class="pill-seg" id="build-tabs" aria-label="Build types">
+                <button type="button" data-buildtab="mods" aria-pressed="true">Mods</button>
+                <button type="button" data-buildtab="rewrites" aria-pressed="false">Rewrites</button>
+              </nav>
+            </div>
+            <div class="mods-panel" id="fv-mods">
+            <p class="state" id="mods-support"></p>
+            <div class="build-grid">
+            <section class="project-col">
+              <div class="installed-head">
+                <h3 class="col-title">Installed mods</h3>
+                <button type="button" class="button danger small" id="uninstall-all" hidden>Uninstall all from this game</button>
+              </div>
+              <p class="hint">Mods currently copied into your game folders. Uninstall puts back every file a mod replaced.</p>
+              <ul class="mod-list installed-list" id="installed-list" data-empty="No mods are installed in any game."></ul>
+              <h3 class="col-title">Mod projects</h3>
+              <ul class="mod-list" id="mod-list" data-empty="No mods for this game yet. Describe one on the right to start."></ul>
+            </section>
+            <form class="new-mod" id="new-mod">
+              <div class="new-mod-head">
+                <h2>New mod</h2>
+                <p class="hint">Describe the change you want in this game. The agent will make a plan for you to review before building it.</p>
+              </div>
+              <label class="new-mod-field" for="mod-name">Name
+                <input type="text" id="mod-name" placeholder="Give your mod a name" maxlength="60" autocomplete="off" required>
+              </label>
+              <label class="new-mod-field" for="mod-goal">What should it do?
+                <textarea id="mod-goal" rows="4" placeholder="Describe the behavior, how you trigger it, and what should happen in the game." maxlength="4000" required></textarea>
+              </label>
+              <div class="new-mod-footer">
+                <p class="hint">Single-player games. You can refine the plan and test the mod before installing it.</p>
+                <button type="submit" class="button primary" id="mod-create">Create mod project</button>
+              </div>
+            </form>
+            </div>
+            </div>
+            <div class="mods-panel" id="fv-rewrites" hidden>
+              <div class="build-grid">
+              <section class="project-col">
+                <h3 class="col-title">Rewrite projects</h3>
+                <ul class="mod-list" id="rewrite-list" data-empty="No rewrites yet."></ul>
+              </section>
+              <div class="new-mod">
+                <div class="new-mod-head">
+                  <h2>New rewrite</h2>
+                  <p class="hint">A separate version of this game in another language, engine, or both. The original stays read-only; behavior parity is tracked with test evidence.</p>
+                </div>
+                <input type="search" id="rewrite-name" placeholder="Project name" autocomplete="off">
+                <div class="rewrite-targets">
+                  <label>Language<input type="search" id="rewrite-language" placeholder="e.g. Rust, C#, GDScript" autocomplete="off"></label>
+                  <label>Engine<input type="search" id="rewrite-engine" placeholder="e.g. Godot, Unity, custom" autocomplete="off"></label>
+                </div>
+                <textarea id="rewrite-goal" rows="3" placeholder="Any scope or platform requirements?"></textarea>
+                <div class="dialog-foot"><button type="button" class="button primary" id="rewrite-create">Create rewrite project</button></div>
+              </div>
+              </div>
+            </div>
+          </div>
+          <div class="fv-files" id="fv-files">
+          <div class="fv-summary">
+            <div class="stats" id="fv-stats"></div>
+            <div class="fv-tags">
+              <div class="engines" id="fv-engines"></div>
+              <div class="engines" id="fv-languages" aria-label="Detected programming languages"></div>
+            </div>
+          </div>
+          <div class="filter-row">
+            <input type="search" id="fv-filter" placeholder="Filter files by name or path" autocomplete="off">
+            <button type="button" class="button" id="fv-refresh">Rescan</button>
+          </div>
+          <div class="seg kinds" id="fv-kinds"></div>
+          <p class="hint" id="fv-count"></p>
+          <ul class="rows inv" id="fv-list"></ul>
+          <details class="log skipped" id="fv-skipped" hidden><summary id="fv-skipped-sum"></summary><ul class="rows inv" id="fv-skipped-list"></ul></details>
+          </div>
+        </div>
+
+        <nav class="tabs" id="tabs" hidden>
+          <button type="button" data-tab="overview" aria-pressed="true">Overview</button>
+          <button type="button" data-tab="functions" aria-pressed="false">Functions</button>
+          <button type="button" data-tab="strings" aria-pressed="false">Strings</button>
+        </nav>
+
+        <div class="panel" data-panel="overview" id="overview"></div>
+
+        <div class="panel split" data-panel="functions" hidden>
+          <div class="list-col">
+            <div class="filter-row">
+              <input type="search" id="fn-filter" placeholder="Filter functions" autocomplete="off">
+              <label class="toggle"><input type="checkbox" id="fn-external"> Imports</label>
+            </div>
+            <p class="hint" id="fn-count"></p>
+            <ul class="rows" id="fn-list"></ul>
+          </div>
+          <div class="code-col" id="code-col">
+            <p class="empty">Pick a function.</p>
+          </div>
+        </div>
+
+        <div class="panel split" data-panel="strings" hidden>
+          <div class="list-col">
+            <div class="filter-row">
+              <input type="search" id="str-filter" placeholder="Filter strings" autocomplete="off">
+            </div>
+            <p class="hint" id="str-count"></p>
+            <ul class="rows" id="str-list"></ul>
+          </div>
+          <div class="code-col" id="xref-col">
+            <p class="empty">Pick a string to see what uses it.</p>
+          </div>
+        </div>
+      </div>
+      <div class="mod-view" id="rewrite-view" hidden>
+        <div class="target-head">
+          <div class="target-title"><button type="button" class="link-button" id="rewrite-back">← Back to Builds</button><h1 id="rewrite-title"></h1><p class="hint" id="rewrite-meta"></p></div>
+          <div class="target-actions"><a class="button" id="rewrite-session" target="_blank" rel="noopener" hidden>Open agent session</a><button type="button" class="button danger" id="rewrite-delete">Delete project</button></div>
+        </div>
+        <ol class="step-strip" id="rewrite-strip" aria-label="Rewrite progress"></ol>
+        <nav class="tabs project-tabs" id="rewrite-tabs" aria-label="Rewrite sections">
+          <button type="button" data-ptab="overview" aria-pressed="true">Overview</button>
+          <button type="button" data-ptab="steps" aria-pressed="false">Steps</button>
+          <button type="button" data-ptab="files" aria-pressed="false">Files</button>
+          <button type="button" data-ptab="goals" aria-pressed="false">Goals <span class="tab-count" id="rewrite-tab-goals"></span></button>
+        </nav>
+        <div class="ptab-panel" data-panel="overview">
+          <section class="goal-box"><span class="goal-label">Goal</span><p class="goal" id="rewrite-goal-text"></p></section>
+          <section class="step check-box" aria-label="Validate the rewrite">
+            <div class="code-head"><div><h2>Validate build</h2><p class="hint">Is the rewrite complete and working? Checks the parity checklist (PARITY.json), compiles src/ with the matching toolchain (Godot, dotnet, javac, or the JS/Lua/Python parsers) and, for Godot, runs it.</p></div><button type="button" class="button" id="rewrite-check-go">Validate build</button></div>
+            <details class="decomp-errors decomp-check" id="rewrite-check" hidden></details>
+          </section>
+          <section class="step focus-box" aria-label="Focus the agent on this rewrite">
+            <div class="code-head"><div><h2>Focus the agent</h2><p class="hint">Point the Master Agent at this rewrite only: work on the rewrite itself, or add something to it.</p></div></div>
+            <div class="focus-row">
+              <select id="rewrite-focus-kind" aria-label="What the agent should do"><option value="work">Work on the rewrite</option><option value="add">Add to the rewrite</option></select>
+              <textarea id="rewrite-focus-text" rows="2" placeholder="What to focus on or add, e.g. finish the save system, add controller support (Ctrl+Enter sends)"></textarea>
+              <button type="button" class="button primary" id="rewrite-focus-send">Send to agent</button>
+            </div>
+          </section>
+        </div>
+        <div class="ptab-panel" data-panel="steps" hidden>
+          <ol class="steps">
+            <li class="step" data-rstep="plan" data-short="Plan">
+              <div class="step-head"><span class="step-n">1</span><h2>Recover and plan</h2><span class="pill" id="rw-st-plan"></span></div>
+              <p class="hint">The agent maps the original game's behavior, assets, controls and data, then writes a migration plan and parity checklist.</p>
+              <pre class="plan" id="rewrite-plan" hidden></pre>
+              <textarea id="rewrite-guidance" rows="2" placeholder="Guidance for the plan or changes to request"></textarea>
+              <div class="step-actions"><button type="button" class="button primary" id="rewrite-plan-button">Ask agent to plan</button><button type="button" class="button" id="rewrite-revise" hidden>Revise plan</button><button type="button" class="button primary" id="rewrite-approve" hidden>Approve plan and build</button></div>
+            </li>
+            <li class="step" data-rstep="build" data-short="Implement">
+              <div class="step-head"><span class="step-n">2</span><h2>Implement and compare</h2><span class="pill" id="rw-st-build"></span></div>
+              <p class="hint">The agent builds the new game under this project's <code>src/</code>, adds repeatable checks under <code>tests/</code>, and records each comparison in <code>PARITY.json</code>.</p>
+              <div class="step-actions"><button type="button" class="button" id="rewrite-continue">Continue build and parity tests</button></div>
+              <p class="hint" id="rewrite-source"></p>
+            </li>
+            <li class="step" data-rstep="parity" data-short="Parity">
+              <div class="step-head"><span class="step-n">3</span><h2>Parity evidence</h2><span class="pill" id="rw-st-parity"></span></div>
+              <p class="hint" id="rewrite-parity-summary"></p>
+              <ul class="rewrite-checks" id="rewrite-checks"></ul>
+              <textarea id="rewrite-feedback" rows="2" placeholder="Describe a behavior that differs from the original or a test result"></textarea>
+              <div class="step-actions"><button type="button" class="button primary" id="rewrite-send">Send feedback to agent</button></div>
+            </li>
+          </ol>
+        </div>
+        <div class="ptab-panel" data-panel="files" hidden>
+          <section class="step project-browser" id="rewrite-browser">
+            <div class="code-head"><div><h2>Project files</h2><p class="hint" id="rewrite-browser-summary">Browse the source, tests, plan and other project files.</p></div><button type="button" class="button" id="rewrite-browser-refresh">Refresh</button></div>
+            <div class="dx-bar"><input type="search" id="rewrite-browser-filter" placeholder="Find a file by name or path" aria-label="Find rewrite file"><div class="chips" id="rewrite-browser-kinds"></div></div>
+            <div class="dx-main"><ul class="dx-tree" id="rewrite-browser-tree" role="tree" aria-label="Rewrite files"></ul><section class="dx-view" id="rewrite-browser-view" aria-live="polite"></section></div>
+          </section>
+        </div>
+        <div class="ptab-panel" data-panel="goals" hidden>
+          <section class="step goals-box">
+            <div class="code-head"><div><h2>Goals</h2><p class="hint">The Master Agent splits its standing goal into small milestones (<code>$R goal parts</code>), works on one at a time and checks each off only with proof (<code>$R goal done "evidence"</code>). Kept with this project, so a new agent session starts from what is already proven.</p></div></div>
+            <div id="rewrite-goals"></div>
+          </section>
+        </div>
+      </div>
+      <div class="mod-view" id="mod-view" hidden>
+        <div class="target-head">
+          <div class="target-title">
+            <button type="button" class="link-button" id="mod-back">← Back to the game</button>
+            <h1 id="mod-title"></h1>
+            <p class="hint" id="mod-meta"></p>
+          </div>
+          <div class="target-actions">
+            <a class="button" id="mod-session" target="_blank" rel="noopener" hidden>Open agent session</a>
+            <button type="button" class="button danger" id="mod-delete">Delete project</button>
+          </div>
+        </div>
+        <ol class="step-strip" id="mod-strip" aria-label="Mod progress"></ol>
+        <nav class="tabs project-tabs" id="mod-tabs" aria-label="Mod sections">
+          <button type="button" data-ptab="overview" aria-pressed="true">Overview <span class="tab-count" id="mod-tab-issues"></span></button>
+          <button type="button" data-ptab="steps" aria-pressed="false">Steps</button>
+          <button type="button" data-ptab="files" aria-pressed="false">Files</button>
+          <button type="button" data-ptab="arch" aria-pressed="false">Architecture</button>
+          <button type="button" data-ptab="goals" aria-pressed="false">Goals <span class="tab-count" id="mod-tab-goals"></span></button>
+        </nav>
+        <div class="ptab-panel" data-panel="overview">
+          <section class="goal-box"><span class="goal-label">Goal</span><p class="goal" id="mod-goal-text"></p></section>
+          <section class="readiness-panel" aria-label="Mod build readiness">
+            <div class="readiness-head"><strong>Build readiness</strong><span id="mod-readiness-label"></span></div>
+            <progress id="mod-readiness-bar" max="100" value="0"></progress>
+            <details class="log logbox" id="mod-readiness-box"><summary><span class="log-title">Issues</span><span class="log-meta" id="mod-readiness-meta"></span></summary>
+              <ul id="mod-readiness-issues"></ul>
+            </details>
+            <button type="button" class="button" id="do-fix-readiness">Ask the agent to fix remaining issues</button>
+          </section>
+          <section class="step check-box" aria-label="Validate the mod">
+            <div class="code-head"><div><h2>Validate build</h2><p class="hint">Is the mod fully built and working? Checks every source file made it into the build, compiles the whole patched game (the game's scripts plus the mod's) with the game's own engine, and runs the modded game next to the original.</p></div><button type="button" class="button" id="mod-check-go">Validate build</button></div>
+            <details class="decomp-errors decomp-check" id="mod-check" hidden></details>
+          </section>
+          <section class="step focus-box" aria-label="Focus the agent on this mod">
+            <div class="code-head"><div><h2>Focus the agent</h2><p class="hint">Point the Master Agent at this mod only: work on the mod itself, or add something to it.</p></div></div>
+            <div class="focus-row">
+              <select id="mod-focus-kind" aria-label="What the agent should do"><option value="work">Work on the mod</option><option value="add">Add to the mod</option></select>
+              <textarea id="mod-focus-text" rows="2" placeholder="What to focus on or add, e.g. finish the title change, add a new item (Ctrl+Enter sends)"></textarea>
+              <button type="button" class="button primary" id="mod-focus-send">Send to agent</button>
+            </div>
+          </section>
+        </div>
+        <div class="ptab-panel" data-panel="steps" hidden>
+        <ol class="steps">
+          <li class="step" data-step="decompile" data-short="Recover">
+            <div class="step-head"><span class="step-n">1</span><h2 id="extract-title">Decompile the game</h2><span class="pill" id="st-decompile"></span></div>
+            <div class="loader-box" id="loader-box" hidden>
+              <p class="hint" id="loader-hint"></p>
+              <div class="step-actions">
+                <button type="button" class="button" id="do-loader">Prepare the loader</button>
+                <button type="button" class="button primary" id="do-loader-install">Install the loader</button>
+                <span class="pill" id="st-loader"></span>
+              </div>
+            </div>
+            <p class="hint" id="extract-hint"></p>
+            <div class="step-actions"><button type="button" class="button" id="do-decompile">Decompile</button></div>
+            <div class="code-search" id="code-search" hidden>
+              <input type="search" id="code-q" placeholder="Search the game's code, e.g. timeScale, Instantiate, Player" autocomplete="off">
+              <ul class="rows hits" id="code-hits"></ul>
+              <pre class="code" id="code-view" hidden></pre>
+            </div>
+          </li>
+          <li class="step" data-step="plan" data-short="Plan">
+            <div class="step-head"><span class="step-n">2</span><h2>Plan with the Master Agent</h2><span class="pill" id="st-plan"></span></div>
+            <p class="hint">The agent studies the code and writes a plan. Nothing is built until you approve it.</p>
+            <pre class="plan" id="plan-text" hidden></pre>
+            <div class="relevant-box" id="relevant-box" hidden>
+              <h3>Relevant game files <span class="hint">picked by the agent while planning (RELEVANT.md); later steps read these first</span></h3>
+              <ul class="rows hits" id="relevant-files"></ul>
+            </div>
+            <textarea id="plan-guidance" rows="2" placeholder="Guide it (optional): e.g. keep the player at full speed, use the game's item list"></textarea>
+            <div class="step-actions">
+              <button type="button" class="button primary" id="do-plan">Ask the agent to plan</button>
+              <button type="button" class="button" id="do-revise" hidden>Change the plan</button>
+              <button type="button" class="button primary" id="do-approve" hidden>Approve plan &amp; build</button>
+            </div>
+          </li>
+          <li class="step" data-step="build" data-short="Build">
+            <div class="step-head"><span class="step-n">3</span><h2>Build the mod</h2><span class="pill" id="st-build"></span></div>
+            <p class="hint"><span id="build-hint"></span> The agent does this after you approve; you can rebuild any time.</p>
+            <div class="step-actions"><button type="button" class="button" id="do-build">Build</button></div>
+            <details class="log logbox" id="src-files-box"><summary><span class="log-title">Source files</span><span class="log-meta" id="src-files-meta"></span></summary><div class="src-files" id="src-files"></div></details>
+            <details class="log logbox" id="build-log-box"><summary><span class="log-title">Build log</span><span class="log-meta" id="build-log-meta"></span></summary><pre class="code" id="build-log"></pre></details>
+            <div class="testrun" id="testrun-box">
+              <h3>Test run</h3>
+              <details class="hint-more"><summary>How test runs work</summary><p class="hint">Builds the mod, checks its syntax, then runs the game headless (no window, no GPU; works from any device) with the mod loaded for a while, and compares the errors with an unmodified run. With Screenshots on, the game runs on a virtual display instead (software rendering, slower) and REA saves what it shows: startup, the main menu, after a few inputs that usually start the game (Enter, a click, walking), the last frame, and whenever the mod loads or an error appears, next to the same moments without the mod. Leftover game processes are always killed. Logs are kept in the Logs tab.</p></details>
+              <p class="hint warn" id="testrun-support" hidden></p>
+              <div class="testrun-options">
+                <label class="inline">Run for <select id="testrun-timeout"><option value="30">30 s</option><option value="60" selected>60 s</option><option value="120">2 min</option><option value="300">5 min</option></select></label>
+                <label class="inline"><input type="checkbox" id="testrun-agent" checked> If it fails, this mod's agent session fixes it (no turn limit) until a run passes. Only once you started an agent for this mod (Plan step)</label>
+                <label class="inline"><input type="checkbox" id="testrun-shots"> Screenshots (runs the game on a virtual display, not headless)</label>
+              </div>
+              <div class="step-actions">
+                <button type="button" class="button primary" id="do-testrun">Test run</button>
+                <button type="button" class="button" id="testrun-logs">Logs</button>
+              </div>
+              <div class="testrun-status" id="testrun-status"></div>
+              <details class="log logbox" id="testrun-log-box" open hidden><summary><span class="log-title">Log</span><span class="log-meta" id="testrun-log-meta"></span><button type="button" class="button small" id="testrun-log-close">Close</button></summary><pre class="code" id="testrun-log"></pre></details>
+            </div>
+          </li>
+          <li class="step" data-step="install" data-short="Install">
+            <div class="step-head"><span class="step-n">4</span><h2>Install into the game</h2><span class="pill" id="st-install"></span></div>
+            <p class="hint">Copies the mod (and its loader) into the game folder. Anything it overwrites is backed up; Uninstall puts the game back.</p>
+            <div class="step-actions">
+              <button type="button" class="button primary" id="do-install">Install</button>
+              <button type="button" class="button danger" id="do-uninstall" hidden>Uninstall</button>
+            </div>
+            <pre class="launch" id="launch-hint" hidden></pre>
+          </li>
+          <li class="step" data-step="refine" data-short="Play">
+            <div class="step-head"><span class="step-n">5</span><h2>Play &amp; refine</h2><span class="pill" id="st-refine"></span></div>
+            <p class="hint">Play, then tell the agent what to change. It reads the mod loader's log, fixes the mod and rebuilds; then reinstall.</p>
+            <div class="step-actions"><button type="button" class="button primary" id="do-play">▶ Play</button><span class="hint" id="play-hint"></span></div>
+            <div class="refine-grid">
+              <div class="sub-box">
+                <h3>Tell the agent</h3>
+                <textarea id="refine-text" rows="3" placeholder="e.g. Slow motion also slows my character, keep me at normal speed"></textarea>
+                <div class="step-actions"><button type="button" class="button primary" id="do-refine">Send to the agent</button></div>
+              </div>
+              <div class="sub-box">
+                <h3>Record a play test</h3>
+                <p class="hint">A packaged build is not marked complete until the current installed build passes a play test.</p>
+                <textarea id="verify-evidence" rows="2" placeholder="What happened when you launched and played this build?"></textarea>
+                <div class="step-actions"><button type="button" class="button" id="verify-pass">Record passing play test</button><button type="button" class="button" id="verify-fail">Record failure</button></div>
+              </div>
+            </div>
+            <details class="log" id="game-log-box"><summary>Mod loader log from your last play</summary><pre class="code" id="game-log"></pre></details>
+          </li>
+        </ol>
+        </div>
+        <div class="ptab-panel" data-panel="files" hidden>
+          <section class="step project-browser" id="mod-browser">
+            <div class="code-head"><div><h2>Project files</h2><p class="hint" id="mod-browser-summary">Browse the source, recovered files, builds and logs.</p></div><button type="button" class="button" id="mod-browser-refresh">Refresh</button></div>
+            <div class="dx-bar"><input type="search" id="mod-browser-filter" placeholder="Find a file by name or path" aria-label="Find mod file"><div class="chips" id="mod-browser-kinds"></div></div>
+            <div class="dx-main"><ul class="dx-tree" id="mod-browser-tree" role="tree" aria-label="Mod files"></ul><section class="dx-view" id="mod-browser-view" aria-live="polite"></section></div>
+          </section>
+        </div>
+        <div class="ptab-panel" data-panel="goals" hidden>
+          <section class="step goals-box">
+            <div class="code-head"><div><h2>Goals</h2><p class="hint">The Master Agent splits its standing goal into small milestones (<code>$R goal parts</code>), works on one at a time and checks each off only with proof (<code>$R goal done "evidence"</code>). Kept with this project, so a new agent session starts from what is already proven.</p></div></div>
+            <div id="mod-goals"></div>
+          </section>
+        </div>
+        <div class="ptab-panel" data-panel="arch" hidden>
+          <section class="step mod-arch" id="mod-arch-box">
+            <div class="code-head"><div><h2>Mod architecture</h2><p class="hint"><span id="mod-arch-meta"></span> · This mod's own design: its systems, its files under src/, and which of the game's systems and hooks it builds on. The game's Architecture tab stays about the game.</p></div><button type="button" class="button" id="mod-arch-edit">Edit</button></div>
+            <div class="md arch" id="mod-arch-view"></div>
+            <div class="kb-editor" id="mod-arch-editor" hidden>
+              <textarea id="mod-arch-text" rows="20"></textarea>
+              <div class="dialog-foot">
+                <button type="button" class="button" id="mod-arch-cancel">Cancel</button>
+                <button type="button" class="button primary" id="mod-arch-save">Save</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <div class="library-view" id="library-view" hidden>
+        <div class="target-head">
+          <div class="target-title">
+            <h1>Saved functions</h1>
+            <p class="hint">Code that worked on one game, kept per engine so the next game on that engine starts from it: mod loaders, hook and patch helpers, script injectors, UI pieces, build tricks. The Master Agent saves pieces once they work and checks here before writing a mod. You can add and edit your own; the agent can't change yours.</p>
+          </div>
+          <div class="target-actions"><button type="button" class="button primary" id="lib-new">New function</button></div>
+        </div>
+        <div class="chips" id="lib-engines"></div>
+        <div class="filter-row">
+          <input type="search" id="lib-q" placeholder="Search, e.g. autoload injection, Harmony patch, plugin loader" autocomplete="off">
+          <select id="lib-kind" aria-label="Kind"><option value="">All kinds</option></select>
+        </div>
+        <div class="kb-editor" id="lib-editor" hidden>
+          <input type="search" id="lib-title" placeholder="Title, e.g. Godot 3 autoload injector" autocomplete="off" maxlength="140">
+          <div class="lib-fields">
+            <label>Engine <select id="lib-engine"></select></label>
+            <label>Kind <select id="lib-ekind"></select></label>
+            <label>Status <select id="lib-status"><option value="works">Works</option><option value="untested">Untested</option><option value="broken">Broken</option></select></label>
+            <label>Engine version <input type="search" id="lib-version" placeholder="e.g. Godot 3.5, BepInEx 5" autocomplete="off"></label>
+            <label>Language <input type="search" id="lib-lang" placeholder="e.g. gdscript, csharp, lua" autocomplete="off"></label>
+            <label>Tags <input type="search" id="lib-tags" placeholder="comma separated" autocomplete="off"></label>
+          </div>
+          <input type="search" id="lib-summary" placeholder="One line: what it does" autocomplete="off" maxlength="600">
+          <textarea id="lib-usage" rows="6" placeholder="How to use it (Markdown): where the files go, what to rename, what it needs, known limits"></textarea>
+          <div class="lib-files" id="lib-files"></div>
+          <div class="dialog-foot">
+            <button type="button" class="button" id="lib-add-file">Add file</button>
+            <span class="spacer"></span>
+            <button type="button" class="button" id="lib-cancel">Cancel</button>
+            <button type="button" class="button primary" id="lib-save">Save</button>
+          </div>
+        </div>
+        <article class="kb-note" id="lib-entry" hidden>
+          <div class="code-head">
+            <div><h2 id="lib-entry-title"></h2><p class="hint" id="lib-entry-meta"></p></div>
+            <div class="step-actions">
+              <button type="button" class="button" id="lib-edit">Edit</button>
+              <button type="button" class="button danger" id="lib-delete">Delete</button>
+              <button type="button" class="button" id="lib-close">Close</button>
+            </div>
+          </div>
+          <p id="lib-entry-summary"></p>
+          <div class="md" id="lib-entry-usage"></div>
+          <div class="lib-code" id="lib-entry-files"></div>
+        </article>
+        <ul class="kb-list" id="lib-list"></ul>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="picker">
+    <form method="dialog" class="dialog-body">
+      <div class="dialog-head">
+        <h2>Pick a file</h2>
+        <div class="seg" id="picker-root">
+          <button type="button" data-root="workspace" aria-pressed="true">Workspace</button>
+          <button type="button" data-root="attachments" aria-pressed="false">Attachments</button>
+          <button type="button" data-root="folders" aria-pressed="false">Folders</button>
+        </div>
+      </div>
+      <p class="hint" id="picker-path"></p>
+      <ul class="picker-list" id="picker-list"></ul>
+      <div class="dialog-foot"><button class="button" value="cancel">Cancel</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="folders">
+    <form method="dialog" class="dialog-body wide">
+      <div class="dialog-head">
+        <h2>Folders REA can read</h2>
+        <p class="hint">Pick a game or program folder on this computer. It is mounted read-only into REA (nothing is copied or changed) and REA restarts for a few seconds. Everything in a mounted folder is readable by REA and the Master Agent's REA tools.</p>
+      </div>
+      <ul class="mounted" id="mounted-list"></ul>
+      <div class="chips" id="host-shortcuts"></div>
+      <div class="host-bar">
+        <button type="button" class="button" id="host-up">↑</button>
+        <code id="host-path"></code>
+        <label class="toggle"><input type="checkbox" id="host-hidden"> Hidden</label>
+        <label class="toggle"><input type="checkbox" id="host-unadded"> Not added only</label>
+      </div>
+      <ul class="picker-list" id="host-list"></ul>
+      <p class="hint error" id="host-refused"></p>
+      <div class="dialog-foot">
+        <button class="button" value="cancel">Close</button>
+        <button type="button" class="button primary" id="host-add">Add this folder</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="models">
+    <form method="dialog" class="dialog-body wide">
+      <div class="dialog-head">
+        <h2>REA's model</h2>
+        <p class="hint">One model and thinking level for all REA work (planning, building, refining, mapping, questions, decompiling, textures). Thinking defaults to medium; you can change it while keeping the Agentic default model. Applies from the next message; local models still hand the GPU over to renders, cloud models don't need to.</p>
+      </div>
+      <div class="model-rows" id="model-rows"><p class="hint">Loading the model list…</p></div>
+      <div class="dialog-foot">
+        <button class="button" value="cancel">Cancel</button>
+        <button type="button" class="button primary" id="models-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="ask">
+    <form method="dialog" class="dialog-body" id="ask-form">
+      <h2>Ask the Master Agent</h2>
+      <p class="hint">Starts a Master Agent session that investigates this file with the REA tools.</p>
+      <textarea id="ask-text" rows="4" placeholder="What do you want to know? e.g. How does it check the licence key?"></textarea>
+      <div class="dialog-foot">
+        <button class="button" value="cancel" formnovalidate>Cancel</button>
+        <button class="button primary" value="send" id="ask-send">Start session</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" hidden></div>
+  <dialog class="shot-viewer" id="shot-viewer"><figure><img id="shot-img" alt=""><figcaption id="shot-cap"></figcaption></figure>
+    <div class="step-actions"><button type="button" class="button" id="shot-prev">← Previous</button><button type="button" class="button" id="shot-next">Next →</button><a class="button" id="shot-open" target="_blank" rel="noopener">Open image</a><button type="button" class="button primary" id="shot-close">Close</button></div></dialog>
+  <script src="/REA/static/models.js?v=18"></script>
+  <script src="/REA/static/app.js?v=46"></script>
+  <script src="/REA/static/scene.js?v=1"></script>
+</body>
+</html>

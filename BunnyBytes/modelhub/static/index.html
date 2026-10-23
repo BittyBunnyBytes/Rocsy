@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1418">
+  <title>Models · Rocsy</title>
+  <link rel="stylesheet" href="/Models/static/app.css?v={{v}}">
+  <script defer src="/Models/static/app.js?v={{v}}"></script>
+</head>
+<body>
+  <header class="topbar">
+    <nav class="view-tabs" role="tablist" aria-label="Views">
+      <button type="button" class="view-tab is-active" role="tab" aria-selected="true" data-view="models">Models</button>
+      <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="loras">LoRAs</button>
+      <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="hermes" id="hermes-tab" hidden>Hermes</button>
+      <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="manager">Manager <span class="tab-badge" id="updates-badge" hidden></span></button>
+      <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="hardware">Hardware</button>
+    </nav>
+    <div class="topbar-status">
+      <button type="button" class="service-state" id="dl-chip" hidden><span class="status-dot"></span><span>Downloading</span><strong id="dl-chip-text"></strong></button>
+      <button type="button" class="service-state" id="hw-chip" title="Scanned hardware"><span class="status-dot"></span><strong id="hw-chip-text">Scanning…</strong></button>
+    </div>
+  </header>
+
+  <main class="shell">
+    <!-- Models + LoRAs share this browser; the tab sets "kind". -->
+    <section id="view-browse" class="view">
+      <!-- LoRAs only: which base model the LoRA has to work with; installed bases first. -->
+      <div class="base-pick" id="base-pick" hidden>
+        <label for="base">Base model</label>
+        <select id="base"><option value="">Any base model</option></select>
+        <span class="hint" id="base-note"></span>
+      </div>
+      <div class="browse-bar">
+        <div class="segmented" id="source" role="radiogroup" aria-label="Source">
+          <button type="button" role="radio" aria-checked="true" data-source="civitai">Civitai</button>
+          <button type="button" role="radio" aria-checked="false" data-source="civitai_red">Civitai Red</button>
+          <button type="button" role="radio" aria-checked="false" data-source="hf">Hugging Face</button>
+        </div>
+        <form class="search" id="search-form" role="search">
+          <input id="q" type="search" placeholder="Search models…" aria-label="Search" autocomplete="off">
+          <select id="sort" aria-label="Sort">
+            <option value="downloads">Most downloaded</option>
+            <option value="rating">Most liked</option>
+            <option value="newest">Newest</option>
+          </select>
+        </form>
+      </div>
+      <div class="browse-filters">
+        <div class="chips" id="category" role="radiogroup" aria-label="Category">
+          <button type="button" class="chip" role="radio" aria-checked="true" data-category="all">All</button>
+          <button type="button" class="chip" role="radio" aria-checked="false" data-category="image">Image</button>
+          <button type="button" class="chip" role="radio" aria-checked="false" data-category="video">Video</button>
+          <button type="button" class="chip" role="radio" aria-checked="false" data-category="llm">LLM</button>
+          <button type="button" class="chip" role="radio" aria-checked="false" data-category="audio">Music &amp; audio</button>
+        </div>
+        <label class="check" id="gguf-wrap" hidden><input id="gguf" type="checkbox" checked> GGUF only (llama.cpp)</label>
+        <label class="check" id="fits-wrap" title="Hide models that won't fit in VRAM, RAM offload or NVMe ngram"><input id="fits" type="checkbox"> Fits this machine</label>
+        <label class="check" title="Only models and LoRAs something here can run: a studio template, a workflow saved in ComfyUI, or llama.cpp (GGUF)"><input id="supported-only" type="checkbox"> Supported only</label>
+        <label class="check" title="Hide models and LoRAs that already have files on this machine"><input id="hide-installed" type="checkbox"> Hide installed</label>
+        <span class="hint" id="browse-note"></span>
+        <div class="segmented layout-toggle" id="layout" role="radiogroup" aria-label="Layout">
+          <button type="button" role="radio" aria-checked="true" data-layout="grid" title="Gallery view" aria-label="Gallery view"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></svg></button>
+          <button type="button" role="radio" aria-checked="false" data-layout="list" title="List view" aria-label="List view"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="4" height="4" rx="1"/><rect x="4" y="15" width="4" height="4" rx="1"/><path d="M11.5 7h8.5M11.5 17h8.5"/></svg></button>
+        </div>
+      </div>
+      <div class="grid" id="results" aria-live="polite"></div>
+      <div class="more" id="scroll-sentinel"><button type="button" class="secondary-button" id="more" hidden>Load more</button><p class="hint" id="end-note" hidden></p></div>
+    </section>
+
+    <section id="view-hermes" class="view" hidden>
+      <div class="card hermes-catalog">
+        <div class="card-head"><div><h2>Hermes add-ons</h2><p>Browse skills and reviewed plugins. Search updates as you type; Search online also checks the wider Skills Hub. Downloads go to Rocsy Hermes.</p></div></div>
+        <div class="card-body">
+          <div class="hermes-toolbar">
+            <div class="segmented" id="hermes-kind" role="radiogroup" aria-label="Hermes add-on type">
+              <button type="button" role="radio" aria-checked="true" data-hermes-kind="skills">Skills</button>
+              <button type="button" role="radio" aria-checked="false" data-hermes-kind="plugins">Plugins</button>
+            </div>
+            <form id="hermes-search-form" class="search" role="search">
+              <input id="hermes-query" type="search" aria-label="Search Hermes add-ons" placeholder="Search skills online…" autocomplete="off">
+              <button type="submit" class="primary-button" id="hermes-online-search">Search online</button>
+            </form>
+          </div>
+          <p id="hermes-status" class="hint" role="status">Loading Hermes catalog…</p>
+          <div id="hermes-results" class="hermes-results" aria-live="polite"></div>
+          <div id="hermes-job" class="hermes-job" hidden><strong id="hermes-job-title"></strong><pre id="hermes-job-log"></pre></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-manager" class="view" hidden>
+      <div class="subtabs" id="subtabs" role="tablist" aria-label="Manager">
+        <button type="button" role="tab" data-sub="updates" aria-selected="true">Updates <span class="tab-badge" id="sub-updates-badge" hidden></span></button>
+        <button type="button" role="tab" data-sub="installed" aria-selected="false">Installed</button>
+        <button type="button" role="tab" data-sub="downloads" aria-selected="false">Downloads <span class="tab-badge blue" id="sub-dl-badge" hidden></span></button>
+        <button type="button" role="tab" data-sub="settings" aria-selected="false">Settings</button>
+        <button type="button" role="tab" data-sub="core" aria-selected="false" class="core-tab" title="Critical backend systems">Core Backend <span class="tab-badge blue" id="sub-core-badge" hidden></span></button>
+      </div>
+      <p class="llama-pending" id="llama-pending" hidden>llama-swap will restart to load its new model list as soon as no model is loaded.</p>
+
+      <div class="card" id="installed-card" data-sub-panel="installed" hidden>
+        <div class="card-head inst-head">
+          <div><h2>Installed</h2><p id="inst-summary">Models on this machine, by kind.</p></div>
+        </div>
+        <div class="inst-overview">
+          <div class="inst-storage" id="inst-storage" aria-label="Disk use by kind"></div>
+          <div class="inst-kinds" id="inst-kinds" role="radiogroup" aria-label="Show kind"></div>
+          <div class="inst-toolbar">
+            <input id="inst-q" type="search" placeholder="Filter by name, folder or studio…" aria-label="Filter installed models">
+            <select id="inst-sort" aria-label="Sort installed models" title="Sort installed models">
+              <option value="kind">Group by kind</option>
+              <option value="size-desc">Largest first</option>
+              <option value="size-asc">Smallest first</option>
+              <option value="name">Name A–Z</option>
+              <option value="used">Least recently used</option>
+            </select>
+            <button type="button" class="secondary-button" id="unused-toggle" aria-pressed="false"
+                    title="Highlight files no studio or llama-swap has used in the last 7 days">Unused for a week</button>
+            <button type="button" class="secondary-button" id="inst-select" aria-pressed="false"
+                    title="Pick several files to uninstall at once (Shift-click selects a range)">Select</button>
+          </div>
+        </div>
+        <div class="unused-bar" id="unused-bar" hidden>
+          <span id="unused-text"></span>
+          <label class="check"><input type="checkbox" id="unused-only"> Show only these</label>
+        </div>
+        <div class="inst-bulk" id="inst-bulk" hidden>
+          <div class="inst-bulk-info"><strong id="bulk-count">0 selected</strong><span id="bulk-size"></span></div>
+          <div class="inst-bulk-actions">
+            <button type="button" class="link-button" id="bulk-all">Select all shown</button>
+            <button type="button" class="link-button" id="bulk-clear">Clear</button>
+            <button type="button" class="secondary-button small danger" id="bulk-remove" disabled>Uninstall selected</button>
+          </div>
+        </div>
+        <div class="card-body" id="installed"></div>
+      </div>
+
+      <div class="card" id="downloads-card" data-sub-panel="downloads">
+        <div class="card-head dl-head-card">
+          <div><h2>Downloads</h2><p id="dl-summary">Resumable and SHA-256 checked. Files land in ComfyUI's models folder.</p></div>
+          <div class="head-actions">
+            <button type="button" class="secondary-button small" id="retry-failed" hidden>Retry failed</button>
+            <button type="button" class="secondary-button small" id="clear-finished">Clear finished</button>
+          </div>
+        </div>
+        <div class="dl-overview" id="dl-overview" hidden>
+          <div class="dl-total" id="dl-total" hidden>
+            <div class="dl-total-line"><strong id="dl-total-pct">0%</strong><span id="dl-total-text"></span></div>
+            <div class="dl-progress is-big"><span id="dl-total-fill"></span></div>
+          </div>
+          <div class="inst-kinds" id="dl-filter" role="radiogroup" aria-label="Show downloads"></div>
+        </div>
+        <div class="card-body" id="downloads"></div>
+      </div>
+
+      <div class="card" data-sub-panel="updates">
+        <div class="card-head">
+          <div><h2>Updates</h2><p id="lib-summary">Scanning your models folder…</p></div>
+          <div class="head-actions">
+            <button type="button" class="secondary-button" id="identify" title="Find where unknown files came from (Civitai by SHA-256, Hugging Face by repo name)">Identify unknown</button>
+            <button type="button" class="primary-button" id="check">Check for updates</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="lib-tools">
+            <div class="chips" id="lib-filter" role="radiogroup" aria-label="Show">
+              <button type="button" class="chip" role="radio" aria-checked="true" data-filter="updates">Updates</button>
+              <button type="button" class="chip" role="radio" aria-checked="false" data-filter="all">All</button>
+              <button type="button" class="chip" role="radio" aria-checked="false" data-filter="lora">LoRAs</button>
+              <button type="button" class="chip" role="radio" aria-checked="false" data-filter="model">Models</button>
+              <button type="button" class="chip" role="radio" aria-checked="false" data-filter="unknown">Unknown source</button>
+            </div>
+            <input id="lib-q" type="search" placeholder="Filter files…" aria-label="Filter installed files">
+          </div>
+          <p class="task" id="lib-task" hidden></p>
+          <div class="lib-list" id="library"></div>
+        </div>
+      </div>
+
+      <div class="card" data-sub-panel="updates">
+        <div class="card-head"><div><h2>Core software</h2><p>Check ComfyUI, its custom nodes and Hermes + Rocsy Addons for updates, or browse llama-swap releases with Rocsy Addons. Updating Hermes reapplies the saved patch, then rebuilds and restarts its agent and dashboard.</p></div><button type="button" class="secondary-button" id="core-check-updates">Check for updates</button></div>
+        <div class="card-body">
+          <div id="comfy-updates"><p class="empty">Asking the host…</p></div>
+          <div id="nodes-updates"></div>
+          <div id="hermes-updates"><p class="empty">Asking the host…</p></div>
+          <div id="rea-updates"></div>
+          <div id="swap-updates"><p class="empty">Checking llama-swap…</p></div>
+        </div>
+      </div>
+
+      <div class="card" id="olds-card" data-sub-panel="updates" hidden>
+        <div class="card-head"><div><h2>Previous versions</h2><p>Kept as <code>.old</code> after an in-place update, in case the new one misbehaves.</p></div></div>
+        <div class="card-body" id="olds"></div>
+      </div>
+
+      <div class="core-layout" data-sub-panel="core" hidden>
+        <nav class="core-nav" id="core-nav" aria-label="Core Backend sections">
+          <button type="button" data-group="llm" aria-pressed="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+            <span><strong>Language models</strong><small>llama.cpp, ROCmFPX, Strata, ROCm/Vulkan, llama-swap</small></span></button>
+          <div class="core-nav-links" data-for="llm"><button type="button" data-jump="engine-llama">llama.cpp</button><button type="button" data-jump="engine-fpx">ROCmFPX</button><button type="button" data-jump="engine-strata">Strata</button><button type="button" data-jump="core-runtime-card">ROCm &amp; Vulkan</button><button type="button" data-jump="core-swap-card">llama-swap</button></div>
+          <button type="button" data-group="voice" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M5 11v2a7 7 0 0 0 14 0v-2M12 20v2M8 22h8"/></svg>
+            <span><strong>Voice engines</strong><small>Qwen3-TTS, IndexTTS2, Fish Audio</small></span></button>
+          <div class="core-nav-links" data-for="voice"><button type="button" data-jump="core-voice-card">Install engines</button></div>
+          <button type="button" data-group="comfy" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
+            <span><strong>ComfyUI</strong><small>Source, models &amp; nodes, FlashAttention</small></span></button>
+          <div class="core-nav-links" data-for="comfy"><button type="button" data-jump="core-comfy-card">ComfyUI source</button><button type="button" data-jump="comfy-setup-card">Models &amp; nodes</button><button type="button" data-jump="comfy-nodes-card">Custom nodes</button><button type="button" data-jump="core-flash-card">FlashAttention</button></div>
+          <button type="button" data-group="apps" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M16.5 13v7M13 16.5h7"/></svg>
+            <span><strong>Agent &amp; apps</strong><small>Hermes, Remotion, REA</small></span></button>
+          <div class="core-nav-links" data-for="apps"><button type="button" data-jump="core-hermes-card">Hermes</button><button type="button" data-jump="core-motion-card">Remotion</button><button type="button" data-jump="core-trainer-card">Trainer</button><button type="button" data-jump="core-ytdlp-card">yt-dlp</button><button type="button" data-jump="core-rea-card">REA</button></div>
+        </nav>
+        <div class="core-groups">
+          <div class="core-group" data-group="llm">
+          <div class="card core-card" id="core-engine-card">
+            <div class="card-head"><div><h2>Inference Engines</h2><p>Install and manage the engines used by llama-swap.</p></div></div>
+            <div class="engine-group">
+              <section class="engine-section" id="engine-llama" aria-labelledby="engine-llama-title">
+                <div class="engine-heading"><div><h3 id="engine-llama-title">llama.cpp</h3><p>Every llama.cpp model in llama-swap uses the selected build. RDNA Boost builds are recommended for this machine.</p></div>
+                  <button type="button" class="secondary-button" id="core-fetch">Check for new versions</button></div>
+                <p class="task" id="core-task" hidden></p>
+                <div id="core-builds"><p class="empty">Asking the host…</p></div>
+                <div class="core-log-panel" id="core-log-panel" hidden>
+                  <div class="core-log-head"><strong id="core-log-title">Build log</strong>
+                    <span><button type="button" class="link-button" id="core-log-bottom">Jump to end</button>
+                    <button type="button" class="link-button" id="core-log-close">Close</button></span></div>
+                  <pre class="core-log" id="core-log"></pre>
+                </div>
+                <div class="engine-subsection">
+                  <div class="engine-heading"><div><h4>Get a llama.cpp version</h4><p id="core-boost-note">A release is converted by replaying the RDNA Boost patches onto it, then built for your GPUs. Only releases every patch applies to cleanly can be downloaded.</p></div>
+                    <select id="core-boost" aria-label="RDNA Boost version" hidden></select></div>
+                  <div class="core-tools">
+                    <div class="chips" id="core-list" role="radiogroup" aria-label="Show">
+                      <button type="button" class="chip" role="radio" aria-checked="true" data-list="compatible">RDNA Boost compatible</button>
+                      <button type="button" class="chip" role="radio" aria-checked="false" data-list="all">All versions</button>
+                    </div>
+                    <input id="core-search" type="search" placeholder="Find a release, e.g. 11549" aria-label="Find a llama.cpp release" hidden>
+                  </div>
+                  <div id="core-releases"></div>
+                </div>
+                <div class="engine-subsection"><h4>llama-bench</h4><p>Install the benchmark tool for this model’s selected llama.cpp build. The Agent uses the matching executable automatically for model optimization.</p>
+                  <div id="core-llama-bench"><p class="empty">Asking the host…</p></div></div>
+                <div class="engine-subsection"><h4>hipBLASLt with llama.cpp</h4><p>ROCm builds may route some matrix operations through hipBLASLt via rocBLAS. Strata’s tuning table does not apply to llama.cpp. Compare benchmark results before enabling a different rocBLAS path for a build.</p></div>
+              </section>
+              <section class="engine-section" id="engine-fpx" aria-labelledby="engine-fpx-title">
+                <div class="engine-heading"><div><h3 id="engine-fpx-title">ROCmFPX</h3><p>AMD focused llama.cpp build with ROCmFPX quant support. Builds for the detected card; select it as the default engine or in a model’s Parameters.</p></div></div>
+                <div id="core-rocmfpx"><p class="empty">Asking the host…</p></div>
+              </section>
+              <section class="engine-section" id="engine-strata" aria-labelledby="engine-strata-title">
+                <div class="engine-heading"><div><h3 id="engine-strata-title">Strata</h3><p>Install Qwen3.8 Flash Next with Strata’s engine and UI. Other GGUF models can be selected when Strata supports them.</p></div></div>
+                <div id="core-strata"><p class="empty">Asking the host…</p></div>
+                <div class="engine-subsection"><h4>Strata hipBLASLt tuning table</h4><p>Strata uses this table only when it exactly matches the installed GPU architecture and hipBLASLt version.</p>
+                  <div id="core-hipblaslt"><p class="empty">Asking the host…</p></div></div>
+              </section>
+            </div>
+          </div>
+
+          <div class="card core-card" id="core-runtime-card">
+            <div class="card-head">
+              <div><h2>GPU runtimes</h2>
+                <p>ROCm and Vulkan for Rocsy's llama.cpp builds. Rocsy's copies install side by side in their own folders; your system's ROCm (<code>/opt/rocm</code>) and Vulkan packages are never changed, so programs outside Rocsy keep working as they are.</p></div>
+              <div class="head-actions"><button type="button" class="secondary-button" id="rt-refresh">Check for new versions</button></div>
+            </div>
+            <div class="card-body">
+              <div id="rt-job"></div>
+              <div id="rt-rocm"><p class="empty">Asking the host…</p></div>
+              <div id="rt-vulkan"></div>
+              <div class="core-log-panel" id="rt-log-panel" hidden>
+                <div class="core-log-head"><strong>Runtime job log</strong>
+                  <span><button type="button" class="link-button" id="rt-log-close">Close</button></span></div>
+                <pre class="core-log" id="rt-log"></pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="card core-card" id="core-swap-card">
+            <div class="card-head"><div><h2>llama-swap + Rocsy Addons</h2><p>Download an upstream release, apply the Rocsy Addons source patch, and build it. Incompatible releases are shown with the patch error. Switching versions waits until no model is loaded.</p></div>
+              <button type="button" class="secondary-button" id="swap-fetch">Check versions</button></div>
+            <div class="card-body">
+              <p class="task" id="swap-task" hidden></p>
+              <div id="swap-builds"><p class="empty">Asking the host…</p></div>
+              <div id="swap-releases"></div>
+            </div>
+          </div>
+
+          </div>
+          <div class="core-group" data-group="voice" hidden>
+            <div class="card core-card" id="core-voice-card">
+              <div class="card-head"><div><h2>Voice engines</h2><p>Download the model and its dedicated backend for the Voice service. Each engine installs only when selected.</p></div></div>
+              <div class="card-body" id="core-voice"><p class="empty">Asking the host…</p></div>
+            </div>
+          </div>
+          <div class="core-group" data-group="comfy" hidden>
+          <div class="card core-card" id="core-comfy-card">
+            <div class="card-head"><div><h2>ComfyUI</h2><p>Download and set up ComfyUI (Python environment, PyTorch for ROCm, requirements) and the supervisor the studios use to start it, or update an existing checkout. Updates use Git fast-forward and preserve local edits.</p></div></div>
+            <div class="card-body" id="core-comfy"><p class="empty">Asking the host…</p></div>
+          </div>
+
+          <div class="card core-card" id="comfy-setup-card">
+            <div class="card-head">
+              <div><h2>ComfyUI models &amp; nodes</h2>
+                <p>The default files ComfyUI recommends for model folders that are still empty (VAEs, preview decoders, upscalers), plus the model files and custom node packs your saved ComfyUI workflows use but this install doesn't have.</p></div>
+              <div class="head-actions"><button type="button" class="secondary-button" id="setup-scan">Scan again</button></div>
+            </div>
+            <div class="card-body" id="comfy-setup"><p class="empty">Scanning…</p></div>
+          </div>
+
+          <div class="card core-card" id="comfy-nodes-card">
+            <div class="card-head">
+              <div><h2>Custom nodes</h2>
+                <p>Install any node pack from ComfyUI-Manager’s list or a GitHub link, and keep installed packs up to date. Packs with local edits or commits of their own are never changed.</p></div>
+              <div class="head-actions"><button type="button" class="secondary-button" id="nodes-check">Check for updates</button></div>
+            </div>
+            <div class="card-body" id="comfy-nodes"><p class="empty">Asking the host…</p></div>
+          </div>
+
+          <div class="card core-card" id="core-flash-card">
+            <div class="card-head"><div><h2>FlashAttention</h2><p>Download and build ROCm FlashAttention into ComfyUI's Python environment for the currently scanned GPU architecture.</p></div></div>
+            <div class="card-body" id="core-flash"><p class="empty">Asking the host…</p></div>
+          </div>
+
+          </div>
+          <div class="core-group" data-group="apps" hidden>
+          <div class="card core-card" id="core-hermes-card">
+            <div class="card-head"><div><h2>Hermes</h2><p>Download or update the Hermes agent. Updating rebuilds its image and restarts the agent and dashboard.</p></div></div>
+            <div class="card-body" id="core-hermes"><p class="empty">Asking the host…</p></div>
+          </div>
+
+          <div class="card core-card" id="core-motion-card">
+            <div class="card-head"><div><h2>Remotion</h2><p>Download and install the Motion renderer, its Remotion packages, and Chrome in a Docker image. The Motion service starts when installation finishes.</p></div></div>
+            <div class="card-body" id="core-motion"><p class="empty">Asking the host…</p></div>
+          </div>
+
+          <div class="card core-card" id="core-trainer-card">
+            <div class="card-head"><div><h2>Trainer</h2><p>Build and start the LoRA Trainer (/Trainer). Its ROCm PyTorch base image is a 20+ GB download; once installed it is part of every Rocsy rebuild.</p></div></div>
+            <div class="card-body" id="core-trainer"><p class="empty">Asking the host…</p></div>
+          </div>
+
+          <div class="card core-card" id="core-ytdlp-card">
+            <div class="card-head"><div><h2>yt-dlp</h2><p>Video downloader for the Master Agent (<a href="https://github.com/yt-dlp/yt-dlp" target="_blank" rel="noopener">yt-dlp/yt-dlp</a>): YouTube, TikTok and over a thousand other sites. One copy is shared by Hermes' terminal and the Agent's import-media; updating needs no rebuild. Sites change often, so update when downloads start failing. Every download is checked against its SHA-256.</p></div></div>
+            <div class="card-body" id="core-ytdlp"><p class="empty">Asking the host…</p></div>
+          </div>
+
+          <div class="card core-card" id="core-rea-card">
+            <div class="card-head"><div><h2>REA · Reverse Engineer Anything</h2><p>Reverse-engineering tools for the Master Agent (<a href="https://github.com/morluto/rea" target="_blank" rel="noopener">morluto/rea</a>): binaries, apps, APKs, websites and captures, over MCP. Installs REA and its prerequisites (Ghidra, JDK 21, JADX, Apktool, WABT, Rizin, Wakaru, tshark, binwalk…) in a Docker image. Ghidra, JADX and WABT follow the versions each REA release was verified with; every download is checked against its SHA-256.</p></div></div>
+            <div class="card-body" id="core-rea"><p class="empty">Asking the host…</p></div>
+            <div class="engine-subsection"><h3>REA Engines</h3><p>Optional runtimes for checking recovered games and mods. Downloads start only when you choose an engine.</p>
+              <div id="core-rea-engines"><p class="empty">Asking the host…</p></div>
+            </div>
+            <div class="engine-subsection"><h3>REA Tool Addons</h3><p>Optional helper tools for unpacking and repacking game files. Downloads start only when you choose a tool; each is checked against its release SHA-256.</p>
+              <div id="core-rea-addons"><p class="empty">Asking the host…</p></div>
+            </div>
+          </div>
+
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-sub-panel="settings">
+        <div class="card-head"><div><h2>Settings</h2><p>Keys stay on this machine and are never shown again after saving.</p></div></div>
+        <div class="card-body settings">
+          <div class="field"><label for="civitai-key">Civitai API key <span class="saved" id="civitai-saved"></span></label>
+            <input id="civitai-key" type="password" autocomplete="off" placeholder="Needed for most downloads (civitai.com → Account settings → API keys)"></div>
+          <div class="field"><label for="hf-token">Hugging Face token <span class="saved" id="hf-saved"></span></label>
+            <input id="hf-token" type="password" autocomplete="off" placeholder="Only for gated or private repos (read access is enough)"></div>
+          <label class="check"><input id="auto-check" type="checkbox"> Check for updates once a day (never installs anything)</label>
+          <label class="check"><input id="blur-nsfw" type="checkbox"> Blur mature previews until clicked</label>
+          <div class="field narrow"><label for="concurrency">Downloads at once</label><select id="concurrency"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
+          <div class="action-row"><button type="button" class="secondary-button" id="save-settings">Save settings</button><span class="hint" id="settings-state"></span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-hardware" class="view" hidden>
+      <div class="card">
+        <div class="card-head"><div><h2>This machine</h2><p id="hw-when"></p></div><button type="button" class="secondary-button" id="rescan">Rescan</button></div>
+        <div class="card-body hw-grid" id="hw"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div><h2>What fits</h2><p>Largest model that runs fully on your best GPU, by format. Estimates include working memory.</p></div></div>
+        <div class="card-body" id="fit-table"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div><h2>How ratings work</h2></div></div>
+        <div class="card-body legend">
+          <p><span class="fit fit-gpu">Fits in VRAM</span> runs entirely on the GPU with room to spare (full speed). <span class="fit fit-tight">Fits in VRAM (tight)</span> runs on the GPU, but with little VRAM left: close other GPU apps and big browser tabs first. <span class="fit fit-gpu">Loads with base model</span> LoRAs: a small add-on loaded next to its base model.</p>
+          <p><span class="fit fit-multi">Split across GPUs</span> LLMs only: llama.cpp spreads layers over every GPU.</p>
+          <p><span class="fit fit-offload">Needs RAM offload</span> / <span class="fit fit-offload">Needs CPU offload</span> bigger than your VRAM: part of it has to live in system RAM (ComfyUI streams it in) or run on the CPU (llama.cpp), which is several times slower. <span class="fit fit-no">Too big for VRAM + RAM</span> won't load at all. <span class="fit fit-no">NVIDIA-only format</span> / <span class="fit fit-no">Apple-only format</span> / <span class="fit fit-no">Not GGUF (llama.cpp)</span> a file format this machine can't run (NVFP4, MLX, AWQ/GPTQ).</p>
+          <p>★ <strong>Best for your hardware</strong> marks the highest-quality quant that still fits comfortably.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Model detail -->
+  <div class="drawer-scrim" id="scrim" hidden></div>
+  <aside class="drawer" id="drawer" aria-label="Model details" hidden>
+    <div class="drawer-head">
+      <div class="drawer-title"><h2 id="d-name"></h2><p id="d-meta"></p></div>
+      <button type="button" class="icon-button" id="d-close" aria-label="Close">✕</button>
+    </div>
+    <div class="drawer-body" id="d-body"></div>
+  </aside>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

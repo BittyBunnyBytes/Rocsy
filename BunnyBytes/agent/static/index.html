@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#0f1418">
+  <title>Agent · Rocsy</title>
+  <link rel="icon" type="image/svg+xml" href="/static/icons/rocsy-v2.svg">
+  <link rel="stylesheet" href="/Agent/static/agent.css?v={{v}}">
+  <script defer src="/Agent/static/player.js?v={{v}}"></script>
+  <script defer src="/Agent/static/vendor/highlight-11.9.0.min.js"></script>
+  <script defer src="/Agent/static/agent.js?v={{v}}"></script>
+</head>
+<body>
+  <header class="a-top">
+    <button type="button" class="a-icon-btn a-menu" id="a-menu" aria-label="Sessions" aria-controls="a-side" aria-expanded="false"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span class="a-menu-dot" id="a-menu-dot" hidden></span></button>
+    <a class="a-home" href="/" aria-label="Rocsy home">
+      <svg viewBox="40 140 432 260" width="30" height="20" aria-hidden="true"><circle cx="256" cy="268" r="124" style="fill: var(--bb-amber)"/><path fill="#f2f7fb" d="M256 186 C269 186 276 197 274 210 C320 182 380 162 464 156 C418 200 358 234 292 254 L308 314 L256 294 L204 314 L220 254 C154 234 94 200 48 156 C132 162 192 182 238 210 C236 197 243 186 256 186 Z"/></svg>
+      <span>Rocsy</span>
+    </a>
+    <h1>Master Agent</h1>
+    <a class="a-link" href="/Settings#agentic">Settings</a>
+  </header>
+
+  <div class="a-layout">
+    <aside class="a-side" id="a-side" aria-label="Sessions">
+      <div class="a-side-top">
+        <button type="button" class="a-new" id="a-new">+ New session</button>
+        <button type="button" class="a-btn ghost a-select-toggle" id="a-select" aria-pressed="false" title="Select sessions to delete several at once">Select</button>
+      </div>
+      <div class="a-selbar" id="a-selbar" hidden>
+        <span id="a-sel-count">0 selected</span>
+        <button type="button" class="a-link-btn" id="a-sel-finished" title="Every session that isn't running">Select all</button>
+        <button type="button" class="a-btn danger" id="a-sel-delete" disabled>Delete</button>
+      </div>
+      <nav id="a-sessions" class="a-sessions" aria-label="Sessions (F2 renames, Delete removes)"></nav>
+    </aside>
+
+    <div class="a-scrim" id="a-scrim" hidden></div>
+    <main class="a-main">
+      <section id="a-empty" class="a-empty">
+        <h2>What should the Master Agent make?</h2>
+        <p>It can drive Video, Image, Music and the Trainer for you, and its jobs go to the front of the GPU queue. Configure it in <a href="/Settings#agentic">Settings → Agentic</a>.</p>
+        <p class="a-sugs-kicker">Or try an example:</p>
+        <div class="a-sugs" role="group" aria-label="Example requests"></div>
+      </section>
+
+      <section id="a-session" class="a-session" hidden>
+        <div class="a-head">
+          <div class="a-head-text"><div class="a-title-row"><h2 id="a-title" title="Double-click to rename"></h2><button type="button" class="a-icon-btn" id="a-rename" aria-label="Rename this session" title="Rename (F2)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Z M13.5 6.5l4 4" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></button></div><p id="a-stage" class="a-stage"></p>
+            <p id="a-goal" class="a-goal" hidden></p></div>
+          <div class="a-head-actions">
+            <button type="button" class="a-btn" id="a-gallery-open" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.6"/></svg><span>Gallery</span><span class="a-count" id="a-gallery-count"></span></button>
+            <button type="button" class="a-btn" id="a-stop" aria-label="Stop"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg><span>Stop</span></button>
+            <button type="button" class="a-btn ghost" id="a-delete" aria-label="Delete this session"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 12.5h9l1-12.5M10 11v5.5M14 11v5.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Delete</span></button>
+          </div>
+        </div>
+        <div id="a-approval" class="a-approval" role="alert" hidden>
+          <span class="a-approval-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg></span>
+          <div id="a-approval-text" class="a-approval-text"></div>
+          <div class="a-approval-actions">
+            <button type="button" class="a-btn ghost" data-approve="0">Decline</button>
+            <button type="button" class="a-btn primary" data-approve="1">Approve</button>
+            <button type="button" class="a-btn ghost" data-choice="deny" hidden>Deny</button>
+            <button type="button" class="a-btn" data-choice="session" hidden>Allow for this turn</button>
+            <button type="button" class="a-btn primary" data-choice="once" hidden>Allow once</button>
+          </div>
+        </div>
+        <div id="a-review" class="a-review" hidden></div>
+        <ol id="a-log" class="a-log" aria-live="polite"></ol>
+      </section>
+
+      <div id="a-busy" class="a-busy" role="alertdialog" aria-labelledby="a-busy-title" hidden>
+        <p class="a-busy-title" id="a-busy-title">The Master Agent's jobs are using the GPU</p>
+        <p class="a-busy-text" id="a-busy-text"></p>
+        <ul class="a-busy-jobs" id="a-busy-jobs"></ul>
+        <div class="a-busy-actions">
+          <button type="button" class="a-btn danger" data-busy="cancel">Stop them and send now</button>
+          <button type="button" class="a-btn" data-busy="queue">Send when they finish</button>
+          <button type="button" class="a-btn ghost" data-busy="keep">Keep editing</button>
+        </div>
+      </div>
+      <form id="a-compose" class="a-compose">
+        <button type="button" id="a-jump" class="a-jump" hidden><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M12 5v13M6 12l6 6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Scroll to the bottom</span></button>
+        <ul id="a-cmds" class="a-cmds" role="listbox" aria-label="Commands" hidden></ul>
+        <ul id="a-mentions" class="a-mentions" role="listbox" aria-label="Pinned upload files" hidden></ul>
+        <ul id="a-files" class="a-files" aria-label="Attachments to send" hidden></ul>
+        <div class="a-compose-row">
+          <button type="button" class="a-btn ghost a-attach" id="a-attach" aria-label="Attach files" title="Attach images, video or audio (or drop / paste them)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true"><path d="M20.5 11.5 12.4 19.6a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <input type="file" id="a-file-input" multiple hidden>
+          <div class="a-input-wrap"><pre id="a-input-highlight" class="a-input-highlight" aria-hidden="true"></pre><textarea id="a-input" rows="1" maxlength="20000" placeholder="Ask the Master Agent… (@ for pinned files, / for commands)" aria-label="Message the Master Agent" aria-controls="a-cmds a-mentions" aria-autocomplete="list"></textarea></div>
+          <button type="button" class="a-btn a-stop-inline" id="a-stop-inline" title="Stop the Master Agent" aria-label="Stop" hidden><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg><span>Stop</span></button>
+          <button type="submit" class="a-btn primary" id="a-send">Send</button>
+        </div>
+        <div id="a-meters" class="a-meters" hidden>
+          <span id="a-tps" class="a-tps" title="Generation speed of the agent's model"><b>–</b> tk/s</span>
+          <span id="a-ctx" class="a-ctx" role="meter" aria-label="Context used" aria-valuemin="0">
+            <span class="a-ctx-bar"><span class="a-ctx-fill"></span><span class="a-ctx-mark" hidden></span></span>
+            <span class="a-ctx-text"></span>
+          </span>
+          <span id="a-prefill" class="a-compress a-prefill" role="progressbar" aria-label="Reading the prompt" aria-valuemin="0" aria-valuemax="100" hidden>
+            <span class="a-compress-bar"><span class="a-compress-fill"></span></span>
+            <span class="a-compress-text"></span>
+          </span>
+          <span id="a-compress" class="a-compress" role="progressbar" aria-label="Auto-compression" aria-valuemin="0" aria-valuemax="100" hidden>
+            <span class="a-compress-bar"><span class="a-compress-fill"></span></span>
+            <span class="a-compress-text"></span>
+          </span>
+        </div>
+      </form>
+      <p id="a-msg" class="a-msg" role="status"></p>
+    </main>
+  </div>
+  <dialog id="a-gallery" class="a-gallery" aria-labelledby="a-gallery-title">
+    <div class="a-gallery-head">
+      <h2 id="a-gallery-title">Gallery</h2>
+      <div class="a-gallery-tabs" role="tablist">
+        <button type="button" role="tab" data-tab="made" aria-selected="true">Made by the agent</button>
+        <button type="button" role="tab" data-tab="sent" aria-selected="false">Your attachments</button>
+      </div>
+      <button type="button" class="a-btn ghost" id="a-gallery-close" aria-label="Close the gallery">✕</button>
+    </div>
+    <div class="a-gallery-grid" id="a-gallery-grid"></div>
+    <div class="a-viewer" id="a-viewer" hidden>
+      <button type="button" class="a-viewer-nav" data-step="-1" aria-label="Previous">‹</button>
+      <figure class="a-viewer-stage"><div id="a-viewer-media"></div><figcaption id="a-viewer-caption"></figcaption></figure>
+      <button type="button" class="a-viewer-nav" data-step="1" aria-label="Next">›</button>
+      <div class="a-viewer-bar"><a id="a-viewer-open" target="_blank" rel="noopener">Open in studio</a><a id="a-viewer-download" download>Download</a><button type="button" class="a-btn ghost" id="a-viewer-back">Back to the grid</button></div>
+    </div>
+  </dialog>
+  <div class="a-toast" id="a-toast" role="status" aria-live="polite" hidden><span id="a-toast-text"></span><button type="button" class="a-link-btn" id="a-toast-undo">Undo</button></div>
+  <div class="a-drop" id="a-drop" hidden><span>Drop files to attach them</span></div>
+  <script type="application/json" id="a-initial">{{initial}}</script>
+</body>
+</html>

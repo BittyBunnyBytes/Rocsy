@@ -1,0 +1,273 @@
+#!/bin/sh
+# Build the GPU arguments for each llama-swap model. The first argument is the
+# model's default GPU-layer policy, followed by its fit margin in MiB (or
+# "none"); remaining arguments go to llama-server.
+set -eu
+
+default_layers=$1
+shift
+default_fit_target=$1
+shift
+
+model_id=${LLAMA_MODEL_ID:-}
+
+# ROCSY_ROOT = the folder holding Llama/, BunnyBytes/, llama.cpp-builds/ ... on the host.
+# compose sets it; the llama.cpp folders are mounted at that same path (llama-server's
+# RUNPATH is absolute). Without it, find the root from those same-path mounts.
+if [ -z "${ROCSY_ROOT:-}" ]; then
+  ROCSY_ROOT=$(awk '$2 ~ /\/llama\.cpp-(rdna-boost|builds)$/ {print $2; exit}' /proc/mounts | sed 's|/llama\.cpp-[a-z-]*$||; s|\\040| |g')
+fi
+[ -n "$ROCSY_ROOT" ] || { echo "ROCSY_ROOT is not set and no llama.cpp build folder is mounted" >&2; exit 2; }
+args_file=/app/overrides/$model_id.args
+
+# Only the RDNA-boost ROCm builds may run. The default is built for gfx1100
+# (RX 7900 XTX) AND gfx1101 (RX 7800 XT): the old gfx1100-only build exited as
+# soon as a multi-GPU model touched ROCm1 (still allowed for rollback).
+# Models -> Manager -> Core Backend points llama.cpp-builds/active at a newer
+# llama.cpp release converted to RDNA Boost, or at a stock llama.cpp build the
+# user chose knowing it has no RDNA Boost; it is read on every model load.
+server_bin=${LLAMA_SERVER_BIN:-}
+# Per-model build (Parameters tab -> "llama.cpp build": "--build <id>" in .args) wins over
+# Core Backend's "Use this build"; a missing or unknown build falls back to that.
+if [ -z "$server_bin" ] && [ -n "$model_id" ] && [ -r "$args_file" ]; then
+  build_choice=$(tr -d '\r' < "$args_file" | sed -n 's/^--build \([A-Za-z0-9-]*\)$/\1/p' | head -n 1)
+  case "$build_choice" in
+    '') ;;
+    builtin)
+      server_bin=$ROCSY_ROOT/llama.cpp-rdna-boost/build-rocm-gfx1100-gfx1101-rdna-boost/bin/llama-server
+      echo "Build for this model: built-in" >&2 ;;
+    b[0-9]*-boost-[0-9a-f]*|b[0-9]*-stock|b[0-9]*-stock-*|rocmfpx-[0-9a-f]*-gfx*)
+      if [ -x "$ROCSY_ROOT/llama.cpp-builds/builds/$build_choice/build/bin/llama-server" ]; then
+        server_bin=$ROCSY_ROOT/llama.cpp-builds/builds/$build_choice/build/bin/llama-server
+        echo "Build for this model: $build_choice" >&2
+      else
+        echo "Build $build_choice for this model is not installed - using Core Backend's build" >&2
+      fi ;;
+    *) echo "Ignoring invalid --build $build_choice in $args_file" >&2 ;;
+  esac
+fi
+if [ -z "$server_bin" ] && [ -x "$ROCSY_ROOT/llama.cpp-builds/active/bin/llama-server" ]; then
+  server_bin=$(readlink -f "$ROCSY_ROOT/llama.cpp-builds/active/bin/llama-server")
+  echo "Core Backend build: $server_bin" >&2
+fi
+server_bin=${server_bin:-$ROCSY_ROOT/llama.cpp-rdna-boost/build-rocm-gfx1100-gfx1101-rdna-boost/bin/llama-server}
+case "$server_bin" in
+  "$ROCSY_ROOT"/llama.cpp-rdna-boost/build-rocm-*-rdna-boost/bin/llama-server) ;;
+  "$ROCSY_ROOT"/llama.cpp-builds/builds/b[0-9]*-boost-[0-9a-f]*/build/bin/llama-server) ;;
+  "$ROCSY_ROOT"/llama.cpp-builds/builds/b[0-9]*-stock/build/bin/llama-server|\
+  "$ROCSY_ROOT"/llama.cpp-builds/builds/b[0-9]*-stock-*/build/bin/llama-server)
+    echo "Stock llama.cpp build (no RDNA Boost): $server_bin" >&2 ;;
+  "$ROCSY_ROOT"/llama.cpp-builds/builds/rocmfpx-[0-9a-f]*-gfx*/build/bin/llama-server)
+    echo "ROCmFPX build: $server_bin" >&2 ;;
+  *) echo "LLAMA_SERVER_BIN must be an installed core backend build: $server_bin" >&2; exit 2 ;;
+esac
+
+# GPU backend is a per-model setting (Parameters tab -> "--backend vulkan"); ROCm by
+# default. Vulkan needs a build with llama.cpp's Vulkan backend (libggml-vulkan) -
+# without one the model stays on ROCm rather than failing to load.
+backend=rocm
+if [ -n "$model_id" ] && [ -r "$args_file" ] && tr -d '\r' < "$args_file" | grep -qx -- '--backend vulkan'; then
+  if [ -e "$(dirname "$server_bin")/libggml-vulkan.so" ]; then
+    backend=vulkan
+    echo "GPU backend: Vulkan" >&2
+  else
+    echo "GPU backend Vulkan requested, but $(dirname "$server_bin") has no Vulkan backend - using ROCm" >&2
+  fi
+fi
+prefix=ROCm
+[ "$backend" = vulkan ] && prefix=Vulkan
+
+# Multi-GPU is a per-model setting (Parameters tab -> "--multi-gpu on" in the
+# model's .args file); off by default, which keeps the model on GPU 0 only.
+if [ "$backend" = vulkan ]; then
+  devices=${LLAMA_VULKAN_DEVICES:-Vulkan0}
+else
+  devices=${LLAMA_GPU_DEVICES:-ROCm0}
+fi
+if [ -n "$model_id" ] && [ -r "$args_file" ] && tr -d '\r' < "$args_file" | grep -qx -- '--multi-gpu on'; then
+  if [ "$backend" = vulkan ]; then
+    devices=${LLAMA_VULKAN_MULTI_GPU_DEVICES:-Vulkan0,Vulkan1}
+  else
+    devices=${LLAMA_MULTI_GPU_DEVICES:-ROCm0,ROCm1}
+  fi
+  echo "Multi-GPU on: $devices" >&2
+fi
+case "$devices" in
+  "${prefix}0"|"${prefix}0",*) ;;
+  *) echo "GPU devices must start with ${prefix}0" >&2; exit 2 ;;
+esac
+old_ifs=$IFS
+IFS=,
+for device in $devices; do
+  case "$device" in
+    "$prefix"*) ;;
+    *) echo "Invalid GPU device: $device" >&2; exit 2 ;;
+  esac
+  number=${device#"$prefix"}
+  case "$number" in
+    ''|*[!0-9]*) echo "Invalid GPU device: $device" >&2; exit 2 ;;
+  esac
+done
+IFS=$old_ifs
+
+# Per-model context override written by H3 Machine's "Agent context" setting
+# and the Parameters tab: /app/overrides/<model id>.ctx. Only digits within
+# 4096-262144 are accepted.
+override=/app/overrides/$model_id.ctx
+if [ -n "$model_id" ] && [ -r "$override" ]; then
+  ctx=$(tr -d ' \n\r' < "$override")
+  case "$ctx" in
+    ''|*[!0-9]*) echo "Ignoring invalid context override in $override" >&2 ;;
+    *)
+      if [ "$ctx" -ge 4096 ] && [ "$ctx" -le 262144 ]; then
+        replaced=0
+        for arg do
+          shift
+          if [ "$replaced" = next ]; then arg=$ctx; replaced=1; fi
+          if [ "$arg" = --ctx-size ] || [ "$arg" = -c ]; then replaced=next; fi
+          set -- "$@" "$arg"
+        done
+        [ "$replaced" = 1 ] || set -- "$@" --ctx-size "$ctx"
+        echo "Context size $ctx from $override" >&2
+      else
+        echo "Ignoring out-of-range context override $ctx in $override" >&2
+      fi ;;
+  esac
+fi
+
+set -- "$@" --device "$devices" --main-gpu 0 \
+  --split-mode "${LLAMA_SPLIT_MODE:-layer}" \
+  --gpu-layers "${LLAMA_GPU_LAYERS:-$default_layers}"
+
+if [ -n "${LLAMA_TENSOR_SPLIT:-}" ]; then
+  set -- "$@" --tensor-split "$LLAMA_TENSOR_SPLIT"
+fi
+fit_target=${LLAMA_FIT_TARGET:-$default_fit_target}
+if [ "$fit_target" != none ]; then
+  set -- "$@" --fit-target "$fit_target"
+fi
+if [ -n "${LLAMA_CPU_MOE_LAYERS:-}" ]; then
+  set -- "$@" --n-cpu-moe "$LLAMA_CPU_MOE_LAYERS"
+fi
+if [ "${LLAMA_KV_OFFLOAD:-1}" = 0 ]; then
+  set -- "$@" --no-kv-offload
+fi
+
+flash_attn=on
+
+# Per-model parameters from the Llama "Parameters" page: /app/overrides/<model id>.args,
+# one "--flag value" per line. Appended last, so they win over config.yaml (llama.cpp
+# keeps the last value given for a flag). Only these value flags are accepted;
+# --multi-gpu was already applied to the device list above.
+if [ -n "$model_id" ] && [ -r "$args_file" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=$(printf '%s' "$line" | tr -d '\r')
+    case "$line" in ''|'#'*) continue ;; esac
+    flag=${line%% *}
+    value=${line#* }
+    case "$flag" in
+      --multi-gpu|--backend|--build) continue ;;
+      --flash-attn)
+        case "$line" in
+          '--flash-attn on'|'--flash-attn off'|'--flash-attn auto')
+            flash_attn=${line#--flash-attn }
+            echo "Attention type --flash-attn $flash_attn from $args_file" >&2 ;;
+          *) echo "Ignoring invalid value for --flash-attn in $args_file" >&2 ;;
+        esac
+        continue ;;
+      --batch-size|--ubatch-size|--threads|--threads-batch|--gpu-layers|--parallel|\
+      --cache-type-k|--cache-type-v|--spec-type|--spec-draft-n-max|--spec-draft-n-min|\
+      --n-cpu-moe|--fit-target|--temp|--top-p|--top-k|--min-p|--repeat-penalty|\
+      --presence-penalty|--reasoning-budget|--n-predict) ;;
+      *) echo "Ignoring unsupported parameter $flag in $args_file" >&2; continue ;;
+    esac
+    case "$value" in
+      ''|"$flag"|*[!A-Za-z0-9._,-]*) echo "Ignoring invalid value for $flag in $args_file" >&2; continue ;;
+    esac
+    set -- "$@" "$flag" "$value"
+    echo "Parameter $flag $value from $args_file" >&2
+  done < "$args_file"
+fi
+
+# Attention type: flash attention unless the model's Parameters tab chose otherwise.
+# Appended last, so it wins over any --flash-attn in config.yaml.
+set -- "$@" --flash-attn "$flash_attn"
+
+# Slot save/restore (POST /slots/N?action=save|restore): the Master Agent parks a conversation's cache
+# here before it unloads the model and restores it after the reload. Files older than two days go.
+if [ -d /app/slot-saves ] && [ -w /app/slot-saves ]; then
+  find /app/slot-saves -maxdepth 1 -name '*.bin' -mtime +1 -delete 2>/dev/null || true
+  set -- "$@" --slot-save-path /app/slot-saves
+fi
+
+# A build compiled against one of Rocsy's own ROCm versions (Core Backend → GPU runtimes)
+# runs with that ROCm's libraries; everything else uses the system /opt/rocm as before.
+rocm_file=$(dirname "$(dirname "$server_bin")")/rocm-path
+if [ -r "$rocm_file" ]; then
+  rocm_root=$(tr -d ' \r\n' < "$rocm_file")
+  case "$rocm_root" in
+    "$ROCSY_ROOT"/rocm-versions/[0-9]*)
+      case "$rocm_root" in *..*) echo "Invalid ROCm path in $rocm_file - it can't run" >&2; exit 2 ;;
+        *)
+          if [ -e "$rocm_root/lib/libamdhip64.so" ]; then
+            export ROCM_PATH="$rocm_root" HIP_PATH="$rocm_root"
+            export LD_LIBRARY_PATH="$rocm_root/lib:$rocm_root/lib/llvm/lib"
+            echo "ROCm runtime: $rocm_root" >&2
+          else
+            echo "ROCm $rocm_root for this build is missing - it can't run" >&2; exit 2
+          fi ;;
+      esac ;;
+    *) echo "ROCm path outside ~/AI/rocm-versions in $rocm_file - it can't run" >&2; exit 2 ;;
+  esac
+fi
+
+# Per-model rocBLAS backend calibration. The host tuner stores only a winning
+# 0 (Tensile) or 1 (prefer hipBLASLt), plus the exact files it measured.
+# Ignore stale records after a model, llama.cpp build, or ROCm library update.
+hipblaslt_record=/app/overrides/$model_id.hipblaslt
+if [ "$backend" = rocm ] && [ -n "$model_id" ] && [ -r "$hipblaslt_record" ]; then
+  model_file=
+  previous=
+  for argument do
+    if [ "$previous" = model ]; then model_file=$argument; break; fi
+    case "$argument" in -m|--model) previous=model ;; esac
+  done
+  if [ -n "$model_file" ] && [ -r "$model_file" ]; then
+    mode=$(sed -n '1p' "$hipblaslt_record")
+    saved_model=$(sed -n '2p' "$hipblaslt_record")
+    saved_model_stat=$(sed -n '3p' "$hipblaslt_record")
+    saved_binary=$(sed -n '4p' "$hipblaslt_record")
+    saved_binary_stat=$(sed -n '5p' "$hipblaslt_record")
+    saved_library=$(sed -n '6p' "$hipblaslt_record")
+    saved_library_stat=$(sed -n '7p' "$hipblaslt_record")
+    library=$(readlink -f "${ROCM_PATH:-/opt/rocm}/lib/libhipblaslt.so" 2>/dev/null || true)
+    if { [ "$mode" = 0 ] || [ "$mode" = 1 ]; } && \
+       [ "$(readlink -f "$model_file")" = "$saved_model" ] && \
+       [ "$(stat -c '%s:%Y' "$model_file")" = "$saved_model_stat" ] && \
+       [ "$(readlink -f "$server_bin")" = "$saved_binary" ] && \
+       [ "$(stat -c '%s:%Y' "$server_bin")" = "$saved_binary_stat" ] && \
+       [ -n "$library" ] && [ "$library" = "$saved_library" ] && \
+       [ "$(stat -c '%s:%Y' "$library")" = "$saved_library_stat" ]; then
+      export ROCBLAS_USE_HIPBLASLT=$mode
+      echo "rocBLAS backend for $model_id: $([ "$mode" = 1 ] && echo hipBLASLt || echo Tensile) (calibrated)" >&2
+    else
+      echo "Ignoring stale hipBLASLt tuning for $model_id" >&2
+    fi
+  fi
+fi
+
+# Model loading priority (Rocsy Settings -> Services): /app/overrides/_load_priority, read on every load.
+# Only normal or lower - this container may not raise its own priority.
+priority=normal
+if [ -r /app/overrides/_load_priority ]; then
+  priority=$(tr -cd 'a-z' < /app/overrides/_load_priority)
+fi
+case "$priority" in
+  background)
+    echo "Load priority: background (nice 19, idle disk)" >&2
+    exec nice -n 19 ionice -c 3 "$server_bin" "$@" ;;
+  low)
+    echo "Load priority: low (nice 10)" >&2
+    exec nice -n 10 ionice -c 2 -n 7 "$server_bin" "$@" ;;
+esac
+exec "$server_bin" "$@"

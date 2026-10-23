@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+{# Every home module's card data; app.py passes each section's visible modules in
+   the order chosen in Settings -> Modules (drag and drop, also between sections).
+   Create shows a big studio card, Tools a compact row - any module can be either. #}
+{% set modules = {
+  "Vid": {"href": "/Vid/", "color": "var(--bb-blue)", "icon": "<rect x=\"2.5\" y=\"5.5\" width=\"14\" height=\"13\" rx=\"2\" stroke=\"currentColor\" stroke-width=\"1.6\"/><path d=\"M16.5 10.2 L21 7.5 V16.5 L16.5 13.8 Z\" fill=\"currentColor\"/>", "name": "Video", "live": true, "desc": "Video generation with MiniMax H3, Agentic sessions and Post-Edit", "status": "Video generation with MiniMax H3, Agentic sessions and Post-Edit"},
+  "Krea": {"href": "/Krea/", "color": "var(--bb-red)", "icon": "<rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" stroke=\"currentColor\" stroke-width=\"1.6\"/><circle cx=\"9\" cy=\"9\" r=\"2.2\" stroke=\"currentColor\" stroke-width=\"1.6\"/><path d=\"M3 16.5 L8.5 11 L13 15.5 L16 12.5 L21 17.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>", "name": "Image", "live": true, "desc": "Images with Krea 2 Turbo, Lustify and Qwen Image", "status": "Images with Krea 2 Turbo, Lustify and Qwen Image"},
+  "Mus": {"href": "/Mus/", "color": "var(--bb-green)", "icon": "<path d=\"M9 17.5 V5.5 L19 3.5 V15.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"6.5\" cy=\"17.5\" r=\"2.5\" stroke=\"currentColor\" stroke-width=\"1.6\"/><circle cx=\"16.5\" cy=\"15.5\" r=\"2.5\" stroke=\"currentColor\" stroke-width=\"1.6\"/>", "name": "Music", "live": true, "desc": "Songs from a style and lyrics", "status": "Songs from a style and lyrics"},
+  "Voice": {"href": "/Voice/", "color": "var(--bb-purple)", "icon": "<rect x=\"9\" y=\"3\" width=\"6\" height=\"11\" rx=\"3\" stroke=\"currentColor\" stroke-width=\"1.6\"/><path d=\"M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/>", "name": "Voice", "live": true, "desc": "Text to speech", "status": "Text to speech"},
+  "Code": {"href": "/Code/", "color": "var(--bb-blue)", "icon": "<path d=\"M8 7L3.5 12 8 17M16 7l4.5 5-4.5 5M14 4l-4 16\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>", "name": "Vibe Coding", "experimental": true, "live": false, "desc": "Browse and download Hermes and Rocsy coding projects", "status": "Project library"},
+  "Agent": {"href": "/Agent/", "color": "var(--bb-amber)", "icon": "<path d=\"M12 3.5l1.9 4.6 4.6 1.9-4.6 1.9L12 16.5l-1.9-4.6L5.5 10l4.6-1.9z\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linejoin=\"round\"/><path d=\"M18 15.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z\" fill=\"currentColor\"/>", "name": "Agent", "live": true, "desc": "Master Agent: plans and drives every studio for you", "status": "Master Agent: drives every studio"},
+  "Trainer": {"href": "/Trainer/", "color": "var(--bb-teal)", "icon": "<path d=\"M9.5 3h5M10.5 3v6.2L5.2 18.4A1.7 1.7 0 0 0 6.7 21h10.6a1.7 1.7 0 0 0 1.5-2.6L13.5 9.2V3M7.5 15h9\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>", "name": "Trainer", "live": true, "desc": "Train your own LoRAs for Krea 2, Qwen Image, H3 and LTX", "status": "Train LoRAs with ROCm"},
+  "Queue": {"href": "/Queue/", "color": "var(--bb-amber)", "icon": "<circle cx=\"12\" cy=\"12\" r=\"9\" stroke=\"currentColor\" stroke-width=\"1.6\"/><path d=\"M12 7 V12 L15.5 14\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>", "name": "Queue", "live": true, "desc": "The shared GPU queue across all studios", "status": "GPU queue across all studios"},
+  "Llama": {"href": "/Llama/ui/", "color": "var(--bb-teal)", "icon": "<rect x=\"7\" y=\"7\" width=\"10\" height=\"10\" rx=\"1.5\" stroke=\"currentColor\" stroke-width=\"1.6\"/><path d=\"M9 3.5V7M15 3.5V7M9 17V20.5M15 17V20.5M3.5 9H7M3.5 15H7M17 9H20.5M17 15H20.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/>", "name": "Llama", "live": true, "desc": "Local LLM inference with llama-swap", "status": "Local LLM inference"},
+  "Connections": {"href": "/Connections/", "color": "var(--bb-green)", "icon": "<path d=\"M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/><path d=\"M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/>", "name": "Connections", "live": true, "desc": "Website accounts, Telegram bot and tunnels", "status": "Website accounts, Telegram bot and tunnels"},
+  "Models": {"href": "/Models/", "color": "var(--bb-blue)", "icon": "<path d=\"M12 3.5v10.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/><path d=\"M7.5 9.5L12 14l4.5-4.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M4 15.5V19a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/>", "name": "Models", "live": true, "desc": "Download models and LoRAs from Civitai and Hugging Face, see what fits your GPU and keep them updated", "status": "Downloads, hardware fit and updates"},
+  "REA": {"href": "/REA/", "color": "var(--bb-red)", "icon": "<circle cx=\"10.5\" cy=\"10.5\" r=\"6\" stroke=\"currentColor\" stroke-width=\"1.6\"/><path d=\"M15 15l5.5 5.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/><path d=\"M8.5 8.5l-1.5 2 1.5 2M12.5 8.5l1.5 2-1.5 2\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>", "name": "REA", "experimental": true, "live": true, "desc": "Reverse Engineer Anything: open any program with Ghidra, read its functions as code, follow calls and strings, or hand it to the Master Agent", "status": "Look inside programs"},
+  "Cache": {"href": "/Cache/", "color": "var(--bb-purple)", "icon": "<ellipse cx=\"10\" cy=\"5.5\" rx=\"6.5\" ry=\"2.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/><path d=\"M3.5 5.5v12c0 1.4 2.9 2.5 6.5 2.5M16.5 5.5V10M3.5 11.5c0 1.4 2.9 2.5 6.5 2.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/><path d=\"M18 13l1 2.4 2.4 1-2.4 1-1 2.4-1-2.4-2.4-1 2.4-1z\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/>", "name": "RAG & Cache", "live": false, "desc": "Files the Master Agent pulls in by trigger term, plus the 7-day upload cache", "status": "RAG library and upload cache"},
+  "Hermes": {"href": "/Hermes/", "color": "var(--bb-blue)", "icon": "<path d=\"M5 18.5V8.5L12 4L19 8.5V18.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linejoin=\"round\"/><path d=\"M8.5 18.5V12H15.5V18.5M3.5 18.5H20.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/><circle cx=\"12\" cy=\"8.5\" r=\"1.5\" fill=\"currentColor\"/>", "name": "Hermes", "live": false, "desc": "Remote agent desktop and chat", "status": "Remote agent desktop and chat"}
+} %}
+{% macro studio_card(id) %}{% set m = modules[id] %}{% set tag = 'div' if m.placeholder else 'a' %}
+<{{ tag }} class="h-studio{% if m.placeholder %} h-placeholder{% endif %}"{% if not m.placeholder %} href="{{ m.href }}"{% endif %}{% if m.live %} data-studio="{{ id }}"{% endif %} data-card="{{ id }}" style="--c: {{ m.color }}">
+  <span class="h-studio-art" aria-hidden="true"></span>
+  <span class="h-studio-body">
+    <span class="h-studio-top">
+      <span class="h-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24" fill="none">{{ m.icon | safe }}</svg></span>
+      {% if m.live %}<span class="h-live" data-live><span class="h-dot"></span><span data-live-text>…</span></span>{% endif %}
+      {% if m.placeholder %}<span class="h-live">Coming soon</span>{% endif %}
+      {% if m.experimental %}<span class="h-exp">Experimental</span>{% endif %}
+    </span>
+    <span class="h-studio-name">{{ m.name }}</span>
+    <span class="h-studio-desc">{{ m.desc }}</span>
+    <span class="h-studio-current" data-current></span>
+  </span>
+</{{ tag }}>
+{% endmacro %}
+{% macro tool_card(id) %}{% set m = modules[id] %}{% set tag = 'div' if m.placeholder else 'a' %}
+<{{ tag }} class="h-tool{% if id == 'Agent' %} h-tool-agent{% endif %}{% if m.placeholder %} h-placeholder{% endif %}"{% if not m.placeholder %} href="{{ m.href }}"{% endif %}{% if m.live %} data-studio="{{ id }}"{% endif %} style="--c: {{ m.color }}">
+  <span class="h-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none">{{ m.icon | safe }}</svg></span>
+  <span class="h-tool-text"><span class="h-tool-name">{{ m.name }}{% if m.experimental %} <span class="h-exp">Experimental</span>{% endif %}</span><span class="h-tool-status"{% if m.live %} data-live-text{% endif %}>{{ m.status }}</span></span>
+</{{ tag }}>
+{% endmacro %}
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rocsy</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="/static/icons/rocsy-v2.svg">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/rocsy-v2-192.png">
+  <link rel="apple-touch-icon" href="/static/icons/rocsy-v2-touch-180.png">
+  <meta name="theme-color" content="#0f1418">
+  <link rel="stylesheet" href="/static/css/site.css?v={{ asset_v('css/site.css') }}">
+  <link rel="stylesheet" href="/static/css/home.css?v={{ asset_v('css/home.css') }}">
+  <link rel="stylesheet" href="{{ theme_href() }}" id="bb-theme">
+  <script defer src="/static/home.js?v={{ asset_v('home.js') }}"></script>
+  {{ data_saver_script() }}
+</head>
+<body class="bb-body bb-home2">
+  <div class="bb-bg-glow" aria-hidden="true"></div>
+
+  <header class="h-top">
+    <a class="bb-brand bb-brand-link" href="/">
+      <span class="bb-brand-mark" aria-hidden="true">
+        <svg viewBox="40 140 432 260" width="34" height="22" xmlns="http://www.w3.org/2000/svg">
+          <circle class="bb-mark-sun" cx="256" cy="268" r="124"/>
+          <path class="bb-mark-bird" d="M256 186 C269 186 276 197 274 210 C320 182 380 162 464 156 C418 200 358 234 292 254 L308 314 L256 294 L204 314 L220 254 C154 234 94 200 48 156 C132 162 192 182 238 210 C236 197 243 186 256 186 Z"/>
+        </svg>
+      </span>
+      <span class="bb-brand-name">Rocsy</span>
+    </a>
+    <nav class="h-top-actions" aria-label="Account">
+      <a class="h-icon-link" href="/Settings" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M12 2.8v2.4M12 18.8v2.4M21.2 12h-2.4M5.2 12H2.8M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7M18.5 18.5l-1.7-1.7M7.2 7.2L5.5 5.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          <circle cx="12" cy="12" r="6.6" stroke="currentColor" stroke-width="1.6"/>
+        </svg>
+      </a>
+      <a class="h-logout" href="/logout">Log out</a>
+    </nav>
+  </header>
+
+  <main class="h-main">
+    <h1 class="h-sr">Rocsy</h1>
+    {% if "Agent" not in hidden %}
+    <form class="h-ask" id="h-ask" action="/Agent/" method="get" role="search" aria-label="Ask the Master Agent">
+      <span class="h-ask-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none"><path d="M12 3.5l1.9 4.6 4.6 1.9-4.6 1.9L12 16.5l-1.9-4.6L5.5 10l4.6-1.9z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M18 15.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z" fill="currentColor"/></svg></span>
+      <textarea id="h-ask-input" name="prompt" rows="1" maxlength="20000" placeholder="Ask the Master Agent to make something… (/goal to set a standing goal)" aria-keyshortcuts="/" title="Press / to jump here" aria-label="Ask the Master Agent" autocomplete="off"></textarea>
+      <button type="submit" aria-label="Send to the Master Agent"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </form>
+    <p class="h-ask-note" id="h-ask-note" role="status"></p>
+    {% endif %}
+
+    <section class="h-status" aria-label="Status">
+      <div class="h-chips" id="h-chips" aria-live="polite">
+        {# Each chip opens what it describes: the job on the GPU, the loaded model, the busy session, pending updates. #}
+        <a class="h-chip h-chip-link" data-chip="gpu" href="/Queue/" style="--c: var(--bb-blue)"><span class="h-dot"></span><span class="h-chip-text">GPU</span></a>
+        {% if "Llama" not in hidden %}
+        <a class="h-chip h-chip-link" data-chip="llama" href="/Llama/ui/" style="--c: var(--bb-teal)"><span class="h-dot"></span><span class="h-chip-text">Llama</span></a>
+        {% endif %}
+        {% if "Agent" not in hidden %}
+        <a class="h-chip h-chip-link" data-chip="agent" href="/Agent/" style="--c: var(--bb-amber)"><span class="h-dot"></span><span class="h-chip-text">Master Agent</span></a>
+        {% endif %}
+        {% if "Models" not in hidden %}
+        <a class="h-chip h-chip-link" data-chip="updates" href="/Models/#updates" style="--c: var(--bb-amber)"><span class="h-dot"></span><span class="h-chip-text">Updates</span></a>
+        {% endif %}
+      </div>
+      <p class="h-summary" id="h-summary"></p>
+    </section>
+
+
+    {% if create %}
+    <section class="h-section" aria-labelledby="h-create">
+      <div class="h-section-head"><h2 id="h-create">Create</h2></div>
+      <div class="h-create">
+        {% for name in create %}
+        {{ studio_card(name) }}
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    {% set recent = initial.recent if initial else [] %}
+    <section class="h-section" aria-labelledby="h-latest" id="h-latest-section"{% if not recent %} hidden{% endif %}>
+      <div class="h-section-head"><h2 id="h-latest">Latest</h2><span class="h-section-note">Newest finished renders</span></div>
+      <div class="h-strip" id="h-strip" data-key="{{ recent | map(attribute='thumb') | join('|') }}">
+        {% for item in recent %}{% set studio_name = modules[item.studio].name if item.studio in modules else item.studio %}
+        <a class="h-shot" href="{{ item.url }}" data-studio="{{ item.studio }}">
+          <span class="h-shot-frame"><img src="{{ item.thumb }}" alt="" decoding="async"{% if loop.index > 4 %} loading="lazy"{% else %} fetchpriority="high"{% endif %}><span class="h-shot-tag">{{ studio_name }}</span></span>
+          <span class="h-shot-title">{{ item.title or item.meta or studio_name }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </section>
+
+    {% if tools %}
+    <section class="h-section" aria-labelledby="h-tools">
+      <div class="h-section-head"><h2 id="h-tools">Tools</h2></div>
+      <div class="h-tools">
+        {% for name in tools %}
+        {{ tool_card(name) }}
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+  </main>
+
+  <div class="h-tour" id="h-tour" hidden aria-hidden="true">
+    <section class="h-tour-card" role="dialog" aria-modal="true" aria-labelledby="h-tour-title" aria-describedby="h-tour-copy">
+      <div class="h-tour-progress" aria-hidden="true"><span id="h-tour-progress"></span></div>
+      <p class="h-tour-kicker" id="h-tour-step"></p>
+      <h2 id="h-tour-title"></h2>
+      <p id="h-tour-copy"></p>
+      <div class="h-tour-actions">
+        <button type="button" class="h-tour-skip" id="h-tour-skip">Skip tour</button>
+        <div>
+          <button type="button" class="h-tour-back" id="h-tour-back">Back</button>
+          <button type="button" class="h-tour-next" id="h-tour-next">Next</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  {% if initial %}<script type="application/json" id="h-initial">{{ initial | tojson }}</script>{% endif %}
+  {% set tunnel = tunnel_url(request) %}{% if tunnel %}<footer class="bb-footer"><span>Connected via <a href="{{ tunnel }}">{{ tunnel }}</a></span></footer>{% endif %}
+</body>
+</html>

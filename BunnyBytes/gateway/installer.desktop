@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Install Rocsy
+Comment=Open the visual Rocsy installer
+Exec=/bin/sh -c "exec /bin/sh \"\\$(dirname \"\\$0\")/Install Rocsy.sh\"" %k
+Icon=applications-system
+Terminal=false
+Categories=Utility;

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c2833"/>
+      <stop offset="1" stop-color="#0c1115"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f3c46a"/>
+      <stop offset="1" stop-color="#d6684f"/>
+    </linearGradient>
+    <linearGradient id="wing" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#cfe6f6"/>
+      <stop offset="1" stop-color="#79add3"/>
+    </linearGradient>
+    <clipPath id="sky"><rect width="512" height="368"/></clipPath>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <circle cx="256" cy="330" r="132" fill="url(#sun)" clip-path="url(#sky)"/>
+  <path d="M96 368 H416" stroke="#d6684f" stroke-width="8" stroke-linecap="round"/>
+  <path d="M150 400 H362" stroke="#d6684f" stroke-width="8" stroke-linecap="round" opacity="0.45"/>
+  <path d="M196 430 H316" stroke="#d6684f" stroke-width="8" stroke-linecap="round" opacity="0.2"/>
+  <path fill="url(#wing)" stroke="#0f1418" stroke-width="10" stroke-linejoin="round" paint-order="stroke" d="
+    M256 180
+    C 268 180 276 192 273 206
+    C 310 186 356 166 420 160
+    L 462 150
+    L 428 182 L 446 186 L 412 206 L 424 214 L 384 228
+    C 336 236 298 246 280 266
+    L 296 318 L 256 302 L 216 318 L 232 266
+    C 214 246 176 236 128 228
+    L 88 214 L 100 206 L 66 186 L 84 182 L 50 150
+    L 92 160
+    C 156 166 202 186 239 206
+    C 236 192 244 180 256 180 Z"/>
+</svg>

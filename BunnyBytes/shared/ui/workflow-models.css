@@ -1,0 +1,14 @@
+/* Advanced workflow card (shared/ui/workflow-models.js). Inputs keep each studio's own field styles. */
+[data-workflow-models] { display: grid; gap: 10px; }
+[data-workflow-models] .wm-note { margin: 0; font-size: 0.82rem; line-height: 1.4; opacity: 0.75; }
+[data-workflow-models] .wm-warn { opacity: 1; color: #f0b45a; }
+[data-workflow-models] .wm-slots { display: grid; gap: 8px; }
+[data-workflow-models] .wm-row { display: grid; gap: 4px; min-width: 0; }
+[data-workflow-models] .wm-row select,
+[data-workflow-models] .wm-workflow-row select { width: 100%; min-width: 0; text-overflow: ellipsis; }
+[data-workflow-models] .wm-class { font-size: 0.72rem; font-weight: 400; opacity: 0.55; }
+[data-workflow-models] .wm-row.is-overridden label::after { content: " · changed"; font-size: 0.72rem; color: #f0b45a; }
+[data-workflow-models] .wm-status { font-size: 0.75rem; opacity: 0.8; }
+[data-workflow-models] .wm-status:empty { display: none; }
+[data-workflow-models] .wm-actions { display: flex; justify-content: flex-end; }
+.wm-card { margin-top: 14px; }

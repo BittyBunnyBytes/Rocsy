@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+httpx
+itsdangerous
+jinja2
+python-multipart
+pywebpush
+pillow
+pyyaml

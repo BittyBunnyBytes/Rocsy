@@ -1,0 +1,67 @@
+--- a/ComfyUI-H3-UltimateUpscale-LD/nodes.py
++++ b/ComfyUI-H3-UltimateUpscale-LD/nodes.py
+@@ -1449,6 +1449,8 @@
+                                  tooltip="Do NOT unload the diffusion model before each chunk's upscale. Faster, but the H3 model and the upscaler's working buffer then share VRAM."),
+                 io.Boolean.Input("unload_model_after", default=True, optional=True,
+                                  tooltip="Unload the diffusion model once every chunk is sampled, so the VAE decode of the large latent gets the VRAM."),
++                io.Boolean.Input("upscale_chunks_first", default=False, optional=True,
++                                 tooltip="Upscale every time chunk behind ONE diffusion-model unload, then sample them all with the model loaded once, instead of unload -> upscale -> reload for each chunk."),
+             ],
+             outputs=[
+                 H3_UPSCALE_PARAM.Output("latent_upscale_param",
+@@ -1458,7 +1460,7 @@
+ 
+     @classmethod
+     def execute(cls, model_name, width, height, device, precision, keep_upscaler_resident=False,
+-                keep_model_resident=False, unload_model_after=True) -> io.NodeOutput:
++                keep_model_resident=False, unload_model_after=True, upscale_chunks_first=False) -> io.NodeOutput:
+         width = int(round(width / 32.0)) * 32
+         height = int(round(height / 32.0)) * 32
+         param = {
+@@ -1470,6 +1472,7 @@
+             "keep_upscaler_resident": bool(keep_upscaler_resident),
+             "keep_model_resident": bool(keep_model_resident),
+             "unload_model_after": bool(unload_model_after),
++            "upscale_chunks_first": bool(upscale_chunks_first),
+         }
+         return io.NodeOutput(param)
+ 
+@@ -1847,6 +1850,25 @@
+         segments_debug = []
+         tiles_debug = []
+ 
++        # (Bunny) upscale_chunks_first: each chunk's upscale reads only the
++        # first-pass latent, never a sampled chunk, so all of them can run behind
++        # ONE diffusion-model unload; the first sample then loads H3 once instead
++        # of once per chunk. The upscaler stays on the GPU for the batch.
++        pre_upscaled = None
++        if latent_upscale_param is not None and latent_upscale_param.get("upscale_chunks_first", False):
++            use_model = "model_name" in latent_upscale_param
++            if (hasattr(model, "clone_base_uuid") and not latent_upscale_param.get("keep_model_resident", False)
++                    and (not use_model or str(latent_upscale_param["device"]) == "cuda")):
++                comfy.model_management.unload_model_and_clones(model, unload_additional_models=False)
++                comfy.model_management.soft_empty_cache()
++            batch_param = dict(latent_upscale_param, keep_upscaler_resident=True)
++            pre_upscaled = [upscale_latent(video[:, :, k0:k1].contiguous(), batch_param)[0]
++                            for (k0, _f0, k1, _f1) in bounds]
++            if use_model and not latent_upscale_param.get("keep_upscaler_resident", False):
++                unload_upscale_model(latent_upscale_param["model_name"], latent_upscale_param["device"],
++                                     latent_upscale_param["precision"])
++            comfy.model_management.soft_empty_cache()
++
+         for i, (k0, f0, k1, f1) in enumerate(bounds):
+             chunk_v = video[:, :, k0:k1].contiguous()
+             a0, a1 = audio_range(f0, f1)
+@@ -1858,7 +1880,11 @@
+             #    to avoid H3 + upscaler resident simultaneously; the next sample
+             #    reloads H3 automatically.
+             upscaled = False
+-            if latent_upscale_param is not None:
++            if pre_upscaled is not None:
++                chunk_v = pre_upscaled[i]
++                pre_upscaled[i] = None
++                upscaled = True
++            elif latent_upscale_param is not None:
+                 use_model = "model_name" in latent_upscale_param
+                 # (Bunny) also before a model-free resize: a second pass on the
+                 # still-loaded H3 comes out as patch noise (tested 2026-09-29).

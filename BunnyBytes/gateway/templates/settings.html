@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rocsy — Settings</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  {{ app_icon_link("Settings") }}
+  <link rel="apple-touch-icon" href="/static/icons/rocsy-v2-touch-180.png">
+  <meta name="theme-color" content="#0f1418">
+  <link rel="stylesheet" href="/static/css/site.css?v={{ asset_v('css/site.css') }}">
+  <link rel="stylesheet" href="/static/css/settings.css?v={{ asset_v('css/settings.css') }}">
+  <link rel="stylesheet" href="/static/css/rocsy-bar.css?v={{ asset_v('css/rocsy-bar.css') }}">
+  <link rel="stylesheet" href="{{ theme_href() }}" id="bb-theme">
+  <script defer src="/static/settings.js?v={{ asset_v('settings.js') }}"></script>
+  <script defer src="/static/notifications.js?v={{ asset_v('notifications.js') }}"></script>
+  <script defer src="/static/modules.js?v={{ asset_v('modules.js') }}"></script>
+  <script defer src="/static/services.js?v={{ asset_v('services.js') }}"></script>
+  <script defer src="/static/connections.js?v={{ asset_v('connections.js') }}"></script>
+  <script defer src="/static/agentic.js?v={{ asset_v('agentic.js') }}"></script>
+  <script defer src="/static/compression.js?v={{ asset_v('compression.js') }}"></script>
+  <script defer src="/static/gputune.js?v={{ asset_v('gputune.js') }}"></script>
+  {{ data_saver_script() }}
+</head>
+<body class="bb-body bb-settings">
+  <div class="bb-bg-glow" aria-hidden="true"></div>
+  <header class="rb-bar" data-rb-app="Settings">
+    {{ rocsy_crumb('Settings') }}
+  </header>
+
+  <main class="bb-settings-main">
+    <header class="bb-settings-head">
+      <h1 class="bb-title">Settings</h1>
+      <p class="bb-subtitle">Saved on the server, so every device matches.</p>
+    </header>
+
+    <div class="bb-settings-shell">
+    <nav class="bb-tabs" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
+      <div class="bb-tabs-group" role="presentation">You</div>
+      <button type="button" class="bb-tab" role="tab" id="tab-appearance" aria-controls="panel-appearance" data-tab="appearance"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.84-.44-1.13-.29-.29-.44-.65-.44-1.12a1.64 1.64 0 0 1 1.67-1.67h2c3.05 0 5.55-2.5 5.55-5.55C21.97 6.01 17.46 2 12 2z"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Appearance</span><span class="bb-tab-desc">Theme, accent, data saver</span></span></button>
+      <button type="button" class="bb-tab" role="tab" id="tab-notifications" aria-controls="panel-notifications" data-tab="notifications"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Notifications</span><span class="bb-tab-desc">Devices and events</span></span></button>
+      <button type="button" class="bb-tab" role="tab" id="tab-modules" aria-controls="panel-modules" data-tab="modules"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Home page</span><span class="bb-tab-desc">Modules, card pictures, tour</span></span></button>
+      <div class="bb-tabs-group" role="presentation">Assistant</div>
+      <button type="button" class="bb-tab" role="tab" id="tab-agentic" aria-controls="panel-agentic" data-tab="agentic"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Agentic</span><span class="bb-tab-desc">Agent, schedules, rules</span></span></button>
+      <button type="button" class="bb-tab" role="tab" id="tab-compression" aria-controls="panel-compression" data-tab="compression"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 14 4-4 4 4"/><path d="M8 10v11"/><path d="m20 10-4 4-4-4"/><path d="M16 14V3"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Compression</span><span class="bb-tab-desc">Summaries, trimming, cuts</span></span></button>
+      <div class="bb-tabs-group" role="presentation">System</div>
+      <button type="button" class="bb-tab" role="tab" id="tab-gputune" aria-controls="panel-gputune" data-tab="gputune"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2"/><path d="M15 2v2"/><path d="M9 20v2"/><path d="M15 20v2"/><path d="M2 9h2"/><path d="M2 15h2"/><path d="M20 9h2"/><path d="M20 15h2"/></svg><span class="bb-tab-text"><span class="bb-tab-name">GPU tuning</span><span class="bb-tab-desc">AI overclock, smart switch</span></span></button>
+      <button type="button" class="bb-tab" role="tab" id="tab-services" aria-controls="panel-services" data-tab="services"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01"/><path d="M6 17.5h.01"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Services</span><span class="bb-tab-desc">Containers and ComfyUI</span></span></button>
+      <button type="button" class="bb-tab" role="tab" id="tab-storage" aria-controls="panel-storage" data-tab="storage"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M6 16h.01"/><path d="M10 16h.01"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Cache &amp; storage</span><span class="bb-tab-desc">Generated files and logs</span></span></button>
+      <button type="button" class="bb-tab" role="tab" id="tab-security" aria-controls="panel-security" data-tab="security"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Security</span><span class="bb-tab-desc">Password and connections</span></span></button>
+      <div class="bb-tabs-group" role="presentation">Advanced</div>
+      {% if developer_build %}{% include "settings_developer_tab.html" ignore missing %}{% endif %}
+      <button type="button" class="bb-tab bb-tab-danger" role="tab" id="tab-uninstall" aria-controls="panel-uninstall" data-tab="uninstall"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Uninstall</span><span class="bb-tab-desc">Remove Rocsy</span></span></button>
+    </nav>
+
+    <div class="bb-settings-content">
+
+    <div class="bb-tab-panel" role="tabpanel" id="panel-appearance" aria-labelledby="tab-appearance">
+    <header class="bb-panel-head"><h2 class="bb-panel-title">Appearance</h2><p class="bb-panel-lead">Applies to the home page, Settings and every studio and tool, including Llama and Hermes.</p></header>
+
+    <section class="bb-section" aria-labelledby="theme-heading">
+      <div class="bb-section-head">
+        <h2 id="theme-heading">Theme</h2>
+        <span class="bb-status" id="save-status" role="status" aria-live="polite"></span>
+      </div>
+      <div class="bb-theme-grid" id="theme-grid" role="radiogroup" aria-labelledby="theme-heading"></div>
+    </section>
+
+    <section class="bb-section" aria-labelledby="accent-heading">
+      <div class="bb-section-head">
+        <h2 id="accent-heading">Accent colour</h2>
+      </div>
+      <p class="bb-section-note">Buttons, links, progress bars and focus rings. Works with any theme, including Studio default.</p>
+      <div class="bb-accent-row" id="accent-row">
+        <button type="button" class="bb-accent-chip bb-accent-none" data-accent="" title="Use the theme's accent">Theme</button>
+        <button type="button" class="bb-accent-chip" data-accent="#79add3" title="Sky"></button>
+        <button type="button" class="bb-accent-chip" data-accent="#a58cf0" title="Violet"></button>
+        <button type="button" class="bb-accent-chip" data-accent="#f28dbb" title="Pink"></button>
+        <button type="button" class="bb-accent-chip" data-accent="#7fd3a0" title="Mint"></button>
+        <button type="button" class="bb-accent-chip" data-accent="#f2a65a" title="Orange"></button>
+        <button type="button" class="bb-accent-chip" data-accent="#ef6f7f" title="Red"></button>
+        <button type="button" class="bb-accent-chip" data-accent="#f2d15a" title="Gold"></button>
+        <label class="bb-accent-custom" title="Custom colour">
+          <input type="color" id="accent-custom" value="#79add3" aria-label="Custom accent colour">
+          <span>Custom</span>
+        </label>
+      </div>
+    </section>
+
+    <section class="bb-section" aria-labelledby="preview-heading">
+      <div class="bb-section-head">
+        <h2 id="preview-heading">Preview</h2>
+      </div>
+      <div class="bb-preview">
+        <div class="bb-preview-card">
+          <div class="bb-preview-top">
+            <strong>Generation</strong>
+            <span class="bb-preview-pill">Rendering</span>
+          </div>
+          <div class="bb-preview-bar"><span></span></div>
+          <input class="bb-input" value="A bunny rides a skateboard at golden hour" aria-label="Sample prompt" readonly>
+          <div class="bb-preview-actions">
+            <button type="button" class="bb-submit">Generate</button>
+            <button type="button" class="bb-preview-ghost">Cancel</button>
+          </div>
+          <div class="bb-preview-states">
+            <span class="bb-dot bb-dot-green">Complete</span>
+            <span class="bb-dot bb-dot-amber">Queued</span>
+            <span class="bb-dot bb-dot-red">Failed</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="bb-section" aria-labelledby="datasaver-heading">
+      <div class="bb-section-head">
+        <h2 id="datasaver-heading">Mobile data</h2>
+        <span class="bb-status" id="datasaver-status" role="status" aria-live="polite"></span>
+      </div>
+      <p class="bb-section-note">Saves data when a phone isn't on Wi-Fi: videos don't autoplay or preload (tap play still works), big images come as smaller copies, and the home page refreshes less often. Downloads stay full size.</p>
+      <div class="bb-form-grid">
+        <label class="bb-field">Data saver
+          <select id="datasaver-mode" disabled>
+            <option value="auto">Auto: phones on mobile data</option>
+            <option value="phone">Always on phones and tablets</option>
+            <option value="off">Off</option>
+          </select>
+        </label>
+      </div>
+      <p class="bb-section-note" id="datasaver-device"></p>
+    </section>
+    </div>
+
+    <div class="bb-tab-panel" role="tabpanel" id="panel-agentic" aria-labelledby="tab-agentic" hidden>
+      <header class="bb-panel-head"><h2 class="bb-panel-title">Agentic</h2><p class="bb-panel-lead">The <a href="/Agent/">Master Agent</a> drives Video, Image, Music and the Trainer for you. Changes save at once and apply to its next turn.</p></header>
+
+      <section class="bb-section" aria-labelledby="agent-model-heading">
+        <div class="bb-section-head">
+          <h2 id="agent-model-heading">Master Agent</h2>
+          <span class="bb-status" id="agentic-status" role="status" aria-live="polite"></span>
+        </div>
+        <p class="bb-section-note">The model it thinks with. Local models run on this machine's GPU: the agent holds the GPU while it thinks and hands it over, model unloaded, while its jobs render.</p>
+        <h3 class="bb-subhead">Brain</h3>
+        <div class="bb-form-grid">
+          <label class="bb-field">Model
+            <select id="agent-model"><option value="">Loading…</option></select>
+          </label>
+          <label class="bb-field">Thinking
+            <select id="agent-reasoning"></select>
+          </label>
+          <label class="bb-field">GPU jobs per message (0 = no limit)
+            <input id="agent-max-jobs" type="number" min="0" step="1">
+          </label>
+          <label class="bb-field" title="A local model stays loaded while its question waits for your answer, so the reply starts at once. It is unloaded as soon as anything else queues for the GPU">Keep the model loaded after a question
+            <select id="agent-keep-loaded">
+              <option value="0">Off (unload at once)</option>
+              <option value="5">For 5 minutes</option>
+              <option value="15">For 15 minutes</option>
+              <option value="30">For 30 minutes</option>
+              <option value="60">For 1 hour</option>
+              <option value="-1">Until the GPU is needed</option>
+            </select>
+          </label>
+        </div>
+        <h3 class="bb-subhead">Defaults for new jobs</h3>
+        <div class="bb-form-grid">
+          <label class="bb-field" id="agent-vid-preset-field">Video preset
+            <select id="agent-vid-preset"><option value="">Vid defaults</option></select>
+          </label>
+          <label class="bb-field">Default video model
+            <select id="agent-video-model"></select>
+          </label>
+          <label class="bb-field">Default voice model
+            <select id="agent-voice-model"></select>
+          </label>
+          <label class="bb-field">Default image model
+            <select id="agent-image-model"></select>
+          </label>
+          <label class="bb-field">Default music model
+            <select id="agent-music-model"></select>
+          </label>
+        </div>
+      </section>
+
+      <section class="bb-section" aria-labelledby="agent-power-heading">
+        <div class="bb-section-head"><h2 id="agent-power-heading">What it controls</h2></div>
+        <div class="bb-switch-list" id="agent-switches"></div>
+      </section>
+
+      <section class="bb-section" aria-labelledby="agent-sched-heading">
+        <div class="bb-section-head">
+          <h2 id="agent-sched-heading">Schedules</h2>
+          <span class="bb-status" id="agent-sched-status" role="status" aria-live="polite"></span>
+        </div>
+        <p class="bb-section-note">Sends the Master Agent a request at a set time, in a new session. With a run time it keeps working until that time is up. /schedule in the Agent chat does the same.</p>
+        <form class="bb-sched-form" id="agent-sched-form">
+          <label class="bb-field bb-sched-prompt">Request
+            <textarea id="agent-sched-prompt" rows="2" maxlength="12000" required placeholder="Make images of foxes in different seasons"></textarea>
+          </label>
+          <div class="bb-form-grid">
+            <label class="bb-field">Time
+              <input id="agent-sched-time" type="time" value="03:00" required>
+            </label>
+            <label class="bb-field">Repeat
+              <select id="agent-sched-repeat">
+                <option value="once">Once</option>
+                <option value="daily">Every day</option>
+                <option value="weekdays">Weekdays</option>
+                <option value="weekends">Weekends</option>
+              </select>
+            </label>
+            <label class="bb-field" id="agent-sched-date-field">Date
+              <input id="agent-sched-date" type="date">
+            </label>
+            <label class="bb-field">Run for (hours, 0 = until done)
+              <input id="agent-sched-hours" type="number" min="0" max="72" step="0.5" value="0">
+            </label>
+          </div>
+          <button type="submit" class="bb-button bb-button-primary">Add schedule</button>
+        </form>
+        <div class="bb-switch-list" id="agent-sched-list"></div>
+      </section>
+
+      <section class="bb-section" aria-labelledby="agent-perm-heading">
+        <div class="bb-section-head"><h2 id="agent-perm-heading">Permissions</h2></div>
+        <p class="bb-section-note">The Master Agent is a full Hermes agent. These decide which of Hermes' tools it may use and how far it may go. Hermes' own hard safety blocks always apply.</p>
+        <div class="bb-form-grid">
+          <label class="bb-field">Files
+            <select id="agent-perm-files"></select>
+          </label>
+          <label class="bb-field">Risky commands
+            <select id="agent-approval">
+              <option value="ask">Ask me on the Agent page</option>
+              <option value="allow">Allow them</option>
+              <option value="deny">Deny them</option>
+            </select>
+          </label>
+          <label class="bb-field">Loop guard
+            <select id="agent-loop-guard">
+              <option value="off">Off</option>
+              <option value="warn">Warn me, keep going</option>
+              <option value="stop">Stop the loop</option>
+            </select>
+          </label>
+          <label class="bb-field">At the iteration limit
+            <select id="agent-limit-restarts">
+              <option value="0">Stop (don't restart)</option>
+              <option value="1">Restart once</option>
+              <option value="3">Restart up to 3 times</option>
+              <option value="5">Restart up to 5 times</option>
+              <option value="10">Restart up to 10 times</option>
+              <option value="-1">Always restart</option>
+            </select>
+          </label>
+        </div>
+        <div class="bb-notes">
+          <p class="bb-section-note bb-tight" id="agent-perm-files-note"></p>
+          <p class="bb-section-note bb-tight" id="agent-loop-guard-note"></p>
+          <p class="bb-section-note bb-tight" id="agent-limit-restarts-note"></p>
+        </div>
+        <h3 class="bb-subhead">Hermes tools</h3>
+        <div class="bb-switch-list" id="agent-perms"></div>
+      </section>
+
+      <section class="bb-section" aria-labelledby="agent-image-heading">
+        <div class="bb-section-head"><h2 id="agent-image-heading">Image search</h2></div>
+        <p class="bb-section-note">How the Master Agent looks up reference pictures on the web.</p>
+        <div class="bb-form-grid">
+          <label class="bb-field">Search engine
+            <select id="agent-image-engine"></select>
+          </label>
+          <label class="bb-field">Runs
+            <select id="agent-image-mode">
+              <option value="headless">Headless (in the background)</option>
+              <option value="browser">In the live browser (/browser connect, visible Chromium)</option>
+            </select>
+          </label>
+        </div>
+        <div class="bb-notes"><p class="bb-section-note bb-tight" id="agent-image-note"></p></div>
+      </section>
+
+      <section class="bb-section" aria-labelledby="agent-rules-heading">
+        <div class="bb-section-head">
+          <h2 id="agent-rules-heading">Rules</h2>
+          <span class="bb-status" id="rule-status" role="status" aria-live="polite"></span>
+        </div>
+        <p class="bb-section-note">The briefs and prompts behind the Master Agent and Hermes' dataset work (auto-tag, auto-cut, clip finder). Changes apply to the next run.</p>
+        <div class="bb-rules-bar">
+          <select id="rule-pick" aria-label="Rule to edit"></select>
+          <select id="rule-history" aria-label="Restore an earlier version" hidden><option value="">History…</option></select>
+        </div>
+        <p class="bb-section-note bb-rule-help" id="rule-help"></p>
+        <textarea id="rule-text" class="bb-rule-text" spellcheck="false" aria-labelledby="agent-rules-heading"></textarea>
+        <div class="bb-rules-actions">
+          <span class="bb-section-note bb-tight" id="rule-path"></span>
+          <button type="button" class="bb-button" id="rule-revert">Undo changes</button>
+          <button type="button" class="bb-button" id="rule-reset">Reset to default</button>
+          <button type="button" class="bb-button bb-button-primary" id="rule-save">Save</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="bb-tab-panel" role="tabpanel" id="panel-compression" aria-labelledby="tab-compression" hidden>
+      <header class="bb-panel-head"><h2 class="bb-panel-title">Compression</h2><p class="bb-panel-lead">How hard the <a href="/Agent/">Master Agent</a>'s Hermes sessions shrink their history to fit the model's context. Stronger saves context and prompt-reading time but forgets more detail. Applies within 30 s, from the next model call.</p></header>
+
+      <section class="bb-section" aria-labelledby="compress-strength-heading">
+        <div class="bb-section-head">
+          <h2 id="compress-strength-heading">Strength</h2>
+          <span class="bb-status" id="compress-status" role="status" aria-live="polite"></span>
+        </div>
+        <div class="bb-form-grid">
+          <label class="bb-field">Preset
+            <select id="compress-preset">
+              <option value="light">Light: keeps the most detail</option>
+              <option value="balanced">Balanced (default)</option>
+              <option value="strong">Strong</option>
+              <option value="maximum">Maximum: smallest context</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+        </div>
+        <div class="bb-notes"><p class="bb-section-note bb-tight" id="compress-preset-note"></p></div>
+      </section>
+
+      <section class="bb-section" aria-labelledby="compress-summary-heading">
+        <div class="bb-section-head"><h2 id="compress-summary-heading">Summaries</h2></div>
+        <p class="bb-section-note">Hermes replaces the older turns with a summary written by the session's own model (nothing else loads into VRAM).</p>
+        <div class="bb-form-grid">
+          <label class="bb-field">Compress at (% of the context window)
+            <input id="compress-at" data-key="at" type="number" step="5">
+          </label>
+          <label class="bb-field">Summary length (% of what it replaces)
+            <input id="compress-summary" data-key="summary" type="number" step="5">
+          </label>
+          <label class="bb-field">Recent messages kept word for word
+            <input id="compress-keep-messages" data-key="keep_messages" type="number" step="1">
+          </label>
+          <label class="bb-field">Your last messages always kept
+            <input id="compress-keep-user" data-key="keep_user" type="number" step="1">
+          </label>
+        </div>
+      </section>
+
+      <section class="bb-section" aria-labelledby="compress-trim-heading">
+        <div class="bb-section-head"><h2 id="compress-trim-heading">Trimming and cuts</h2></div>
+        <p class="bb-section-note">Cheaper than a summary: old tool outputs (terminal, file reads, searches) are cut to a one-line note without a model call. The agent can run the tool again if it needs the output.</p>
+        <div class="bb-form-grid">
+          <label class="bb-field">Start trimming at (% of the window, 0 = off)
+            <input id="compress-trim-at" data-key="trim_at" type="number" step="5">
+          </label>
+          <label class="bb-field">Only trim outputs longer than (characters)
+            <input id="compress-trim-min" data-key="trim_min_chars" type="number" step="500">
+          </label>
+          <label class="bb-field">Latest tool results kept whole when compressing
+            <input id="compress-tool-rounds" data-key="tool_rounds" type="number" step="1">
+          </label>
+        </div>
+      </section>
+
+      <section class="bb-section" aria-labelledby="agent-compress-heading">
+        <div class="bb-section-head"><h2 id="agent-compress-heading">Backup model</h2></div>
+        <div class="bb-form-grid">
+          <label class="bb-field">Backup model (online)
+            <select id="agent-compress-backup" disabled><option value="">Online backup · coming soon</option></select>
+          </label>
+        </div>
+        <p class="bb-section-note bb-tight">Placeholder: picking an online model to write summaries when the session's model can't is coming later. For now this list only shows which online models will be available.</p>
+      </section>
+    </div>
+
+    <div class="bb-tab-panel" role="tabpanel" id="panel-notifications" aria-labelledby="tab-notifications" hidden>
+      <header class="bb-panel-head"><h2 class="bb-panel-title">Notifications</h2><p class="bb-panel-lead">One switch per device for every studio. Pick which events reach you below.</p></header>
+
+      <section class="bb-section" aria-labelledby="device-heading">
+        <div class="bb-section-head">
+          <h2 id="device-heading">This device</h2>
+          <span class="bb-status" id="notify-status" role="status" aria-live="polite"></span>
+        </div>
+        <div class="bb-device-row">
+          <div class="bb-device-state">
+            <span class="bb-device-dot" id="device-dot" aria-hidden="true"></span>
+            <div>
+              <strong id="device-title">Checking…</strong>
+              <p class="bb-section-note bb-tight" id="device-note"></p>
+            </div>
+          </div>
+          <div class="bb-device-actions">
+            <button type="button" class="bb-button bb-button-primary" id="device-toggle" disabled>Turn on</button>
+            <button type="button" class="bb-button" id="device-test" hidden>Send test</button>
+          </div>
+        </div>
+        <div class="bb-devices" id="device-list" hidden>
+          <h3>Devices getting notifications</h3>
+          <ul id="device-items"></ul>
+        </div>
+      </section>
+
+      <div id="service-list"></div>
+    </div>
+
+    <div class="bb-tab-panel" role="tabpanel" id="panel-modules" aria-labelledby="tab-modules" hidden>
+      <header class="bb-panel-head"><h2 class="bb-panel-title">Home page</h2><p class="bb-panel-lead">Choose what shows on the home page. Hidden modules keep working at their own address.</p></header>
+      <div id="module-list"></div>
+      <p class="bb-section-note bb-center"><span class="bb-status" id="modules-status" role="status" aria-live="polite"></span></p>
+      <section class="bb-section" aria-labelledby="trainer-art-heading">
+        <div class="bb-section-head">
+          <h2 id="trainer-art-heading">Trainer card pictures</h2>
+          <span class="bb-status" id="trainer-art-status" role="status" aria-live="polite"></span>
+        </div>
+        <p class="bb-section-note">The Trainer card shows a random dataset picture, and a slideshow of the dataset while it trains. Untick a dataset to keep it off the home page.</p>
+        <fieldset class="bb-installer-options bb-art-datasets" id="trainer-art-list" disabled>
+          <legend>Datasets shown on the home page</legend>
+          <p class="bb-section-note" id="trainer-art-empty">Loading datasets…</p>
+        </fieldset>
+      </section>
+      <section class="bb-section" aria-labelledby="onboarding-heading">
+        <div class="bb-section-head"><h2 id="onboarding-heading">Home page tour</h2></div>
+        <p class="bb-section-note">Replay the first-run tour. The home page highlights each item and explains it without opening any studios or tools.</p>
+        <div class="bb-rules-actions">
+          <button type="button" class="bb-button bb-button-primary" id="start-first-run">Take the tour</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="bb-tab-panel" role="tabpanel" id="panel-gputune" aria-labelledby="tab-gputune" hidden>
+      <header class="bb-panel-head"><h2 class="bb-panel-title">GPU tuning</h2><p class="bb-panel-lead">Overclock profiles for AI work, applied through LACT. Sustained stability comes before peak clocks: tune one setting at a time, and a GPU reset puts the card back to stock.</p></header>
+
+      <section class="bb-section" aria-labelledby="gt-live-heading">
+        <div class="bb-section-head">
+          <h2 id="gt-live-heading">Now</h2>
+          <span class="bb-status" id="gt-status" role="status" aria-live="polite"></span>
+        </div>
+        <p class="bb-section-note" id="gt-device">Loading…</p>
+        <div class="gt-live" id="gt-live"></div>
+        <p class="gt-hold" id="gt-hold" hidden><span id="gt-hold-text"></span> <button type="button" class="bb-button" id="gt-resume">Resume smart switch</button></p>
+      </section>
+
+      <section class="bb-section" aria-labelledby="gt-auto-heading">
+        <div class="bb-section-head"><h2 id="gt-auto-heading">Smart switch</h2></div>
+        <div class="bb-priority-row">
+          <div class="bb-svc-text"><span class="bb-svc-name">Switch profiles automatically</span><span class="bb-svc-note">Picks the profile when a job gets the GPU (from the GPU queue) or an LLM starts generating, and goes back to the idle profile once nothing runs.</span></div>
+          <input type="checkbox" class="bb-switch" id="gt-auto" aria-label="Switch profiles automatically">
+        </div>
+        <div class="bb-form-grid" id="gt-map"></div>
+      </section>
+
+      <section class="bb-section" aria-labelledby="gt-profiles-heading">
+        <div class="bb-section-head"><h2 id="gt-profiles-heading">Profiles</h2></div>
+        <p class="bb-section-note">VRAM is the raw clock LACT uses; the effective rate is double (1325 = 2650 MHz). Core is the boost ceiling, never above stock. Compute mode sets the driver's COMPUTE power profile, which holds clocks steady under AI kernels.</p>
+        <div id="gt-profiles" class="gt-profiles"></div>
+      </section>
+
+      <section class="bb-section" aria-labelledby="gt-log-heading">
+        <div class="bb-section-head"><h2 id="gt-log-heading">Activity</h2></div>
+        <ol class="gt-log" id="gt-log"></ol>
+      </section>
+    </div>
+
+    <div class="bb-tab-panel" role="tabpanel" id="panel-services" aria-labelledby="tab-services" hidden>
+      <header class="bb-panel-head"><h2 class="bb-panel-title">Services</h2><p class="bb-panel-lead">Supervisors, ComfyUI and containers on this machine. Busy apps can't be stopped mid-job.</p></header>
+      <p class="bb-section-note bb-center"><span class="bb-status" id="services-status" role="status" aria-live="polite"></span></p>
+      <div id="service-groups"><p class="bb-section-note bb-center">Loading…</p></div>
+      <section class="bb-section" aria-labelledby="comfy-profiles-heading">
+        <div class="bb-section-head">
+          <h2 id="comfy-profiles-heading">ComfyUI profiles</h2>
+          <span class="bb-status" id="comfy-profiles-status" role="status" aria-live="polite"></span>
+        </div>
+        <p class="bb-section-note">Extra launch arguments and GEMM tuning used by the ComfyUI supervisor. Changes apply the next time that profile starts; restart ComfyUI above to apply them now.</p>
+        <div id="comfy-profile-list" class="bb-profile-list"><p class="bb-section-note">Loading…</p></div>
+        <div class="bb-priority-row">
+          <div class="bb-svc-text"><span class="bb-svc-name">GEMM tuning</span><span class="bb-svc-note" id="gemm-tuning-note">Picks the fastest matrix kernels for each shape. Auto learns new sizes while ComfyUI is idle; Tune learns during the render (slower first time).</span></div>
+          <select id="gemm-tuning" aria-label="GEMM tuning">
+            <option value="auto">Auto · tune while idle</option><option value="tune">Tune new shapes</option><option value="use">Use tuned only</option><option value="off">Off</option>
+          </select>
+        </div>
+        <div class="bb-rules-actions">
+          <button type="button" class="bb-button" id="comfy-profiles-reset">Restore defaults</button>
+          <button type="button" class="bb-button bb-button-primary" id="comfy-profiles-save">Save profiles</button>
+        </div>
+      </section>
+      <section class="bb-section" aria-labelledby="load-priority-heading">
+        <div class="bb-section-head">
+          <h2 id="load-priority-heading">Model loading priority</h2>
+          <span class="bb-status" id="load-priority-status" role="status" aria-live="polite"></span>
+        </div>
+        <p class="bb-section-note">CPU priority each model server runs at, from its next load. Background keeps the desktop smooth but loads and answers slower when the CPU is busy.</p>
+        <div id="load-priority-list" class="bb-profile-list"><p class="bb-section-note">Loading…</p></div>
+        <div class="bb-rules-actions">
+          <button type="button" class="bb-button bb-button-primary" id="load-priority-save">Save priority</button>
+        </div>
+      </section>
+    </div>
+    <div class="bb-tab-panel" role="tabpanel" id="panel-storage" aria-labelledby="tab-storage" hidden>
+      <header class="bb-panel-head"><h2 class="bb-panel-title">Cache &amp; storage</h2><p class="bb-panel-lead">Manage generated files in the ComfyUI output folder and the Master Agent workspace. Models, source code, settings, dependencies and project files are protected. User uploads are shown separately and excluded unless you opt in.</p></header>
+      <section class="bb-section" aria-labelledby="storage-summary-heading">
+        <div class="bb-section-head"><h2 id="storage-summary-heading">Stored generated files</h2><button type="button" class="bb-button" id="storage-refresh">Refresh</button></div>
+        <div class="bb-storage-summary" id="storage-summary"><p class="bb-section-note">Loading…</p></div>
+      </section>
+      <section class="bb-section" aria-labelledby="storage-cleanup-heading">
+        <div class="bb-section-head"><h2 id="storage-cleanup-heading">Delete files</h2><span class="bb-status" id="storage-status" role="status" aria-live="polite"></span></div>
+        <p class="bb-section-note">Deletion is permanent. “Newest” removes files created or changed within that period; “Older” removes files last changed before it.</p>
+        <div class="bb-storage-actions">
+          <label class="bb-storage-upload-toggle"><input type="checkbox" id="storage-include-uploads"> Include user-uploaded files</label>
+          <label class="bb-field">What to delete
+            <select id="storage-scope">
+              <option value="newest_hour">Newest · last hour</option><option value="newest_day">Newest · last day</option><option value="newest_week">Newest · last week</option>
+              <option value="older_hour">Older than · 1 hour</option><option value="older_day">Older than · 1 day</option><option value="older_week">Older than · 1 week</option><option value="older_month">Older than · 1 month</option><option value="all">All generated files</option>
+            </select>
+          </label>
+          <p class="bb-section-note bb-storage-estimate" id="storage-estimate" aria-live="polite">Calculating estimate…</p>
+          <button type="button" class="bb-button bb-button-danger" id="storage-delete">Delete selected files</button>
+        </div>
+      </section>
+      <section class="bb-section" aria-labelledby="agentic-logs-heading">
+        <div class="bb-section-head"><h2 id="agentic-logs-heading">Delete agentic logs</h2><span class="bb-status" id="agentic-logs-status" role="status" aria-live="polite"></span></div>
+        <p class="bb-section-note">Removes saved Agentic session histories (chat timelines, plans and step logs). Rendered files and job cards stay; running sessions are skipped.</p>
+        <div class="bb-storage-actions">
+          <div class="bb-storage-summary" id="agentic-logs-sources"><p class="bb-section-note">Loading…</p></div>
+          <label class="bb-field">Which logs
+            <select id="agentic-logs-scope">
+              <option value="older_day">Older than · 1 day</option><option value="older_week">Older than · 1 week</option><option value="older_month" selected>Older than · 1 month</option>
+              <option value="newest_hour">Newest · last hour</option><option value="newest_day">Newest · last day</option><option value="newest_week">Newest · last week</option><option value="all">All agentic logs</option>
+            </select>
+          </label>
+          <p class="bb-section-note bb-storage-estimate" id="agentic-logs-estimate" aria-live="polite"></p>
+          <button type="button" class="bb-button bb-button-danger" id="agentic-logs-delete">Delete agentic logs</button>
+        </div>
+      </section>
+    </div>
+    <div class="bb-tab-panel" role="tabpanel" id="panel-security" aria-labelledby="tab-security" hidden>
+      <header class="bb-panel-head"><h2 class="bb-panel-title">Security</h2><p class="bb-panel-lead">Who can reach Rocsy, and the password that lets them in.</p></header>
+      <section class="bb-section" aria-labelledby="password-heading">
+        <div class="bb-section-head"><h2 id="password-heading">Rocsy password</h2><span class="bb-status" id="password-status" role="status" aria-live="polite"></span></div>
+        <p class="bb-section-note" id="password-description">Checking password status…</p>
+        <form id="password-form" class="bb-password-form">
+          <label class="bb-field" id="current-password-field" hidden>Current password
+            <input id="current-password" type="password" autocomplete="current-password" maxlength="200">
+          </label>
+          <label class="bb-field">New password
+            <input id="new-password" type="password" autocomplete="new-password" minlength="8" maxlength="200" required>
+          </label>
+          <label class="bb-field">Confirm new password
+            <input id="confirm-new-password" type="password" autocomplete="new-password" minlength="8" maxlength="200" required>
+          </label>
+          <button type="submit" class="bb-button bb-button-primary" id="password-save">Set password</button>
+        </form>
+      </section>
+      <section class="bb-section" aria-labelledby="connections-heading" id="connections">
+        <div class="bb-section-head"><h2 id="connections-heading">Connections</h2><span class="bb-status" id="connections-status" role="status" aria-live="polite"></span></div>
+        <p class="bb-section-note">Everyone who has reached Rocsy in the last 90 days. IP addresses are never shown or saved: each address gets a random nickname instead, and the flag comes from Cloudflare's country lookup.</p>
+        <label class="bb-switch-row bb-conn-setting">
+          <span><strong>Block scanners automatically</strong><span class="bb-section-note">Visitors that probe for files Rocsy never serves (like /.env or /wp-login.php) are blocked on the spot. Signed-in browsers and your local network are never auto-blocked.</span></span>
+          <input type="checkbox" class="bb-switch" id="scanner-block" checked disabled>
+        </label>
+        <div class="bb-conn-toolbar">
+          <div class="bb-conn-stats" id="connections-stats" aria-live="polite"></div>
+          <button type="button" class="bb-button" id="connections-clear" title="Removes everyone who isn't revoked and doesn't have the password">Clear list</button>
+        </div>
+        <div class="bb-conn-list" id="connections-list"><p class="bb-section-note">Loading connections…</p></div>
+        <p class="bb-section-note">Revoking signs that person out on every device and blocks their connection. Someone who already knows the password can still sign in again from a new network, so change the password to lock them out for good.</p>
+      </section>
+    </div>
+    <div class="bb-tab-panel" role="tabpanel" id="panel-uninstall" aria-labelledby="tab-uninstall" hidden>
+      <header class="bb-panel-head"><h2 class="bb-panel-title">Uninstall</h2><p class="bb-panel-lead">Remove Rocsy's services from this machine.</p></header>
+      <section class="bb-section bb-section-danger" aria-labelledby="uninstall-heading">
+        <div class="bb-section-head"><h2 id="uninstall-heading">Uninstall Rocsy</h2><span class="bb-status" id="uninstall-status" role="status" aria-live="polite"></span></div>
+        <p class="bb-section-note">This stops and removes Rocsy services. Choose whether to keep the installation folder for a future reinstall. External models, ComfyUI, Docker and other software outside the install folder are not removed.</p>
+        <p class="bb-section-note" id="uninstall-location">Checking installation…</p>
+        <button type="button" class="bb-button bb-button-danger" id="uninstall-open" disabled>Uninstall Rocsy…</button>
+      </section>
+      <dialog id="uninstall-dialog" class="bb-uninstall-dialog" aria-labelledby="uninstall-dialog-title">
+        <form method="dialog" id="uninstall-form">
+          <h2 id="uninstall-dialog-title">Uninstall Rocsy</h2>
+          <p class="bb-section-note">Rocsy will go offline when this starts. Select what to do with files in <strong id="uninstall-dialog-location"></strong>.</p>
+          <label class="bb-uninstall-choice"><input type="radio" name="uninstall-files" value="keep" checked> Keep installation files and saved data for reinstall</label>
+          <label class="bb-uninstall-choice"><input type="radio" name="uninstall-files" value="delete"> Delete the entire installation folder and its saved data</label>
+          <p class="bb-section-note" id="uninstall-effect"></p>
+          <label class="bb-field">Type <strong>UNINSTALL ROCSY</strong> to confirm
+            <input id="uninstall-phrase" type="text" autocomplete="off" spellcheck="false" required>
+          </label>
+          <label class="bb-field">Rocsy password
+            <input id="uninstall-password" type="password" autocomplete="current-password" required>
+          </label>
+          <p class="bb-status" id="uninstall-dialog-status" role="status" aria-live="polite"></p>
+          <div class="bb-uninstall-dialog-actions">
+            <button type="button" class="bb-button" id="uninstall-cancel">Cancel</button>
+            <button type="submit" class="bb-button bb-button-danger" id="uninstall-confirm" disabled>Uninstall Rocsy</button>
+          </div>
+        </form>
+      </dialog>
+    </div>
+    {% if developer_build %}{% include "settings_developer_panel.html" ignore missing %}{% endif %}
+    </div>
+    </div>
+  </main>
+
+  {% set tunnel = tunnel_url(request) %}{% if tunnel %}<footer class="bb-footer"><span>Connected via <a href="{{ tunnel }}">{{ tunnel }}</a></span></footer>{% endif %}
+</body>
+</html>

@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vibe Coding · Rocsy</title>
+  <link rel="icon" href="/static/icons/rocsy-v2.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/site.css?v={{ asset_v('css/site.css') }}">
+  <link rel="stylesheet" href="/static/css/code.css?v={{ asset_v('css/code.css') }}">
+  <link rel="stylesheet" href="/static/css/rocsy-bar.css?v={{ asset_v('css/rocsy-bar.css') }}">
+  <link rel="stylesheet" href="{{ theme_href() }}" id="bb-theme">
+  <script defer src="/static/js/code.js?v={{ asset_v('js/code.js') }}"></script>
+  {{ data_saver_script() }}
+</head>
+<body class="bb-body code-body">
+  <header class="rb-bar code-top" data-rb-app="Code">{{ rocsy_crumb('Code') }}</header>
+
+  <div class="topbar">
+    <button type="button" class="icon-button sidebar-open" id="sidebar-open" aria-controls="library" aria-expanded="true" title="Show the project list" aria-label="Show the project list" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M8 7L3.5 12 8 17M16 7l4.5 5-4.5 5M14 4l-4 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <span class="brand-text"><strong>Vibe Coding</strong><span>Build with the Master Agent</span></span>
+    </div>
+    <span class="chip" id="status-chip"><span class="dot"></span><span id="status-text">Loading…</span></span>
+    <button type="button" class="button" id="refresh" title="Look for new projects in the Hermes and Rocsy workspaces">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Refresh</button>
+  </div>
+
+  <main class="layout" id="layout">
+    <aside class="files" id="library" aria-label="Projects">
+      <div class="files-head">
+        <h2>Library <span class="count" id="count"></span></h2>
+        <button type="button" class="button small primary" id="new-project-side" title="Start a new coding project"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>New</button>
+        <button type="button" class="icon-button sidebar-close" id="sidebar-close" aria-controls="library" title="Hide the project list (the ☰ button brings it back)" aria-label="Hide the project list"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+      <div class="files-tools">
+        <input type="search" id="project-filter" placeholder="Filter projects" aria-label="Filter projects" autocomplete="off">
+        <select id="project-sort" aria-label="Sort projects" title="Sort">
+          <option value="updated">Last modified</option>
+          <option value="name">Name</option>
+        </select>
+      </div>
+      <div class="files-seg">
+        <div class="seg" id="source-seg" role="group" aria-label="Workspace">
+          <button type="button" data-source="" aria-pressed="true">All</button>
+          <button type="button" data-source="vibe" aria-pressed="false">Vibe</button>
+          <button type="button" data-source="hermes" aria-pressed="false">Hermes</button>
+          <button type="button" data-source="rocsy" aria-pressed="false">Rocsy</button>
+        </div>
+      </div>
+      <ul class="file-list" id="projects"><li class="empty">Loading projects…</li></ul>
+    </aside>
+
+    <section class="work" id="work">
+      <p class="state" id="message" role="status" aria-live="polite"></p>
+
+      <div class="intro" id="intro">
+        <section class="hero">
+          <span class="eyebrow">Vibe Coding</span>
+          <h1>Your coding projects</h1>
+          <p>Start a new project or pick one up again: the Master Agent keeps coding it, turn after turn, and big ideas become
+            goals it splits into small steps. Browse the files, run a live preview, see how long it took and which models wrote it.</p>
+          <div class="hero-actions">
+            <button type="button" class="button primary" id="new-project"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>New project</button>
+            <button type="button" class="button" id="open-latest" hidden>Open the latest project</button>
+            <button type="button" class="button" data-proxy="refresh">Look for new projects</button>
+          </div>
+        </section>
+        <section class="intro-section" id="intro-projects" hidden>
+          <div class="section-head"><h2>Recently changed</h2><span class="hint" id="intro-count"></span></div>
+          <ul class="game-grid" id="intro-list"></ul>
+        </section>
+        <section class="intro-section">
+          <div class="section-head"><h2>How it works</h2></div>
+          <ol class="flow">
+            <li><span class="flow-n">1</span><strong>Start</strong><span>New project: name it and describe it. The Master Agent can start right away.</span></li>
+            <li><span class="flow-n">2</span><strong>Keep coding</strong><span>Open any project and ask the agent to continue it, in its own session or a fresh one.</span></li>
+            <li><span class="flow-n">3</span><strong>Set goals</strong><span>Give a big goal: the agent (or you) splits it into milestones and it proves each one.</span></li>
+            <li><span class="flow-n">4</span><strong>Watch it grow</strong><span>Live preview, Stats for time, sessions and models, ZIP download.</span></li>
+          </ol>
+        </section>
+        <p class="hint">Projects are read from the Hermes and Rocsy workspaces on this computer; nothing is uploaded anywhere.</p>
+      </div>
+
+      <div class="target" id="target" hidden>
+        <div class="target-head">
+          <span class="t-kind" id="t-kind" aria-hidden="true"></span>
+          <div class="target-title">
+            <span class="eyebrow" id="source"></span>
+            <h1 id="project-name">Select a project</h1>
+            <p class="hint" id="project-path"></p>
+          </div>
+          <div class="target-actions">
+            <a id="download-project" class="button primary" hidden>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Download ZIP</a>
+            <button type="button" class="button" id="close-project">Close</button>
+            <button type="button" class="button danger" id="delete-project" hidden>Delete</button>
+          </div>
+        </div>
+
+        <form class="ask" id="ask-form" autocomplete="off">
+          <div class="ask-head">
+            <span class="ask-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none"><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M18.5 15.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>
+            <strong>Master Agent</strong>
+            <span class="agent-chip" id="agent-chip"><span class="dot"></span><span id="agent-text">No session yet</span></span>
+            <a class="button small" id="agent-open" target="_blank" rel="noopener" hidden>Open the session</a>
+          </div>
+          <p class="ask-target" id="ask-target" hidden><span>Sending to <strong id="ask-target-name"></strong></span>
+            <button type="button" class="icon-button" id="ask-target-clear" title="Back to the project's latest session" aria-label="Back to the project's latest session"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button></p>
+          <textarea id="ask-text" rows="2" maxlength="12000" placeholder="What should the agent do next? e.g. “Add a high-score table and sound effects”" aria-label="Message for the Master Agent"></textarea>
+          <div class="ask-foot">
+            <select id="ask-model" aria-label="Model" title="Model for this message (the session keeps it)"><option value="">Agentic default model</option></select>
+            <label class="check" title="Start a new agent session for this project instead of continuing its last one"><input type="checkbox" id="ask-fresh"> New session</label>
+            <span class="hint" id="ask-hint"></span>
+            <button type="button" class="button" id="ask-goal" title="Turn this into a goal the agent splits into milestones">Make it a goal…</button>
+            <button type="submit" class="button primary" id="ask-send">Continue coding</button>
+          </div>
+        </form>
+
+        <div class="view-bar">
+          <div class="seg" id="view-seg" role="group" aria-label="View">
+            <button type="button" id="view-files" aria-pressed="true">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Files</button>
+            <button type="button" id="view-goals" aria-pressed="false">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="4.5" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>Goals <span class="tab-count" id="goals-count"></span></button>
+            <button type="button" id="view-sessions" aria-pressed="false">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-4 3v-3H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>Sessions <span class="tab-count" id="sessions-count"></span></button>
+            <button type="button" id="preview-toggle" aria-pressed="false" hidden>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.8" stroke="currentColor" stroke-width="1.8"/></svg>Live preview</button>
+            <button type="button" id="view-stats" aria-pressed="false">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Stats</button>
+            <button type="button" id="view-history" aria-pressed="false">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6M3.5 4v4h4M12 8v4.5l3 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>History <span class="tab-count" id="history-count"></span></button>
+          </div>
+          <span class="hint" id="view-hint"></span>
+        </div>
+
+        <section class="panel" id="goals-panel" hidden>
+          <div class="goals-grid">
+            <div class="goal-current" id="goal-current"></div>
+            <form class="goal-new" id="goal-form" autocomplete="off">
+              <h2>New goal</h2>
+              <p class="hint">A big scope the agent works on turn after turn. It is split into small milestones it proves one at a time
+                (<code>$R goal parts</code> / <code>$R goal done</code>), and a new goal replaces the current one.</p>
+              <textarea id="goal-text" rows="4" maxlength="12000" required placeholder="e.g. “A playable tower-defense game: 3 enemy types, 5 towers, 10 waves, upgrades and a win screen”" aria-label="Goal"></textarea>
+              <div class="seg" id="goal-split" role="group" aria-label="Who splits the goal">
+                <button type="button" data-split="agent" aria-pressed="true">The agent splits it</button>
+                <button type="button" data-split="me" aria-pressed="false">I'll write the steps</button>
+              </div>
+              <textarea id="goal-steps" rows="5" hidden placeholder="One milestone per line, in build order (3 to 12), e.g.&#10;Grid map renders with a path&#10;Enemies walk the path&#10;Towers can be placed and shoot" aria-label="Milestones, one per line"></textarea>
+              <div class="goal-foot">
+                <label>Turns <select id="goal-budget" aria-label="Turn budget">
+                  <option value="">Agentic default</option><option value="10">10</option><option value="25">25</option><option value="50">50</option><option value="infinite">No limit</option>
+                </select></label>
+                <label class="check"><input type="checkbox" id="goal-fresh"> New session</label>
+                <span class="hint" id="goal-hint"></span>
+                <button type="submit" class="button primary" id="goal-start">Start the goal</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="panel" id="sessions-panel" hidden>
+          <div class="sessions-head">
+            <div><h2>Agent sessions</h2>
+              <p class="hint">Every Master Agent session of this project: the ones started here and any other session that read or changed its files.</p></div>
+            <button type="button" class="button small" id="sessions-refresh">Refresh</button>
+          </div>
+          <ul class="session-list" id="session-list"><li class="empty">Loading sessions…</li></ul>
+        </section>
+
+        <section class="panel" id="stats-panel" hidden><p class="empty">Loading stats…</p></section>
+
+        <section class="panel" id="history-panel" hidden>
+          <div class="sessions-head history-head">
+            <div><h2>Version history</h2>
+              <p class="hint" id="history-hint">Snapshots of the project's files, taken before each message to the Master Agent and after each of its turns.</p></div>
+            <label class="check history-switch" title="Keep versions of this project's files"><input type="checkbox" id="history-on" role="switch"> Keep versions</label>
+            <button type="button" class="button small" id="history-save">Save version now</button>
+            <button type="button" class="button small primary" id="history-undo" title="Put the files back as they were before your last message to the agent">Undo last agent turn</button>
+          </div>
+          <ul class="session-list" id="history-list"><li class="empty">Loading versions…</li></ul>
+        </section>
+
+        <div class="code-browser" id="browser" hidden>
+          <aside class="code-files">
+            <div class="code-files-head">
+              <button type="button" class="icon-button" id="up" aria-label="Parent folder" title="Parent folder"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M12 19V6M6 11l6-6 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              <span class="crumbs" id="folder">Files</span>
+            </div>
+            <ul class="tree" id="files"></ul>
+          </aside>
+          <div class="code-viewer" id="preview-viewer">
+            <div class="code-viewer-head">
+              <span class="viewer-ic" id="file-ic" aria-hidden="true"></span>
+              <span class="viewer-name" id="file-name">Choose a file</span>
+              <span class="viewer-meta" id="file-meta"></span>
+              <a id="download-file" class="button small" hidden>Download</a>
+              <button type="button" class="button small" id="fullscreen-preview" hidden>Full screen</button>
+            </div>
+            <div id="file-content" class="code-file-content"><p class="empty">Select a file to view it here.</p></div>
+            <iframe id="preview-frame" title="Project preview" sandbox="allow-scripts" hidden></iframe>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="new-dialog" class="code-dialog" aria-labelledby="new-title">
+    <form id="new-form" autocomplete="off">
+      <h2 id="new-title">New project</h2>
+      <p>A folder in the Vibe Coding workspace the Master Agent builds in.</p>
+      <label for="new-name">Name</label>
+      <input id="new-name" type="text" maxlength="80" required placeholder="e.g. Neon Snake">
+      <label for="new-idea">What should it be?</label>
+      <textarea id="new-idea" rows="4" maxlength="4000" placeholder="Describe the app, game or tool. The agent reads this from README.md."></textarea>
+      <label for="new-kind">Stack</label>
+      <select id="new-kind">
+        <option value="web">Web app (index.html, runs in the live preview)</option>
+        <option value="python">Python</option><option value="node">Node.js</option><option value="any">Let the agent choose</option>
+      </select>
+      <div class="new-start">
+        <label class="check"><input type="checkbox" id="new-start" checked> Start the Master Agent now</label>
+        <label class="check"><input type="checkbox" id="new-goal"> as a goal (split into milestones, keeps going)</label>
+      </div>
+      <p id="new-error" class="dialog-error" role="alert" aria-live="assertive"></p>
+      <div class="dialog-foot"><button class="button" type="button" id="cancel-new">Cancel</button><button class="button primary" type="submit" id="confirm-new">Create project</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-description">
+    <form id="delete-form">
+      <h2 id="delete-title">Delete project</h2>
+      <p id="delete-description"></p>
+      <label for="delete-name">Type the project name to confirm</label>
+      <input id="delete-name" name="name" type="text" autocomplete="off" spellcheck="false" required>
+      <p id="delete-error" role="alert" aria-live="assertive"></p>
+      <div class="dialog-foot"><button id="cancel-delete" class="button" type="button">Cancel</button><button id="confirm-delete" class="button danger solid" type="submit" disabled>Delete project and files</button></div>
+    </form>
+  </dialog>
+</body>
+</html>

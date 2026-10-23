@@ -1,0 +1,10 @@
+# H3 Machine is defined ONCE, in ../BunnyBytes/docker-compose.yml (service h3-machine).
+# This file only points there, under the same project name, so running compose from
+# this folder manages that same container instead of fighting it over the name
+# "h3-machine" (two projects defining it made `up` fail and `down` miss it).
+#   docker compose up -d --build --no-deps h3-machine     (here or in ../BunnyBytes)
+name: bunnybytes
+include:
+  # Both files, like a plain `docker compose` in ../BunnyBytes picks up.
+  - path: [../BunnyBytes/docker-compose.yml, ../BunnyBytes/docker-compose.override.yml]
+    env_file: ../BunnyBytes/.env

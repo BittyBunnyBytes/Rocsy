@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f1418">
+  <title>Image</title>
+  <link rel="stylesheet" href="{{ app_prefix }}/static/css/app.css?v={{ app_version }}">
+  <link rel="stylesheet" href="{{ app_prefix }}/static/css/h3-studio.css?v={{ app_version }}">
+  <link rel="stylesheet" href="{{ app_prefix }}/static/css/missing-files.css?v={{ app_version }}">
+  <!-- Before the app scripts: it wraps fetch to catch "missing model files" answers. -->
+  <script defer src="{{ app_prefix }}/static/js/missing-files.js?v={{ app_version }}"></script>
+  <script defer src="{{ app_prefix }}/static/js/h3-studio.js?v={{ app_version }}"></script>
+  <script type="module" src="{{ app_prefix }}/static/js/app.js?v={{ app_version }}"></script>
+  <link rel="stylesheet" href="{{ app_prefix }}/static/css/agentic-ui.css?v={{ app_version }}">
+  <script defer src="{{ app_prefix }}/static/js/agentic-ui.js?v={{ app_version }}"></script>
+  <link rel="stylesheet" href="{{ app_prefix }}/static/css/workflow-models.css?v={{ app_version }}">
+  <script defer src="{{ app_prefix }}/static/js/workflow-models.js?v={{ app_version }}"></script>
+</head>
+<body
+  class="h3-studio-ui" data-mobile-tab="create"
+  data-app-prefix="{{ app_prefix }}"
+  data-lora-slots='{{ lora_slots | tojson }}'
+  data-lora-defaults='{{ lora_defaults | tojson }}'
+  data-lora-info='{{ lora_info | tojson }}'
+  data-reference-slot-count="{{ reference_slot_count }}"
+  data-reference-defaults='{{ reference_defaults | tojson }}'
+  data-model-config='{{ model_config | tojson }}'
+>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">Kr2</span>
+      <span class="brand-name">Image</span>
+    </div>
+    <div class="service-state" id="comfy-status"><span class="status-dot"></span><span>ComfyUI</span><strong>Checking</strong></div>
+  </header>
+
+  <nav class="mobile-tabs" role="tablist" aria-label="Sections">
+    <button type="button" class="mobile-tab is-active" role="tab" aria-selected="true" data-mobile-tab="create" aria-controls="composer-panel">Create</button>
+    <button type="button" class="mobile-tab" role="tab" aria-selected="false" data-mobile-tab="jobs" aria-controls="jobs-panel">Generations <span class="mobile-tab-badge" id="mobile-jobs-badge"></span></button>
+  </nav>
+
+  <main class="app-shell">
+    <section class="composer-panel" id="composer-panel" aria-label="Generation controls">
+      <h1>Create an image</h1>
+      <form id="generate-form">
+        <div class="field-row model-mode">
+          <label for="model">Model</label>
+          <select id="model" name="model">
+            <option value="krea2">Krea 2</option>
+            <option value="qwen_image_21">Qwen Image 2.1</option>
+            <option value="anima">Anima</option>
+            <option value="moss">MOSS-Image</option>
+          </select>
+        </div>
+
+        <!-- Settings presets per model, stored on the server (renderPresetBar). -->
+        <div class="field-row preset-bar" id="preset-row">
+          <label for="preset">Preset <span class="preset-status" id="preset-status"></span></label>
+          <div class="preset-controls">
+            <select id="preset"></select>
+            <button type="button" class="icon-button" id="preset-save" title="Update this preset with the current settings" aria-label="Save preset" data-icon="save"></button>
+            <button type="button" class="icon-button preset-save-as" id="preset-new" title="Save the current settings as a new or existing preset">Save as&hellip;</button>
+            <button type="button" class="icon-button" id="preset-rename" title="Rename this preset" aria-label="Rename preset" data-icon="pencil"></button>
+            <button type="button" class="icon-button" id="preset-delete" title="Delete this preset" aria-label="Delete preset" data-icon="trash"></button>
+          </div>
+        </div>
+
+        <!-- Above the prompt and sticky, like H3 Machine, so Generate is always in reach. -->
+        <div class="composer-footer">
+          <div class="eta is-empty" id="eta" aria-live="polite">
+            <span class="eta-label">Estimated time to complete</span>
+            <span class="eta-value" id="eta-value">&mdash;</span>
+            <span class="eta-basis" id="eta-basis"></span>
+          </div>
+          <button type="submit" class="primary-button" id="generate-button">Generate</button>
+        </div>
+
+        <!-- Same cards in the same order as H3 Machine: Prompt, References,
+             Output, Model & sampling, LoRAs. Model-specific rows inside a card
+             are shown and hidden by applyModel / updateSpeedFields. -->
+        <details class="card" id="prompt-card" open>
+          <summary class="card-head"><span class="card-title">Prompt</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <div class="field-row">
+            <label for="prompt">Prompt</label>
+            <textarea id="prompt" rows="4" maxlength="4000" placeholder="a cinematic editorial photograph, natural skin texture, realistic lighting" required></textarea>
+            <!-- Hotbar (renderHotbar): trigger words of the enabled LoRAs and, for Qwen, the
+                 <imageN> tags of the attached references. Hidden when there is nothing to show. -->
+            <div class="prompt-snippets" id="prompt-snippets" role="toolbar" aria-label="Insert into prompt" hidden></div>
+            <div class="prompt-snippet-hint" id="prompt-snippet-hint" aria-live="polite" hidden></div>
+            <p class="field-hint qwen-only" id="reference-hint" hidden>With references on, refer to them as &lt;image1&gt;, &lt;image2&gt;&hellip; in slot order.</p>
+          </div>
+          <div class="qwen-only" hidden>
+            <div class="preset-row">
+              <button type="button" class="secondary-button" id="preset-remove-bg" title="Official background-removal edit: upload the image as Reference 1">Remove background</button>
+              <button type="button" class="secondary-button" id="preset-transparent" title="Transparent RGBA text-to-image">Transparent asset</button>
+            </div>
+          </div>
+          <div class="enhancer-block">
+            <label class="toggle-label">
+              <input type="checkbox" id="prompt-enhancer">
+              <span>Prompt enhancer (Qwen PE)</span>
+            </label>
+            <div class="enhancer-options">
+              <label class="toggle-label">
+                <input type="checkbox" id="enhancer-picks-size" checked>
+                <span>Let the enhancer choose the aspect ratio (keeps the pixel count)</span>
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" id="enhancer-thinking">
+                <span>Thinking mode (better rewrites, much slower)</span>
+              </label>
+            </div>
+          </div>
+          </div>
+        </details>
+
+        <!-- Same spot as H3 Machine: the References card sits right under the
+             prompt. Rows/drop zone come from the shared BunnyReferences component
+             (BunnyBytes/shared/ui/h3-studio.js). -->
+        <details class="card card-inputs" id="reference-panel" open>
+          <summary class="card-head"><span class="card-title">References</span><span class="card-badge" id="reference-badge"></span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <label class="toggle-label">
+            <input type="checkbox" id="use-references">
+            <span>Use reference images</span>
+          </label>
+          <div class="qwen-only reference-options" hidden>
+            <div class="field-row">
+              <label for="reference-resolution">Reference resolution (pixel budget, 0 = native)</label>
+              <input id="reference-resolution" type="number" min="0" max="2048" step="32" value="1024">
+            </div>
+            <label class="toggle-label">
+              <input type="checkbox" id="match-reference-size" checked>
+              <span>Output follows Reference 1's aspect ratio (ignores width/height)</span>
+            </label>
+          </div>
+          <div class="reference-totals" id="reference-count"></div>
+          <div class="reference-list" id="reference-list"></div>
+          <div class="reference-add-row">
+            <button type="button" class="secondary-button" id="reference-add">+ Add reference&hellip;</button>
+          </div>
+          <div class="drop-zone" id="reference-drop-zone">Drop reference images here (PNG, JPEG or WEBP). Click a thumbnail to view or crop it.</div>
+          </div>
+        </details>
+
+
+        <details class="card" id="output-card" open>
+          <summary class="card-head"><span class="card-title">Output</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <!-- Options per model come from SIZE_PRESETS in app.js (applyModel). -->
+          <div class="field-row">
+            <label for="size-preset">Size preset</label>
+            <select id="size-preset"></select>
+            <p class="field-hint size-note" id="size-note" hidden>Ignored right now: the output follows Reference 1's shape. Untick &ldquo;Output follows Reference 1's aspect ratio&rdquo; under References to use this size.</p>
+          </div>
+
+          <div class="field-grid">
+            <div class="field-row">
+              <label for="width">Width</label>
+              <input id="width" type="number" min="512" max="1536" step="32" value="1024">
+            </div>
+            <div class="field-row">
+              <label for="height">Height</label>
+              <input id="height" type="number" min="512" max="1536" step="32" value="1024">
+            </div>
+          </div>
+
+          <div class="field-row">
+            <label for="batch-count">Number of images</label>
+            <select id="batch-count">
+              <option value="1">1 image</option><option value="2">2 images</option><option value="4">4 images</option>
+              <option value="8">8 images</option><option value="16">16 images</option><option value="20">20 images</option>
+            </select>
+            <p class="field-hint">Each image gets a new seed.</p>
+          </div>
+          <div class="qwen-only" hidden>
+            <div class="field-row toggle-row">
+              <label class="toggle-label">
+                <input type="checkbox" id="transparent">
+                <span>Transparent background (RGBA PNG)</span>
+              </label>
+            </div>
+          </div>
+          <div class="field-row toggle-row" id="enhance-row">
+            <label class="toggle-label">
+              <input type="checkbox" id="enhance">
+              <span>Enhancer &mdash; 4&times; realistic upscale (Real-ESRGAN)</span>
+            </label>
+          </div>
+
+          </div>
+        </details>
+
+        <details class="card generation-card" id="sampling-card" open>
+          <summary class="card-head"><span class="card-title">Model &amp; sampling <span class="card-sub" id="sampling-model-label">Krea 2</span></span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <div class="field-row" id="checkpoint-row">
+            <label for="checkpoint">Model checkpoint</label>
+            <div class="preset-controls"><select id="checkpoint" aria-label="Model checkpoint"></select><button type="button" class="icon-button" id="checkpoint-refresh" title="Refresh installed checkpoints" aria-label="Refresh installed checkpoints">&#8635;</button></div>
+            <p class="field-hint" id="checkpoint-hint" aria-live="polite">Loading installed checkpoints…</p>
+          </div>
+          <div class="field-row qwen-only" hidden>
+            <label for="qwen-text-encoder">Text encoder</label>
+            <select id="qwen-text-encoder">
+              <option value="standard" selected>Qwen3-VL 8B (int8)</option>
+              <option value="abliterated">Qwen3-VL 8B Abliterated (BF16)</option>
+            </select>
+            <p class="field-hint">Abliterated = AtomicChat's uncensored encoder from the Turbo release; works with every Qwen checkpoint.</p>
+          </div>
+          <div class="field-row anima-only" hidden>
+            <label for="anima-version">Anima version</label>
+            <select id="anima-version"></select>
+          </div>
+          <div class="field-grid generation-main-grid single-option">
+          <div class="field-row" id="speed-row">
+            <label for="speed">Render mode</label>
+            <!-- Options per model come from SPEED_OPTIONS in app.js. -->
+            <select id="speed"></select>
+            <p class="field-hint" id="speed-description" aria-live="polite"></p>
+          </div>
+          </div>
+          <div class="field-row generation-seed-row">
+            <label for="seed">Seed</label>
+            <div class="seed-control">
+              <input id="seed" type="number" min="0" max="18446744073709551615" placeholder="Random">
+              <button type="button" class="icon-button" id="random-seed" title="Choose a new random seed" aria-label="Choose a new random seed">&#8635;</button>
+            </div>
+            <p class="field-hint">Leave blank for random results. Reuse a seed to repeat an image.</p>
+          </div>
+          <div class="field-row krea-only generation-detail-row">
+            <label for="krea-steps">Sampling steps</label>
+            <input id="krea-steps" type="number" min="1" max="30" step="1" placeholder="auto (8)">
+            <p class="field-hint">Leave blank to use the render mode's default.</p>
+          </div>
+          <div class="field-row krea-only turbo-only generation-detail-row" hidden>
+            <label for="turbo-strength">Turbo strength</label>
+            <input id="turbo-strength" type="number" min="0.25" max="1.5" step="0.05" value="1">
+            <p class="field-hint" id="turbo-hint"></p>
+          </div>
+
+          <div class="field-grid qwen-only generation-parameter-grid" hidden>
+            <div class="field-row">
+              <label for="steps">Sampling steps</label>
+              <input id="steps" type="number" min="1" max="100" step="1" value="25">
+            </div>
+            <div class="field-row">
+              <label for="cfg">Guidance (CFG)</label>
+              <input id="cfg" type="number" min="1" max="20" step="0.1" value="1">
+            </div>
+          </div>
+          <div class="field-grid anima-only generation-parameter-grid" hidden>
+            <div class="field-row"><label for="anima-steps">Sampling steps</label><input id="anima-steps" type="number" min="1" max="100" step="1" placeholder="Version default"></div>
+            <div class="field-row"><label for="anima-cfg">Guidance (CFG)</label><input id="anima-cfg" type="number" min="1" max="20" step="0.1" value="4"></div>
+          </div>
+          <div class="field-grid moss-only generation-parameter-grid" hidden>
+            <div class="field-row" id="moss-steps-row"><label for="moss-steps">Sampling steps</label><input id="moss-steps" type="number" min="1" max="100" step="1" value="50"></div>
+            <div class="field-row" id="moss-cfg-row"><label for="moss-cfg">Guidance (CFG)</label><input id="moss-cfg" type="number" min="1" max="20" step="0.1" value="3"></div>
+          </div>
+
+          <div class="qwen-only" hidden>
+            <div class="field-row">
+              <label for="negative-prompt">Negative prompt</label>
+              <textarea id="negative-prompt" rows="2" maxlength="4000" placeholder="optional &mdash; e.g. blurry, low quality, distorted text"></textarea>
+            </div>
+          </div>
+          <div class="field-row anima-only" hidden>
+            <label for="anima-negative-prompt">Negative prompt</label>
+            <textarea id="anima-negative-prompt" rows="2" maxlength="4000" placeholder="optional"></textarea>
+          </div>
+          <div class="field-row moss-only" id="moss-negative-row" hidden>
+            <label for="moss-negative-prompt">Negative prompt</label>
+            <textarea id="moss-negative-prompt" rows="2" maxlength="4000" placeholder="optional"></textarea>
+          </div>
+
+          <details class="subpanel advanced-panel qwen-only" hidden>
+            <summary>Advanced (KV cache)</summary>
+            <div class="field-grid">
+              <div class="field-row">
+                <label for="kv-cache-device">Cache device</label>
+                <select id="kv-cache-device">
+                  <option value="auto" selected>auto</option>
+                  <option value="gpu">gpu</option>
+                  <option value="cpu">cpu (RAM)</option>
+                  <option value="off">off</option>
+                </select>
+              </div>
+              <div class="field-row">
+                <label for="kv-cache-dtype">Cache precision</label>
+                <select id="kv-cache-dtype">
+                  <option value="default" selected>default (lossless)</option>
+                  <option value="int8">int8</option>
+                  <option value="int4">int4</option>
+                </select>
+              </div>
+            </div>
+          </details>
+          </div>
+        </details>
+
+        <details class="card" id="lora-panel" open>
+          <summary class="card-head"><span class="card-title">LoRAs</span><span class="card-badge" id="lora-count"></span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <div class="lora-list-head">
+            <span class="field-hint">Hover <b>!</b> for trigger words, <b>i</b> opens the source page.</span>
+            <span class="lora-head-buttons">
+              <button type="button" class="secondary-button" id="lora-gallery-open" title="Browse these LoRAs with previews and descriptions">&#9638; Gallery</button>
+              <button type="button" class="secondary-button" id="lora-reset" title="Set every strength back to its recommended value">&#8635; Recommended strengths</button>
+            </span>
+          </div>
+          <div id="lora-list" class="lora-list"></div>
+          </div>
+        </details>
+
+      </form>
+      <!-- Per-workflow model files (VAE, text encoder, upscaler, ...): shared/ui/workflow-models.js. -->
+      <details class="card wm-card" id="workflow-models-card">
+        <summary class="card-head"><span class="card-title">Advanced workflow <span class="card-sub">model files</span></span><span class="card-badge" data-workflow-models-badge></span><span class="card-chevron" aria-hidden="true"></span></summary>
+        <div class="card-body">
+          <div data-workflow-models="{{ app_prefix }}/api/workflow-models"></div>
+        </div>
+      </details>
+    </section>
+
+    <section class="jobs-panel" id="jobs-panel" aria-label="Generations">
+      <div class="jobs-toolbar">
+        <h2>Generations</h2>
+        <div class="jobs-filter" role="tablist" aria-label="Show">
+          <button type="button" class="jobs-filter-tab is-active" data-job-filter="all" role="tab" aria-selected="true">All <span data-job-count="all"></span></button>
+          <button type="button" class="jobs-filter-tab" data-job-filter="running" role="tab" aria-selected="false">Running <span data-job-count="running"></span></button>
+          <button type="button" class="jobs-filter-tab" data-job-filter="complete" role="tab" aria-selected="false">Complete <span data-job-count="complete"></span></button>
+        </div>
+        <label class="jobs-search"><span data-icon="search"></span><input type="search" id="job-search" placeholder="Search prompts&hellip;" aria-label="Search prompts"></label>
+      </div>
+      <div class="jobs-list" id="jobs-list">
+        <div class="jobs-empty">No generations yet. Describe an image and hit Generate.</div>
+      </div>
+      <div class="jobs-pager" id="jobs-pager" hidden></div>
+    </section>
+  </main>
+
+  <!-- Presets "Save as": new name, overwrite any preset, or rename one (openPresetDialog). -->
+  <div class="dialog" id="preset-dialog" hidden>
+    <div class="dialog-backdrop" data-dialog-close></div>
+    <div class="dialog-box preset-dialog" role="dialog" aria-modal="true" aria-labelledby="preset-dialog-title">
+      <button type="button" class="dialog-close" data-dialog-close aria-label="Close">&#10005;</button>
+      <h2 class="dialog-title" id="preset-dialog-title">Save settings as</h2>
+      <form class="preset-new-row" id="preset-new-form">
+        <input type="text" id="preset-new-name" maxlength="60" placeholder="New preset name" aria-label="New preset name">
+        <button type="submit" class="primary-button">Save</button>
+      </form>
+      <p class="field-hint" id="preset-list-hint">Or save over an existing preset:</p>
+      <ul class="preset-list" id="preset-list"></ul>
+    </div>
+  </div>
+
+  <!-- A generation's full prompt and settings (openJobInfo). -->
+  <div class="dialog" id="job-info" hidden>
+    <div class="dialog-backdrop" data-dialog-close></div>
+    <div class="dialog-box job-info-dialog" role="dialog" aria-modal="true" aria-labelledby="job-info-title">
+      <button type="button" class="dialog-close" data-dialog-close aria-label="Close">&#10005;</button>
+      <h2 class="dialog-title" id="job-info-title">Generation details</h2>
+      <div id="job-info-body"></div>
+    </div>
+  </div>
+
+  <!-- Full-size view of a reference or a generated image (openViewer). -->
+  <div class="dialog viewer" id="viewer" hidden>
+    <div class="dialog-backdrop" data-dialog-close></div>
+    <div class="dialog-box viewer-box" role="dialog" aria-modal="true" aria-label="Image preview">
+      <button type="button" class="dialog-close" data-dialog-close aria-label="Close">&#10005;</button>
+      <div class="viewer-stage" id="viewer-stage"></div>
+      <div class="viewer-bar" id="viewer-bar"></div>
+    </div>
+  </div>
+
+  <!-- LoRA gallery: previews, description, triggers; each card's switch and
+       strength drive the LoRA list (renderLoraGallery). -->
+  <div class="dialog" id="lora-gallery" hidden>
+    <div class="dialog-backdrop" data-dialog-close></div>
+    <div class="dialog-box lora-gallery-dialog" role="dialog" aria-modal="true" aria-labelledby="lora-gallery-title">
+      <button type="button" class="dialog-close" data-dialog-close aria-label="Close">&#10005;</button>
+      <h2 class="dialog-title" id="lora-gallery-title">LoRA gallery <span class="field-hint" id="lora-gallery-model"></span></h2>
+      <div class="lora-gallery-tools">
+        <label class="jobs-search"><span data-icon="search"></span><input type="search" id="lora-gallery-search" placeholder="Search LoRAs&hellip;" aria-label="Search LoRAs"></label>
+        <select id="lora-gallery-group" aria-label="Filter by category"><option value="">All categories</option></select>
+        <label class="toggle-label"><input type="checkbox" id="lora-gallery-enabled-only"><span>Enabled only</span></label>
+        <label class="toggle-label"><input type="checkbox" id="lora-gallery-by-group"><span>By category</span></label>
+        <label class="toggle-label"><input type="checkbox" id="lora-gallery-nsfw"><span>Show NSFW previews</span></label>
+      </div>
+      <div class="lora-gallery-manage" id="lora-gallery-manage">
+        <input type="file" id="lora-gallery-upload-file" accept=".safetensors" aria-label="LoRA file">
+        <input type="text" id="lora-gallery-upload-name" maxlength="100" placeholder="LoRA name" aria-label="LoRA name">
+        <button type="button" class="secondary-button" id="lora-gallery-upload">Upload LoRA</button>
+        <button type="button" class="secondary-button" id="lora-gallery-link-toggle" aria-expanded="false">Link LoRA</button>
+        <button type="button" class="secondary-button" id="lora-gallery-config-button">Config</button>
+        <span class="field-hint" id="lora-gallery-upload-status">For the selected Krea or Qwen family</span>
+      </div>
+      <div class="lora-gallery-link-panel" id="lora-gallery-link-panel" hidden>
+        <input type="url" id="lora-gallery-link-url" placeholder="Civitai or Hugging Face model link" aria-label="LoRA model link">
+        <input type="password" id="lora-gallery-link-token" placeholder="Access token if needed" aria-label="Optional site access token" autocomplete="off">
+        <button type="button" class="secondary-button" id="lora-gallery-link-inspect">Find files</button>
+        <label class="toggle-label"><input type="checkbox" id="lora-gallery-link-auto" checked><span>Hermes selects</span></label>
+        <select id="lora-gallery-link-file" aria-label="LoRA file" hidden></select>
+        <button type="button" class="primary-button" id="lora-gallery-link-add" hidden>Download LoRA</button>
+        <button type="button" class="secondary-button" id="lora-gallery-link-cancel" hidden>Cancel download</button>
+        <div class="field-hint" id="lora-gallery-link-status" role="status" aria-live="polite"></div>
+        <progress id="lora-gallery-link-meter" max="100" hidden></progress>
+      </div>
+      <div class="lora-gallery-grid" id="lora-gallery-grid"></div>
+      <div class="lora-gallery-detail" id="lora-gallery-detail" hidden></div>
+      <div class="lora-gallery-config" id="lora-gallery-config" hidden>
+        <div class="lora-config-actions">
+          <button type="button" class="secondary-button" id="lora-config-back">&#8592; Gallery</button>
+          <h3>Categories and LoRA order</h3>
+          <button type="button" class="secondary-button" id="lora-config-hermes">Organize with Hermes</button>
+          <button type="button" class="primary-button" id="lora-config-save">Save changes</button>
+        </div>
+        <p class="field-hint">Rename, reorder, add or remove categories, and assign LoRAs below.</p>
+        <div id="lora-config-categories"></div>
+        <div class="lora-config-add"><input type="text" id="lora-config-new" maxlength="60" placeholder="New category"><button type="button" class="secondary-button" id="lora-config-add">Add category</button></div>
+        <span class="field-hint" id="lora-config-status" role="status"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-region" id="toasts" aria-live="polite"></div>
+</body>
+</html>

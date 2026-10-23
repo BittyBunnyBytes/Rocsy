@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rocsy — Voice</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="/static/icons/rocsy-v2.svg">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/rocsy-v2-192.png">
+  <link rel="apple-touch-icon" href="/static/icons/rocsy-v2-touch-180.png">
+  <meta name="theme-color" content="#0f1418">
+  <link rel="stylesheet" href="/static/css/site.css?v={{ asset_v('css/site.css') }}">
+  <link rel="stylesheet" href="/static/css/settings.css?v={{ asset_v('css/settings.css') }}">
+  <link rel="stylesheet" href="{{ theme_href() }}" id="bb-theme">
+  <style>
+    .bb-wip { margin-top: 28px; padding: 36px 24px; border-radius: 14px; text-align: center;
+      border: 1px dashed var(--bb-border); background: color-mix(in srgb, var(--bb-panel) 70%, transparent); color: var(--bb-muted); }
+    .bb-wip svg { color: var(--bb-purple); margin-bottom: 10px; }
+    .bb-wip h2 { margin: 0 0 6px; color: var(--bb-text); font-size: 1.1rem; }
+    .bb-wip p { margin: 0; }
+  </style>
+  {{ data_saver_script() }}
+</head>
+<body class="bb-body bb-settings">
+  <div class="bb-bg-glow" aria-hidden="true"></div>
+  <header class="bb-header">
+    <a class="bb-brand bb-brand-link" href="/">
+      <span class="bb-brand-mark" aria-hidden="true">
+        <svg viewBox="40 140 432 260" width="34" height="22" xmlns="http://www.w3.org/2000/svg">
+          <circle class="bb-mark-sun" cx="256" cy="268" r="124"/>
+          <path class="bb-mark-bird" d="M256 186 C269 186 276 197 274 210 C320 182 380 162 464 156 C418 200 358 234 292 254 L308 314 L256 294 L204 314 L220 254 C154 234 94 200 48 156 C132 162 192 182 238 210 C236 197 243 186 256 186 Z"/>
+        </svg>
+      </span>
+      <span class="bb-brand-name">Rocsy</span>
+    </a>
+    <a class="bb-logout-link" href="/">&larr; Home</a>
+  </header>
+
+  <main class="bb-settings-main">
+    <h1 class="bb-title">Voice</h1>
+    <p class="bb-subtitle">Text to speech.</p>
+    <section class="bb-wip" aria-label="Work in progress">
+      <svg viewBox="0 0 24 24" width="40" height="40" fill="none" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" stroke="currentColor" stroke-width="1.6"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <h2>Work in progress</h2>
+      <p>This service isn't built yet.</p>
+    </section>
+  </main>
+</body>
+</html>

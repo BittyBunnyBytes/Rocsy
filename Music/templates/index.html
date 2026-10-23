@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f1418">
+  <title>Music</title>
+  <link rel="stylesheet" href="{{ app_prefix }}/static/css/h3-studio.css?v={{ app_version }}">
+  <link rel="stylesheet" href="{{ app_prefix }}/static/css/missing-files.css?v={{ app_version }}">
+  <!-- Before the app scripts: it wraps fetch to catch "missing model files" answers. -->
+  <script defer src="{{ app_prefix }}/static/js/missing-files.js?v={{ app_version }}"></script>
+  <script defer src="{{ app_prefix }}/static/js/h3-studio.js?v={{ app_version }}"></script>
+  <script type="module" src="{{ app_prefix }}/static/js/app.js?v={{ app_version }}"></script>
+  <link rel="stylesheet" href="{{ app_prefix }}/static/css/agentic-ui.css?v={{ app_version }}">
+  <link rel="stylesheet" href="{{ app_prefix }}/static/css/app.css?v={{ app_version }}">
+  <script defer src="{{ app_prefix }}/static/js/agentic-ui.js?v={{ app_version }}"></script>
+  <link rel="stylesheet" href="{{ app_prefix }}/static/css/workflow-models.css?v={{ app_version }}">
+  <script defer src="{{ app_prefix }}/static/js/workflow-models.js?v={{ app_version }}"></script>
+</head>
+<body class="h3-studio-ui" data-studio="music" data-app-prefix="{{ app_prefix }}" data-mobile-tab="create">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">♪</span><span class="brand-name">Music</span></div>
+    <div class="service-state" id="comfy-status"><span class="status-dot"></span><span>ComfyUI</span><strong>Checking</strong></div>
+  </header>
+
+  <nav class="mobile-tabs" role="tablist" aria-label="Sections">
+    <button type="button" class="mobile-tab is-active" role="tab" aria-selected="true" data-mobile-tab="create" aria-controls="composer-panel">Create</button>
+    <button type="button" class="mobile-tab" role="tab" aria-selected="false" data-mobile-tab="jobs" aria-controls="jobs-panel">Generations <span class="mobile-tab-badge" id="mobile-jobs-badge"></span></button>
+  </nav>
+
+  <main class="app-shell">
+    <section class="composer-panel" id="composer-panel" aria-label="Music generation controls">
+      <h1>Create a track</h1>
+      <form id="generate-form">
+        <div class="field-row model-mode">
+          <label for="model">Model</label>
+          <select id="model" name="model" data-request>
+            <option value="yue2">YuE2</option>
+            <option value="minimax_music3">MiniMax Music 3</option>
+          </select>
+          <small id="model-note" hidden aria-live="polite"></small>
+        </div>
+        <div class="composer-footer"><div class="action-copy"><span>Ready to create</span><strong id="engine-label">YuE2 · INT8</strong></div><button type="submit" class="primary-button" id="generate-button">Generate</button></div>
+        <section class="card prompt-card" id="prompt-card">
+        <div class="card-head"><span class="card-title">Prompt</span></div>
+        <div class="card-body">
+        <div class="field-row">
+          <label for="style">Music direction</label>
+          <textarea id="style" name="style" data-request rows="3" maxlength="4000" placeholder="Synth-pop, warm female vocal, dreamy analog synths, punchy drums, 110 BPM, uplifting chorus" required></textarea>
+          <small>Include genre, vocal character, instruments, tempo, and mood.</small>
+        </div>
+        <div class="field-row">
+          <label for="lyrics">Lyrics</label>
+          <textarea id="lyrics" name="lyrics" data-request rows="7" maxlength="20000" placeholder="[Verse]
+...
+
+[Chorus]
+..."></textarea>
+          <div class="lyric-tags" role="toolbar" aria-label="Insert lyric section"><button type="button" data-lyric-tag="[Verse]">Verse</button><button type="button" data-lyric-tag="[Chorus]">Chorus</button><button type="button" data-lyric-tag="[Bridge]">Bridge</button><button type="button" data-lyric-tag="[Instrumental]">Instrumental</button></div>
+          <small>Use section tags to shape the song, or leave lyrics empty for an instrumental.</small>
+        </div>
+        </div>
+        </section>
+        <section class="card output-card" id="output-card">
+        <div class="card-head"><span class="card-title">Output</span></div>
+        <div class="card-body">
+        <div class="field-grid">
+          <div class="field-row">
+            <label for="duration">Maximum track length <output id="duration-readout" for="duration">120 sec</output></label>
+            <input id="duration" name="duration" data-request type="range" min="10" max="300" step="5" value="120">
+            <small>The workflow can return a shorter track.</small>
+          </div>
+          <div class="field-row">
+            <label for="seed">Shared seed</label>
+            <div class="seed-control"><input id="seed" name="seed" data-request type="number" min="0" max="18446744073709551615" placeholder="Random each time"><button type="button" class="icon-button" id="random-seed" title="Randomize seed" aria-label="Randomize seed">↻</button></div>
+            <small>Leave blank to choose a new seed automatically.</small>
+          </div>
+        </div>
+        <div class="field-grid format-grid">
+          <div class="field-row"><label for="output_format">Audio format</label><select id="output_format" name="output_format" data-request><option value="flac">FLAC</option><option value="mp3">MP3</option><option value="opus">Opus</option></select></div>
+          <div class="field-row" data-format-quality hidden><label for="output_quality">Audio quality</label><select id="output_quality" name="output_quality" data-request><option value="V0">V0 · variable bitrate</option><option value="128k">128 kbps</option><option value="192k">192 kbps</option><option value="320k">320 kbps</option><option value="64k">64 kbps</option><option value="96k">96 kbps</option></select></div>
+        </div>
+        </div>
+        </section>
+
+        <details class="card music-model-card" id="yue2-options">
+          <summary class="card-head"><span class="card-title">Model &amp; sampling</span><span class="card-sub">YuE2 composition, references, sampler</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <div class="option-section">
+            <h2>Composition</h2>
+            <p>Control YuE2’s music conditioning and ABC score composer.</p>
+            <div class="field-grid">
+              <div class="field-row"><label for="music_mode">Music mode</label><select id="music_mode" name="music_mode" data-request><option value="full">Full arrangement</option><option value="melody">Melody focused</option></select></div>
+              <div class="field-row"><label for="abc_mode">Score mode</label><select id="abc_mode" name="abc_mode" data-request><option value="full">Full score</option><option value="melody">Melody only</option></select></div>
+              <div class="field-row"><label for="max_abc_tokens">Maximum score tokens</label><input id="max_abc_tokens" name="max_abc_tokens" data-request type="number" min="256" max="16000" step="1" value="16000"></div>
+              <div class="field-row"><label for="abc_temperature">Score creativity</label><input id="abc_temperature" name="abc_temperature" data-request type="number" min="0.01" max="2" step="0.01" value="0.7"></div>
+              <div class="field-row"><label for="abc_top_p">Score top-p</label><input id="abc_top_p" name="abc_top_p" data-request type="number" min="0.01" max="1" step="0.01" value="0.9"></div>
+              <div class="field-row"><label for="abc_top_k">Score top-k</label><input id="abc_top_k" name="abc_top_k" data-request type="number" min="1" max="100" step="1" value="30"></div>
+              <div class="field-row"><label for="abc_repetition_penalty">Score repetition penalty</label><input id="abc_repetition_penalty" name="abc_repetition_penalty" data-request type="number" min="0.5" max="2" step="0.005" value="1.005"></div>
+              <div class="field-row"><label for="abc_penalty_window">Score penalty window</label><input id="abc_penalty_window" name="abc_penalty_window" data-request type="number" min="0" max="2000" step="10" value="100"></div>
+            </div>
+          </div>
+
+          <div class="option-section">
+            <h2>Reference audio</h2>
+            <p>Use an existing recording to guide the melody and score transcription.</p>
+            <div class="toggle-row"><label for="use_reference">Use a reference</label><input id="use_reference" name="use_reference" data-request type="checkbox"></div>
+            <div class="toggle-row"><label for="use_youtube">Load reference from YouTube</label><input id="use_youtube" name="use_youtube" data-request type="checkbox"></div>
+            <div class="field-row" data-local-reference hidden><label for="reference_audio">ComfyUI input filename</label><input id="reference_audio" name="reference_audio" data-request type="text" maxlength="240" value="Ref Music.mp3" placeholder="Ref Music.mp3"><small>Choose a file already in ComfyUI’s input folder.</small></div>
+            <div class="field-grid" data-youtube-reference hidden>
+              <div class="field-row"><label for="youtube_url">YouTube URL</label><input id="youtube_url" name="youtube_url" data-request type="url" placeholder="https://www.youtube.com/watch?v=..."></div>
+              <div class="field-row"><label for="youtube_start_time">Start time (seconds)</label><input id="youtube_start_time" name="youtube_start_time" data-request type="number" min="0" max="36000" step="1" value="0"></div>
+              <div class="field-row"><label for="youtube_duration">Reference length (seconds, 0 = full)</label><input id="youtube_duration" name="youtube_duration" data-request type="number" min="0" max="36000" step="1" value="0"></div>
+              <div class="toggle-row"><label for="youtube_force_redownload">Download reference again</label><input id="youtube_force_redownload" name="youtube_force_redownload" data-request type="checkbox"></div>
+            </div>
+            <div class="field-row"><label for="reference_strength">Reference influence <output id="reference-strength-readout" for="reference_strength">0.90</output></label><input id="reference_strength" name="reference_strength" data-request type="range" min="0" max="1" step="0.01" value="0.9"><small>Higher values favor the reference melody and adjust YuE2’s sampling behavior.</small></div>
+            <div class="field-row"><label for="reference_mode">Transcription mode</label><select id="reference_mode" name="reference_mode" data-request><option value="full">Full transcription</option><option value="melody">Melody only</option></select></div>
+            <div class="toggle-row"><label for="custom_music_sampling">Set music sampling values manually</label><input id="custom_music_sampling" name="custom_music_sampling" data-request type="checkbox"></div>
+            <div class="field-grid manual-sampling" data-manual-sampling hidden>
+              <div class="field-row"><label for="music_temperature">Music temperature</label><input id="music_temperature" name="music_temperature" data-request type="number" min="0.01" max="1.5" step="0.01" value="0.69"></div>
+              <div class="field-row"><label for="music_top_p">Music top-p</label><input id="music_top_p" name="music_top_p" data-request type="number" min="0.01" max="1" step="0.001" value="0.863"></div>
+              <div class="field-row"><label for="music_repetition_penalty">Music repetition penalty</label><input id="music_repetition_penalty" name="music_repetition_penalty" data-request type="number" min="0.5" max="2" step="0.01" value="1.32"></div>
+            </div>
+          </div>
+
+          <div class="option-section">
+            <h2>Diffusion sampler</h2>
+            <p>These settings control the audio latent sampling pass.</p>
+            <div class="field-grid">
+              <div class="field-row"><label for="steps">Steps</label><input id="steps" name="steps" data-request type="number" min="1" max="100" value="32"></div>
+              <div class="field-row"><label for="cfg">CFG</label><input id="cfg" name="cfg" data-request type="number" min="0" max="30" step="0.1" value="1"></div>
+              <div class="field-row"><label for="sampler_name">Sampler</label><select id="sampler_name" name="sampler_name" data-request><option value="dpm_2">DPM 2</option><option value="euler">Euler</option><option value="euler_ancestral">Euler ancestral</option><option value="dpmpp_2m">DPM++ 2M</option><option value="dpmpp_sde">DPM++ SDE</option><option value="heun">Heun</option></select></div>
+              <div class="field-row"><label for="scheduler">Scheduler</label><select id="scheduler" name="scheduler" data-request><option value="sgm_uniform">SGM uniform</option><option value="normal">Normal</option><option value="karras">Karras</option><option value="exponential">Exponential</option><option value="simple">Simple</option><option value="ddim_uniform">DDIM uniform</option></select></div>
+              <div class="field-row"><label for="denoise">Denoise</label><input id="denoise" name="denoise" data-request type="number" min="0" max="1" step="0.05" value="1"></div>
+              <div class="field-row"><label for="music_top_k">Music top-k</label><input id="music_top_k" name="music_top_k" data-request type="number" min="1" max="200" step="1" value="100"></div>
+            </div>
+          </div>
+
+          <div class="option-section">
+            <h2>Seeds and audio output</h2>
+            <p>Override the shared seed for any stage, or tune decode memory and file format.</p>
+            <div class="field-grid">
+              <div class="field-row"><label for="abc_seed">ABC seed override</label><input id="abc_seed" name="abc_seed" data-request type="number" min="0" max="18446744073709551615" placeholder="Use shared seed"></div>
+              <div class="field-row"><label for="sampler_seed">Sampler seed override</label><input id="sampler_seed" name="sampler_seed" data-request type="number" min="0" max="18446744073709551615" placeholder="Use shared seed"></div>
+              <div class="field-row"><label for="tile_size">VAE decode tile size</label><input id="tile_size" name="tile_size" data-request type="number" min="320" max="4096" step="64" value="1920"></div>
+              <div class="field-row"><label for="overlap">VAE tile overlap</label><input id="overlap" name="overlap" data-request type="number" min="0" max="1024" step="16" value="128"></div>
+            </div>
+          </div>
+          </div>
+        </details>
+        <details class="card music-model-card" id="minimax-options" hidden>
+          <summary class="card-head"><span class="card-title">Model &amp; sampling</span><span class="card-sub">MiniMax sampler and decode</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <div class="option-section"><h2>Sampling</h2><p>MiniMax Music 3 uses the style description as its caption and section-tagged lyrics for song structure.</p>
+            <div class="field-grid">
+              <div class="field-row"><label for="minimax_steps">Sampling steps</label><input id="minimax_steps" name="minimax_steps" data-request type="number" min="1" max="100" value="30"></div>
+              <div class="field-row"><label for="minimax_cfg">CFG</label><input id="minimax_cfg" name="minimax_cfg" data-request type="number" min="0" max="30" step="0.1" value="1.7"></div>
+              <div class="toggle-row"><label for="minimax_tiled_decode">Tiled audio decode</label><input id="minimax_tiled_decode" name="minimax_tiled_decode" data-request type="checkbox" checked></div>
+            </div>
+          </div>
+          </div>
+        </details>
+
+      </form>
+      <!-- Per-workflow model files (VAE, text encoder, DiT, ...): shared/ui/workflow-models.js. -->
+      <details class="card wm-card" id="workflow-models-card">
+        <summary class="card-head"><span class="card-title">Advanced workflow</span><span class="card-sub">Model files <span data-workflow-models-badge></span></span><span class="card-chevron" aria-hidden="true"></span></summary>
+        <div class="card-body">
+          <div data-workflow-models="{{ app_prefix }}/api/workflow-models"></div>
+        </div>
+      </details>
+    </section>
+
+    <section class="jobs-panel" id="jobs-panel" aria-label="Generations">
+      <div class="jobs-heading"><h2>Generations</h2><span class="live-label"><i></i> Live queue</span></div>
+      <div class="jobs-toolbar"><div class="job-filters" role="group" aria-label="Filter generations"><button type="button" class="is-active" data-job-filter="all" aria-pressed="true">All <span id="count-all">0</span></button><button type="button" data-job-filter="running" aria-pressed="false">Running <span id="count-running">0</span></button><button type="button" data-job-filter="complete" aria-pressed="false">Complete <span id="count-complete">0</span></button><button type="button" data-job-filter="failed" aria-pressed="false">Failed <span id="count-failed">0</span></button></div><label class="jobs-search"><span aria-hidden="true">⌕</span><input id="jobs-search" type="search" placeholder="Search tracks…" aria-label="Search generations"></label></div>
+      <div class="jobs-list" id="jobs-list"><div class="jobs-empty">No generations yet. Describe a style and hit Generate.</div></div>
+      <div class="jobs-pager" id="jobs-pager" hidden></div>
+    </section>
+  </main>
+  <div class="studio-dialog" id="job-info" data-studio-dialog hidden>
+    <section class="studio-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="job-info-title">
+      <button type="button" class="studio-dialog-close" data-studio-dialog-close aria-label="Close" title="Close">&#10005;</button>
+      <h2 class="studio-dialog-title" id="job-info-title">Generation prompts</h2>
+      <div id="job-info-body"></div>
+    </section>
+  </div>
+  <div class="toast-region" id="toasts" aria-live="polite"></div>
+</body>
+</html>
