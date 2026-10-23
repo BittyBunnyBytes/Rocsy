@@ -14,6 +14,7 @@ lock/data/*
 hostctl/hostctl.env
 hostctl/state.json
 hostctl/load_priority.json
+hostctl/storage.json
 
 # Local TTS weights and generated audio
 /voice/models/

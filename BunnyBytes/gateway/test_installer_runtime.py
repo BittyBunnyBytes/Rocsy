@@ -17,6 +17,18 @@ REAL_CACHE = Path.home() / '.cache'
 WORKER = Path(__file__).resolve().parents[1] / 'hostctl' / 'uninstall_worker.py'
 
 
+def host(manager, distro_id, name, init='systemd'):
+    """A distro() result, as pkgmanager.detect() + installer_runtime.distro() build it."""
+    names = {'apt': 'APT', 'pacman': 'pacman', 'dnf': 'DNF', 'zypper': 'Zypper', 'apk': 'APK', 'xbps': 'XBPS'}
+    return {'id': distro_id, 'name': name, 'distro': distro_id, 'like': [], 'manager': manager, 'manager_name': names.get(manager, ''),
+            'init': init, 'immutable': '', 'family': manager or 'other', 'manual': ''}
+
+
+UBUNTU = host('apt', 'ubuntu', 'Ubuntu 24.04')
+ARCH = host('pacman', 'arch', 'Arch Linux')
+CACHYOS = host('pacman', 'cachyos', 'CachyOS')
+
+
 class InstallerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -29,6 +41,8 @@ class InstallerTests(unittest.TestCase):
         shutil.copy(INTEGRATIONS, bundle / 'BunnyBytes/hostctl/integrations.py')
         shutil.copy(INTEGRATIONS.with_name('comfyinstall.py'), bundle / 'BunnyBytes/hostctl/comfyinstall.py')
         shutil.copy(INTEGRATIONS.with_name('dockeraccess.py'), bundle / 'BunnyBytes/hostctl/dockeraccess.py')
+        shutil.copy(INTEGRATIONS.with_name('windowshost.py'), bundle / 'BunnyBytes/hostctl/windowshost.py')
+        shutil.copy(INTEGRATIONS.with_name('pkgmanager.py'), bundle / 'BunnyBytes/hostctl/pkgmanager.py')
         (bundle / 'BunnyBytes/cli').mkdir()
         (bundle / 'BunnyBytes/cli/rocsy').write_text('#!/bin/sh\n')
         # The rocsy command and menu entry land in a throwaway home, never the real one.
@@ -67,22 +81,23 @@ class InstallerTests(unittest.TestCase):
         missing = dict(python=True, docker=False, compose=False, buildx=False, daemon=False)
         ready = dict(python=True, docker=True, compose=True, buildx=True, daemon=True)
         m = self.module
-        with patch.object(m, 'prerequisites', side_effect=[missing, ready]), \
-             patch.object(m, 'distro', return_value={'family': 'ubuntu'}), \
+        with patch.object(m, 'prerequisites', side_effect=[missing, ready, ready]), \
+             patch.object(m, 'distro', return_value=UBUNTU), \
+             patch.object(m.pkgmanager, 'available', return_value=True), \
              patch.object(m.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name), \
              patch.object(m, 'privileged', side_effect=lambda command: command), \
              patch.object(m, 'package_installed', return_value=False), \
              patch.object(m, 'run_command') as run:
             self.assertFalse(m.ensure_docker(lambda *_: None))
         self.assertEqual(run.call_args_list[0].args[0], ['/usr/bin/apt-get', 'update'])
-        self.assertEqual(run.call_args_list[1].args[0],
-                         ['/usr/bin/apt-get', 'install', '-y', 'docker.io', 'docker-compose-v2', 'docker-buildx'])
+        self.assertEqual(run.call_args_list[1].args[0], ['env', 'DEBIAN_FRONTEND=noninteractive', '/usr/bin/apt-get', 'install', '-y',
+                                                         'docker.io', 'docker-compose-v2', 'docker-buildx'])
 
     def test_arch_404_offers_system_update(self):
         m = self.module
         missing = dict(python=True, docker=False, compose=False, buildx=False, daemon=False)
         with patch.object(m, 'prerequisites', return_value=missing), \
-             patch.object(m, 'distro', return_value={'family': 'arch', 'id': 'cachyos'}), \
+             patch.object(m, 'distro', return_value=CACHYOS), \
              patch.object(m.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name), \
              patch.object(m, 'privileged', side_effect=lambda command: command), \
              patch.object(m, 'run_command', side_effect=m.CommandFailed('download failed', 'requested URL returned error: 404')) as run:
@@ -95,7 +110,7 @@ class InstallerTests(unittest.TestCase):
         missing = dict(python=True, docker=False, compose=False, buildx=False, daemon=False)
         ready = dict(python=True, docker=True, compose=True, buildx=True, daemon=True)
         with patch.object(m, 'prerequisites', side_effect=[missing, ready]), \
-             patch.object(m, 'distro', return_value={'family': 'arch', 'id': 'cachyos'}), \
+             patch.object(m, 'distro', return_value=CACHYOS), \
              patch.object(m.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name), \
              patch.object(m, 'privileged', side_effect=lambda command: command), \
              patch.object(m, 'run_command', side_effect=[m.CommandFailed('download failed', 'requested URL returned error: 404'), None, None]) as run:
@@ -110,7 +125,7 @@ class InstallerTests(unittest.TestCase):
         ready = dict(python=True, docker=True, compose=True, buildx=True, daemon=True)
         dropped = m.CommandFailed('download failed', "error: failed retrieving file 'docker.pkg.tar.zst' : Recv failure: Connection reset by peer")
         with patch.object(m, 'prerequisites', side_effect=[missing, ready]), \
-             patch.object(m, 'distro', return_value={'family': 'arch', 'id': 'arch'}), \
+             patch.object(m, 'distro', return_value=ARCH), \
              patch.object(m.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name), \
              patch.object(m, 'privileged', side_effect=lambda command: command), \
              patch.object(m, 'run_command', side_effect=[dropped, dropped, None]) as run:
@@ -122,7 +137,7 @@ class InstallerTests(unittest.TestCase):
         missing = dict(python=True, docker=False, compose=False, buildx=False, daemon=False)
         dropped = m.CommandFailed('update failed', 'E: Failed to fetch http://deb.debian.org/x.deb  Connection reset by peer')
         with patch.object(m, 'prerequisites', return_value=missing), \
-             patch.object(m, 'distro', return_value={'family': 'ubuntu'}), \
+             patch.object(m, 'distro', return_value=UBUNTU), \
              patch.object(m.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name), \
              patch.object(m, 'privileged', side_effect=lambda command: command), \
              patch.object(m, 'package_installed', return_value=False), \
@@ -359,7 +374,7 @@ class InstallerTests(unittest.TestCase):
         def ok(command):
             checked.append(command[0])
             return not (command[0] == '/usr/bin/python3' and command[-1] == 'import yaml')  # system python lacks it
-        with patch.object(m, 'command_ok', side_effect=ok), patch.object(m, 'distro', return_value={'family': 'arch'}), \
+        with patch.object(m, 'command_ok', side_effect=ok), patch.object(m, 'distro', return_value=ARCH), \
              patch.object(m.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name), \
              patch.object(m, 'privileged', side_effect=lambda command: command), \
              patch.object(m, 'run_command') as run:
@@ -369,13 +384,14 @@ class InstallerTests(unittest.TestCase):
 
     def test_host_helper_gets_tools_for_installing_later(self):
         m = self.module
-        with patch.object(m, 'command_ok', return_value=False), patch.object(m, 'distro', return_value={'family': 'ubuntu'}), \
+        with patch.object(m, 'command_ok', return_value=False), patch.object(m, 'distro', return_value=UBUNTU), \
              patch.object(m.shutil, 'which', side_effect=lambda name: None if name == 'git' else '/usr/bin/' + name), \
              patch.object(m, 'privileged', side_effect=lambda command: command), \
              patch.object(m, 'run_command') as run:
             # Nothing chosen now, but the host helper is on: Core Backend jobs need git, PyYAML and venv later.
             self.real_ensure_host_tools(lambda *_: None, {key: False for key in m.COMPONENTS}, True, True)
-        self.assertEqual(run.call_args.args[0], ['/usr/bin/apt-get', 'install', '-y', 'git', 'python3-venv', 'python3-yaml'])
+        self.assertEqual(run.call_args.args[0], ['env', 'DEBIAN_FRONTEND=noninteractive', '/usr/bin/apt-get', 'install', '-y',
+                                                 'git', 'python3-yaml', 'python3-venv'])
 
     def test_crash_looping_unit_fails_loudly(self):
         m = self.module
@@ -406,7 +422,7 @@ class InstallerTests(unittest.TestCase):
         with patch.object(m, 'install', return_value={'mode': 'install', 'url': 'http://127.0.0.1:8080/', 'command': 'docker compose up -d',
                                                        'backends': [], 'terminal_command': None, 'desktop_app': None}) as install, \
              patch.object(m, 'prerequisites', return_value=dict(python=True, docker=True, compose=True, buildx=True, daemon=True)), \
-             patch.object(m, 'distro', return_value={'family': 'arch', 'name': 'Arch Linux', 'id': 'arch'}), \
+             patch.object(m, 'distro', return_value=ARCH), \
              patch.object(m.sys.stdin, 'isatty', return_value=True), patch('builtins.print'):
             code = m.terminal_main({'terminal': True, 'defaults': False, 'verbose': False, 'help': False, 'dir': None, **options},
                                    read=lambda _prompt: next(answers), secret=lambda _prompt: next(secrets))
@@ -450,7 +466,7 @@ class InstallerTests(unittest.TestCase):
     def test_no_terminal_without_defaults_asks_for_them(self):
         m = self.module
         with patch.object(m, 'prerequisites', return_value=dict(python=True, docker=True, compose=True, buildx=True, daemon=True)), \
-             patch.object(m, 'distro', return_value={'family': 'arch', 'name': 'Arch Linux'}), \
+             patch.object(m, 'distro', return_value=ARCH), \
              patch.object(m.sys.stdin, 'isatty', return_value=False), patch('builtins.print') as printed, \
              patch.object(m, 'install') as install:
             code = m.terminal_main({'terminal': True, 'defaults': False, 'verbose': False, 'help': False, 'dir': None})
@@ -580,6 +596,120 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((units / 'bunny-hostctl.service').exists())
         self.assertIn(['systemctl', '--user', 'disable', '--now', 'bunny-hostctl.service'],
                       [call.args[0] for call in run.call_args_list])
+
+
+    # ---- other package managers ----
+
+    def test_rhel_like_without_docker_packages_uses_dockers_repo(self):
+        m = self.module
+        rocky = host('dnf', 'rocky', 'Rocky Linux 9')
+        missing = dict(python=True, docker=False, compose=False, buildx=False, daemon=True)
+        ready = dict(python=True, docker=True, compose=True, buildx=True, daemon=True)
+        with patch.object(m, 'prerequisites', side_effect=[missing, missing, ready]), \
+             patch.object(m, 'distro', return_value=rocky), \
+             patch.object(m.pkgmanager, 'available', return_value=False), \
+             patch.object(m.pkgmanager, 'os_release', return_value={'ID': 'rocky', 'ID_LIKE': 'rhel centos fedora'}), \
+             patch.object(m, 'download', return_value=b'[docker-ce-stable]\n') as download, \
+             patch.object(m.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name), \
+             patch.object(m, 'privileged', side_effect=lambda command: command), \
+             patch.object(m, 'run_command') as run:
+            self.assertFalse(m.ensure_docker(lambda *_: None))
+        self.assertEqual(download.call_args.args[0], 'https://download.docker.com/linux/centos/docker-ce.repo')
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(commands[0][:5], ['install', '-D', '-m', '644', commands[0][4]])
+        self.assertEqual(commands[0][-1], '/etc/yum.repos.d/docker-ce.repo')
+        self.assertEqual(commands[-1], ['/usr/bin/dnf', 'install', '--allowerasing', '-y', *m.pkgmanager.DOCKER_CE_PACKAGES])
+
+    def test_openrc_starts_docker_without_systemctl(self):
+        m = self.module
+        alpine = host('apk', 'alpine', 'Alpine Linux', init='openrc')
+        stopped = dict(python=True, docker=True, compose=True, buildx=True, daemon=False)
+        with patch.object(m, 'prerequisites', return_value=stopped), patch.object(m, 'distro', return_value=alpine), \
+             patch.object(m.pkgmanager, 'init_system', return_value='openrc'), \
+             patch.object(m.shutil, 'which', side_effect=lambda name: '/sbin/' + name), \
+             patch.object(m, 'privileged', side_effect=lambda command: command), \
+             patch.object(m, 'command_ok', return_value=True), patch.object(m.os.path, 'exists', return_value=True), \
+             patch.object(m, 'run_command') as run:
+            self.assertFalse(m.ensure_docker(lambda *_: None))
+        self.assertEqual([call.args[0] for call in run.call_args_list],
+                         [['/sbin/rc-update', 'add', 'docker', 'default'], ['/sbin/rc-service', 'docker', 'start']])
+
+    def test_read_only_systems_get_manual_steps(self):
+        m = self.module
+        silverblue = {**host('', 'fedora', 'Fedora Silverblue'), 'immutable': 'rpm-ostree'}
+        with patch.object(m, 'prerequisites', return_value=dict(python=True, docker=False, compose=False, buildx=False, daemon=False)), \
+             patch.object(m, 'distro', return_value=silverblue):
+            with self.assertRaisesRegex(RuntimeError, 'read-only system'):
+                m.ensure_docker(lambda *_: None)
+
+    def test_without_systemd_the_host_helper_is_skipped(self):
+        m = self.module
+        self._bundle_apps()
+        with patch.object(m, 'systemd_user_ok', return_value=False), patch.object(m, 'ensure_docker', return_value=False), \
+             patch.object(m, 'install_backends', return_value=[]), patch.object(m, 'setup_host_helper') as helper, \
+             patch.object(m, 'run_command'):
+            result = self.install(host_helper=True)
+        helper.assert_not_called()
+        self.assertFalse(result['host_helper'])
+
+    # ---- Windows (WSL2, untested) ----
+
+    def test_windows_launcher_opens_the_browser_installer(self):
+        m = self.module
+        with patch.dict(os.environ, {'DISPLAY': '', 'WAYLAND_DISPLAY': ''}):
+            self.assertTrue(m.parse_terminal_args(['--windows'])['ui'])
+            self.assertFalse(m.parse_terminal_args(['--windows', '--terminal'])['ui'])
+
+    def wsl(self, version='10.0.22631'):
+        """Pretend this runs inside WSL2 on the given Windows version."""
+        w = self.module.windowshost
+        return patch.multiple(w, is_wsl=lambda: True, windows_version=lambda: w.classify(version))
+
+    def test_windows_7_and_old_windows_10_are_refused(self):
+        self._bundle_apps()
+        for version, text in (('6.1.7601', 'Windows 7'), ('6.3.9600', 'Windows 8.1'), ('10.0.18363', 'build 18363')):
+            with self.wsl(version), self.assertRaisesRegex(ValueError, text):
+                self.install()
+        self.assertFalse((self.root / 'installed').exists())
+
+    def test_windows_install_adapts_compose_and_makes_windows_shortcuts(self):
+        m = self.module
+        self._bundle_apps()
+        destination = self.root / 'installed'
+        config = {'services': {'llama': {'devices': [{'source': '/dev/kfd', 'target': '/dev/kfd'}]}, 'gateway': {}}}
+
+        def fake_run(command, **_kwargs):
+            output = '2.27.0\n' if 'version' in command else json.dumps(config)
+            return m.subprocess.CompletedProcess(command, 0, output, '')
+        record = {'id': f'Ubuntu:{destination}', 'folder': '/mnt/c/x', 'links': ['/mnt/c/Desktop/Rocsy.lnk']}
+        with self.wsl(), patch.dict(os.environ, {'WSL_DISTRO_NAME': 'Ubuntu'}), \
+             patch.object(m.windowshost, 'gpu_status', return_value={'dxg': True, 'rocm_wsl': False}), \
+             patch.object(m.windowshost, 'install_shortcuts', return_value=record) as shortcuts, \
+             patch.object(m.subprocess, 'run', side_effect=fake_run), \
+             patch.object(m, 'ensure_docker', return_value=False), patch.object(m, 'install_backends', return_value=[]), \
+             patch.object(m, 'setup_host_helper'), patch.object(m, 'run_command'):
+            result = self.install(desktop_app=True, desktop_launcher=True, windows_autostart=True, terminal_command=False)
+        override = (destination / 'BunnyBytes/docker-compose.wsl.yml').read_text()
+        self.assertIn('"llama":\n    devices: !override\n      - /dev/dxg:/dev/dxg', override)
+        self.assertNotIn('gateway', override)
+        self.assertIn('COMPOSE_FILE=docker-compose.yml:docker-compose.wsl.yml\n', (destination / 'BunnyBytes/.env').read_text())
+        self.assertEqual(shortcuts.call_args.args[:2], (destination, 'Ubuntu'))
+        self.assertEqual(shortcuts.call_args.args[4:], (True, True))
+        # No Linux menu entry or desktop launcher: Windows gets shortcuts instead.
+        self.assertFalse((self.home / '.local/share/applications/rocsy.desktop').exists())
+        self.assertIsNone(result['desktop_launcher'])
+        self.assertTrue(result['windows']['untested'])
+        self.assertEqual(result['windows_shortcuts'], record['links'])
+        marker = json.loads((destination / '.rocsy-install.json').read_text())
+        self.assertEqual((marker['windows_shortcuts'], marker['windows_autostart']), (record, True))
+
+    def test_windows_needs_compose_with_override_tags(self):
+        m = self.module
+        env = self.root / '.env'
+        env.write_text('X=1\n')
+        with patch.object(m.subprocess, 'run', return_value=m.subprocess.CompletedProcess([], 0, '2.20.2\n', '')):
+            with self.assertRaisesRegex(RuntimeError, '2.24 or newer'):
+                m.setup_wsl_compose(self.root, env, False, lambda *_: None)
 
 
 if __name__ == '__main__':

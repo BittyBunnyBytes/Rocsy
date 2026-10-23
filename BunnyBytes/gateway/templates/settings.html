@@ -19,7 +19,9 @@
   <script defer src="/static/connections.js?v={{ asset_v('connections.js') }}"></script>
   <script defer src="/static/agentic.js?v={{ asset_v('agentic.js') }}"></script>
   <script defer src="/static/compression.js?v={{ asset_v('compression.js') }}"></script>
+  <script defer src="/static/subagents.js?v={{ asset_v('subagents.js') }}"></script>
   <script defer src="/static/gputune.js?v={{ asset_v('gputune.js') }}"></script>
+  <script defer src="/static/storage-locations.js?v={{ asset_v('storage-locations.js') }}"></script>
   {{ data_saver_script() }}
 </head>
 <body class="bb-body bb-settings">
@@ -42,11 +44,13 @@
       <button type="button" class="bb-tab" role="tab" id="tab-modules" aria-controls="panel-modules" data-tab="modules"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Home page</span><span class="bb-tab-desc">Modules, card pictures, tour</span></span></button>
       <div class="bb-tabs-group" role="presentation">Assistant</div>
       <button type="button" class="bb-tab" role="tab" id="tab-agentic" aria-controls="panel-agentic" data-tab="agentic"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Agentic</span><span class="bb-tab-desc">Agent, schedules, rules</span></span></button>
+      <button type="button" class="bb-tab" role="tab" id="tab-subagents" aria-controls="panel-subagents" data-tab="subagents"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="5" rx="1.2"/><rect x="2" y="17" width="6" height="5" rx="1.2"/><rect x="9" y="17" width="6" height="5" rx="1.2"/><rect x="16" y="17" width="6" height="5" rx="1.2"/><path d="M12 7v10M5 17v-3h14v3"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Sub-agents</span><span class="bb-tab-desc">Each agentic mode in one place</span></span></button>
       <button type="button" class="bb-tab" role="tab" id="tab-compression" aria-controls="panel-compression" data-tab="compression"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 14 4-4 4 4"/><path d="M8 10v11"/><path d="m20 10-4 4-4-4"/><path d="M16 14V3"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Compression</span><span class="bb-tab-desc">Summaries, trimming, cuts</span></span></button>
       <div class="bb-tabs-group" role="presentation">System</div>
       <button type="button" class="bb-tab" role="tab" id="tab-gputune" aria-controls="panel-gputune" data-tab="gputune"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2"/><path d="M15 2v2"/><path d="M9 20v2"/><path d="M15 20v2"/><path d="M2 9h2"/><path d="M2 15h2"/><path d="M20 9h2"/><path d="M20 15h2"/></svg><span class="bb-tab-text"><span class="bb-tab-name">GPU tuning</span><span class="bb-tab-desc">AI overclock, smart switch</span></span></button>
       <button type="button" class="bb-tab" role="tab" id="tab-services" aria-controls="panel-services" data-tab="services"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01"/><path d="M6 17.5h.01"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Services</span><span class="bb-tab-desc">Containers and ComfyUI</span></span></button>
-      <button type="button" class="bb-tab" role="tab" id="tab-storage" aria-controls="panel-storage" data-tab="storage"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M6 16h.01"/><path d="M10 16h.01"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Cache &amp; storage</span><span class="bb-tab-desc">Generated files and logs</span></span></button>
+      <button type="button" class="bb-tab" role="tab" id="tab-locations" aria-controls="panel-locations" data-tab="locations"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Storage</span><span class="bb-tab-desc">Where models are stored</span></span></button>
+      <button type="button" class="bb-tab" role="tab" id="tab-storage" aria-controls="panel-storage" data-tab="storage"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M6 16h.01"/><path d="M10 16h.01"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Cache &amp; cleanup</span><span class="bb-tab-desc">Generated files and logs</span></span></button>
       <button type="button" class="bb-tab" role="tab" id="tab-security" aria-controls="panel-security" data-tab="security"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Security</span><span class="bb-tab-desc">Password and connections</span></span></button>
       <div class="bb-tabs-group" role="presentation">Advanced</div>
       {% if developer_build %}{% include "settings_developer_tab.html" ignore missing %}{% endif %}
@@ -300,6 +304,25 @@
       </section>
     </div>
 
+    <div class="bb-tab-panel" role="tabpanel" id="panel-subagents" aria-labelledby="tab-subagents" hidden>
+      <header class="bb-panel-head"><h2 class="bb-panel-title">Sub-agents</h2><p class="bb-panel-lead">The AI behind every agentic mode: the Master Agent, Video, Image, Music and Voice Agentic, REA and Vibe Coding. Each one keeps its own model, thinking and checks; changes save at once and apply to its next run.</p></header>
+
+      <section class="bb-section sa-all" aria-labelledby="sa-all-heading">
+        <div class="bb-section-head">
+          <h2 id="sa-all-heading">Set them all at once</h2>
+          <span class="bb-status" id="sa-all-status" role="status" aria-live="polite"></span>
+        </div>
+        <p class="bb-section-note">Gives every sub-agent the same local model and thinking level. Sub-agents that think through Hermes (Master Agent, REA, Vibe Coding) take it when Hermes lists the same model.</p>
+        <div class="sa-all-row">
+          <label class="bb-field">Model<select id="sa-all-model"><option value="">Loading…</option></select></label>
+          <label class="bb-field">Thinking<select id="sa-all-thinking"></select></label>
+          <button type="button" class="bb-button bb-button-primary" id="sa-all-apply">Apply to all</button>
+        </div>
+      </section>
+
+      <div class="sa-grid" id="sa-grid" aria-live="polite"></div>
+    </div>
+
     <div class="bb-tab-panel" role="tabpanel" id="panel-compression" aria-labelledby="tab-compression" hidden>
       <header class="bb-panel-head"><h2 class="bb-panel-title">Compression</h2><p class="bb-panel-lead">How hard the <a href="/Agent/">Master Agent</a>'s Hermes sessions shrink their history to fit the model's context. Stronger saves context and prompt-reading time but forgets more detail. Applies within 30 s, from the next model call.</p></header>
 
@@ -490,8 +513,45 @@
         </div>
       </section>
     </div>
+    <div class="bb-tab-panel" role="tabpanel" id="panel-locations" aria-labelledby="tab-locations" hidden>
+      <header class="bb-panel-head"><h2 class="bb-panel-title">Storage</h2><p class="bb-panel-lead">Where Rocsy keeps model files. Add folders on other drives, pick where new downloads go, and move installed models from <a href="/Models/#manager">Models → Manager → Installed</a>. ComfyUI's models folder keeps a link to every moved file, so ComfyUI, llama-swap and the studios still find it.</p></header>
+      <section class="bb-section" aria-labelledby="storage-locations-heading" id="storage-locations">
+        <div class="bb-section-head"><h2 id="storage-locations-heading">Storage locations</h2><span class="bb-status" id="loc-status" role="status" aria-live="polite"></span></div>
+        <div class="bb-loc-list" id="loc-list"><p class="bb-section-note">Loading…</p></div>
+        <div class="bb-loc-apply" id="loc-apply" hidden></div>
+        <div class="bb-rules-actions"><button type="button" class="bb-button bb-button-primary" id="loc-add">Add a location</button></div>
+        <div class="bb-loc-picker" id="loc-picker" hidden>
+          <div class="bb-loc-drives" id="loc-drives" aria-label="Drives"></div>
+          <div class="bb-loc-pathbar">
+            <button type="button" class="bb-button" id="loc-up" aria-label="Parent folder" title="Parent folder">↑</button>
+            <input type="text" id="loc-path" spellcheck="false" autocomplete="off" aria-label="Folder path">
+            <button type="button" class="bb-button" id="loc-go">Open</button>
+          </div>
+          <div class="bb-loc-dirs" id="loc-dirs" role="list"></div>
+          <p class="bb-section-note" id="loc-here"></p>
+          <div class="bb-loc-form">
+            <label class="bb-field">Name<input type="text" id="loc-label" maxlength="60" placeholder="e.g. External SSD"></label>
+            <label class="bb-storage-upload-toggle"><input type="checkbox" id="loc-subfolder" checked> Keep models in a “Rocsy models” folder inside it</label>
+          </div>
+          <div class="bb-rules-actions">
+            <button type="button" class="bb-button" id="loc-cancel">Cancel</button>
+            <button type="button" class="bb-button bb-button-primary" id="loc-confirm">Add this folder</button>
+          </div>
+        </div>
+      </section>
+      <section class="bb-section" aria-labelledby="loc-defaults-heading">
+        <div class="bb-section-head"><h2 id="loc-defaults-heading">Where new downloads go</h2><span class="bb-status" id="loc-defaults-status" role="status" aria-live="polite"></span></div>
+        <p class="bb-section-note">Downloads from Models are saved here and linked into ComfyUI's models folder. Updating a moved file keeps it on its drive.</p>
+        <div class="bb-loc-defaults" id="loc-defaults"></div>
+      </section>
+      <section class="bb-section" aria-labelledby="loc-other-heading">
+        <div class="bb-section-head"><h2 id="loc-other-heading">Other Rocsy folders</h2></div>
+        <p class="bb-section-note">Set when Rocsy was installed (BunnyBytes/.env). Listed so you can see which drive they fill.</p>
+        <div class="bb-storage-summary" id="loc-other"></div>
+      </section>
+    </div>
     <div class="bb-tab-panel" role="tabpanel" id="panel-storage" aria-labelledby="tab-storage" hidden>
-      <header class="bb-panel-head"><h2 class="bb-panel-title">Cache &amp; storage</h2><p class="bb-panel-lead">Manage generated files in the ComfyUI output folder and the Master Agent workspace. Models, source code, settings, dependencies and project files are protected. User uploads are shown separately and excluded unless you opt in.</p></header>
+      <header class="bb-panel-head"><h2 class="bb-panel-title">Cache &amp; cleanup</h2><p class="bb-panel-lead">Manage generated files in the ComfyUI output folder and the Master Agent workspace. Models, source code, settings, dependencies and project files are protected. User uploads are shown separately and excluded unless you opt in.</p></header>
       <section class="bb-section" aria-labelledby="storage-summary-heading">
         <div class="bb-section-head"><h2 id="storage-summary-heading">Stored generated files</h2><button type="button" class="bb-button" id="storage-refresh">Refresh</button></div>
         <div class="bb-storage-summary" id="storage-summary"><p class="bb-section-note">Loading…</p></div>

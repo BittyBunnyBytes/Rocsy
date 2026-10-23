@@ -28,6 +28,18 @@ def text(key: str, label: str, default: str, group: str, hint: str) -> dict:
     return dict(key=key, label=label, default=default, kind="text", group=group, hint=hint)
 
 
+def choice(key: str, label: str, default: str, options: list[tuple[str, str]], group: str, hint: str) -> dict:
+    return dict(key=key, label=label, default=default, kind="choice", group=group, hint=hint,
+                options=[{"value": value, "label": name} for value, name in options])
+
+
+# PyTorch scaled_dot_product_attention backends (AOTriton kernels on ROCm). A forced backend
+# keeps Math as the fallback for calls it can't take (masks, dtypes), so nothing errors out.
+_SDPA = [("sdpa", "SDPA · Auto"), ("sdpa_flash", "SDPA · Flash (AOTriton)"),
+         ("sdpa_efficient", "SDPA · Memory-efficient"), ("sdpa_math", "SDPA · Math")]
+_SDPA_HINT = "PyTorch attention kernel. Auto lets PyTorch pick; a forced kernel falls back to Math where it can't run."
+
+
 _SEGMENTS = [
     toggle("auto_split", "Split long text", True, "Audio & pacing", "Break long scripts at sentence boundaries."),
     number("max_chars", "Characters per segment", 280, 80, 2000, 10, "Audio & pacing", "Maximum text sent to the engine at once."),
@@ -48,6 +60,9 @@ SCHEMAS = {
             number("repetition_penalty", "Repetition penalty", 1.05, 1.0, 2.0, 0.05, "Sampling", "Higher values discourage repeated sounds."),
             number("chunk_chars", "Characters per chunk", 400, 80, 1000, 20, "Audio & pacing", "Long scripts are split into chunks of roughly this size."),
             number("chunk_gap_ms", "Pause between chunks (ms)", 250, 0, 2000, 50, "Audio & pacing", "Silence between Qwen chunks."),
+            choice("attention", "Attention", "sdpa", [*_SDPA, ("flash_attention_2", "FlashAttention 2 (flash-attn)"),
+                                                      ("eager", "Eager (plain PyTorch)")], "Performance",
+                   "Also used by Create a voice. FlashAttention 2 needs its Core Backend build (Models → Manager → Core Backend → Voice engines)."),
         ],
     },
     "indextts2": {
@@ -62,6 +77,7 @@ SCHEMAS = {
             toggle("cuda_kernel", "Use CUDA kernel", False, "Performance", "Enable the engine's optional CUDA kernel path."),
             toggle("accel", "Use acceleration", False, "Performance", "Enable the engine's optional acceleration path."),
             toggle("torch_compile", "Compile model", False, "Performance", "Longer first run; may improve repeated generations."),
+            choice("attention", "Attention", "sdpa", _SDPA, "Performance", _SDPA_HINT),
             *_SEGMENTS,
         ],
     },
@@ -76,22 +92,19 @@ SCHEMAS = {
             number("max_new_tokens", "Token limit", 0, 0, 4096, 32, "Generation", "Zero uses the engine's default limit."),
             toggle("half", "Use FP16", False, "Performance", "Lower GPU memory use; may change output quality."),
             toggle("compile", "Compile model", False, "Performance", "Longer first run; may improve repeated generations."),
+            choice("attention", "Attention", "sdpa", _SDPA, "Performance", _SDPA_HINT),
             *_SEGMENTS,
         ],
     },
-    "fish_v1": {
-        "name": "Fish Audio 1.5",
-        "description": "Reference-based speech with separate semantic and audio decoding steps.",
+    "fish_drama3": {
+        "name": "Fish Audio Drama 3",
+        "description": "Reference-based speech with [laughs]/[whispers] style cues, run fully on the GPU. Attention is always ggml FlashAttention (built into audio.cpp).",
         "fields": [
-            number("temperature", "Temperature", 0.7, 0.1, 2.0, 0.05, "Sampling", "Higher values give more variation."),
-            number("top_p", "Top P", 0.7, 0.05, 1.0, 0.05, "Sampling", "Limits token choices by cumulative probability."),
-            number("repetition_penalty", "Repetition penalty", 1.2, 1.0, 2.0, 0.05, "Sampling", "Higher values discourage repeated sounds."),
+            number("temperature", "Temperature", 1.0, 0.1, 2.0, 0.05, "Sampling", "Higher values give more variation."),
+            number("top_p", "Top P", 0.9, 0.05, 1.0, 0.05, "Sampling", "Limits token choices by cumulative probability."),
             number("seed", "Seed", 42, 0, 2147483647, 1, "Sampling", "Use the same seed to make runs more repeatable."),
-            number("chunk_length", "Model chunk length", 100, 20, 1000, 10, "Generation", "How much speech the model processes per step."),
-            number("max_new_tokens", "Token limit", 0, 0, 4096, 32, "Generation", "Zero uses the engine's default limit."),
-            toggle("iterative_prompt", "Iterative prompt", True, "Generation", "Carry prompt context through longer passages."),
-            toggle("half", "Use FP16", False, "Performance", "Lower GPU memory use; may change output quality."),
-            toggle("compile", "Compile model", False, "Performance", "Longer first run; may improve repeated generations."),
+            number("max_new_tokens", "Token limit", 0, 0, 4096, 32, "Generation", "Audio frames per segment; zero uses the engine's default (1024)."),
+            number("context_length", "Context length", 4096, 2048, 8192, 256, "Performance", "Room for the reference clip, text and generated audio; changing it reloads the model."),
             *_SEGMENTS,
         ],
     },
@@ -107,6 +120,9 @@ def _validate_field(field: dict, value: Any) -> Any:
     if kind == "toggle":
         if type(value) is not bool:
             raise ValueError(f"{field['label']} must be on or off")
+    elif kind == "choice":
+        if value not in {option["value"] for option in field["options"]}:
+            raise ValueError(f"{field['label']} must be one of the listed options")
     elif kind == "text":
         if not isinstance(value, str) or len(value) > 120 or any(ord(char) < 32 for char in value):
             raise ValueError(f"{field['label']} must be short text")

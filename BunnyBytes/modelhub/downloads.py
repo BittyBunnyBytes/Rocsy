@@ -191,6 +191,8 @@ class Downloads:
         self.tasks: dict[str, asyncio.Task] = {}
         self.wake = asyncio.Event()
         self.concurrency = 2
+        # (dest, link path) -> a storage-location folder for the real file ("" = the models folder).
+        self.store_for: Callable[[str, Path], str] = lambda dest, link: ""
         try:
             self.jobs = {job["id"]: job for job in json.loads(self.path.read_text())}
         except (OSError, ValueError):
@@ -233,6 +235,13 @@ class Downloads:
                "sha256": sha256.lower(), "source": source, "link": link, "replace": replace, "state": "queued",
                "bytes": 0, "speed": 0, "error": "", "created": time.time(), "finished": 0,
                "after": after or {}, "note": ""}
+        store = self.store_for(dest, path)
+        if store:
+            # Settings -> Storage: the file goes to that location, models/<dest>/<name> becomes a link to it.
+            real = self.real_path({**job, "store": store, "real_name": path.name})
+            if real.exists() or real.with_name(real.name + ".part").exists():
+                real = real.with_name(f"{path.stem}-{job['id'][:6]}{path.suffix}")
+            job.update(store=store, real_name=real.name)
         if update_batch:
             job.update(update_batch=update_batch, update_expected=update_expected,
                        supersede=supersede, supersede_identity=supersede_identity or {},
@@ -271,8 +280,16 @@ class Downloads:
         self.save()
         return job
 
+    def real_path(self, job: dict) -> Path:
+        """Where the bytes go: models/<dest>/<name>, or the storage location's copy of that path."""
+        if not job.get("store"):
+            return self.target(job["dest"], job["name"])
+        self.target(job["dest"], job["real_name"])        # same name/folder checks as the models folder
+        return Path(job["store"]) / job["dest"] / Path(job["real_name"]).name
+
     def _part(self, job: dict) -> Path:
-        return self.target(job["dest"], job["name"]).with_name(job["name"] + ".part")
+        real = self.real_path(job)
+        return real.with_name(real.name + ".part")
 
     async def run(self) -> None:
         while True:
@@ -325,9 +342,12 @@ class Downloads:
         part = self._part(job)
         start_bytes = part.stat().st_size if part.exists() else 0
         try:
+            if job.get("store") and not os.path.isdir(job["store"]):
+                raise RuntimeError(f"The storage location {job['store']} isn't reachable (drive unplugged?)")
             final.parent.mkdir(parents=True, exist_ok=True)
+            part.parent.mkdir(parents=True, exist_ok=True)
             have = part.stat().st_size if part.exists() else 0
-            free = shutil.disk_usage(final.parent).free
+            free = shutil.disk_usage(part.parent).free
             if job["size"] and job["size"] - have > free - 2 * 1024 ** 3:
                 raise RuntimeError(f"Not enough disk space ({free / 1024 ** 3:.0f} GB free)")
             digest = hashlib.sha256()
@@ -401,7 +421,15 @@ class Downloads:
                 final = final.with_name(f"{stem}-{job['id'][:6]}{ext}")
                 job["name"] = final.name
             try:
-                part.rename(final)
+                if job.get("store"):
+                    real = self.real_path(job)
+                    if real.exists():
+                        real = real.with_name(f"{real.stem}-{job['id'][:6]}{real.suffix}")
+                        job["real_name"] = real.name
+                    part.rename(real)
+                    os.symlink(real, final)
+                else:
+                    part.rename(final)
             except Exception:
                 if job.get("previous") and not final.exists():
                     old.rename(final)

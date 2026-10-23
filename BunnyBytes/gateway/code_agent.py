@@ -22,6 +22,9 @@ import code_history
 import code_projects
 
 META_FILE = Path(__file__).parent / "data" / "code-projects.json"
+# The Vibe Coding agent's default model + thinking (Settings → Sub-agents and the Code page's picker).
+SETTINGS_FILE = Path(__file__).parent / "data" / "code-settings.json"
+REASONING = {"", "default", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
 # Where each workspace is mounted inside the Hermes container (~/.hermes is /opt/data there).
 HERMES_PATHS = {"hermes": "/opt/data/workspace", "rocsy": "/opt/data/rocsy-workspace",
                 "vibe": "/opt/data/rocsy-workspace/" + code_projects.VIBE_DIR}
@@ -34,6 +37,27 @@ _lock = threading.Lock()
 _stats_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _was_busy: dict[str, bool] = {}   # per project, to notice an agent turn ending
 FETCHES = 6                      # full session reads in flight at once (they carry every event)
+
+
+# ---------------- default model ----------------
+def load_settings() -> dict[str, str]:
+    try:
+        model = json.loads(SETTINGS_FILE.read_text()).get("model") or {}
+    except (OSError, ValueError, AttributeError):
+        model = {}
+    return {k: str(model.get(k) or "")[:200] for k in ("model", "provider", "reasoning")}
+
+
+def save_settings(model: dict[str, Any]) -> dict[str, str]:
+    clean = {k: str(model.get(k) or "").strip()[:200] for k in ("model", "provider", "reasoning")}
+    if clean["reasoning"] not in REASONING:
+        raise HTTPException(422, "Unsupported thinking level")
+    if not clean["model"]:
+        clean["provider"] = ""
+    tmp = SETTINGS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"model": clean}, indent=1))
+    tmp.replace(SETTINGS_FILE)
+    return clean
 
 
 # ---------------- per-project memory ----------------
@@ -187,6 +211,12 @@ async def send(base: str, info: dict[str, Any], text: str, mode: str, budget: st
         raise HTTPException(404, "That session doesn't belong to this project")
     if picked:
         sid = picked["id"]
+    saved = load_settings()
+    if not (model and model.get("model")):
+        # "Agentic default" on the page: the Sub-agents default model, if one is set (thinking alone works too).
+        model = {**saved} if saved["model"] or saved["reasoning"] else model
+    elif not model.get("reasoning"):
+        model = {**model, "reasoning": saved["reasoning"]}
     choice = {"model": model} if model and model.get("model") is not None else {}
     text = text.strip()
     # Version history: the folder as it was before this message, so the turn can be undone.

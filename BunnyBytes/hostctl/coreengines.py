@@ -13,6 +13,7 @@ import urllib.request
 from pathlib import Path
 
 import loadpriority
+import strata_ngram
 from paths import COMFY_ROOT, LLAMA_CONFIG, LLAMA_OVERRIDES, ROOT as ROCSY_ROOT
 
 HOME = Path.home()
@@ -28,6 +29,10 @@ INSTALL_UNIT = "core-strata-install"
 SERVE_UNIT = "core-strata-serve"
 FPX_UNIT = "core-rocmfpx-build"
 TUNE_UNIT = "core-strata-hipblaslt-tune"
+NGRAM_UNIT = "core-strata-ngram"
+# Parameters -> "N-gram table: BF16": the checkpoint's own table at full precision, one file for every size.
+NGRAM_FILE = ROOT / "Strata-data" / "models" / "ngram-bf16" / "Qwen3.8-Flash-Next-ngram-BF16.gguf"
+NGRAM_BYTES = 102_400_491_840          # header + 128 shards of 2,500,012 x 160 BF16
 AGENT_STOP_URL = f"http://127.0.0.1:{os.getenv('AGENT_PORT', '8900')}/Agent/api/internal/stop-model"
 ARCH_RE = re.compile(r"gfx[0-9a-f]+")
 FPX_ID_RE = re.compile(r"rocmfpx-[0-9a-f]{8}-gfx[0-9a-f]+")
@@ -126,7 +131,7 @@ def view() -> dict:
     return {"strata": {"source": STRATA_URL, "path": str(STRATA), "downloaded": (STRATA / ".git").is_dir(),
                        "installed": bool(scripts), "running": health(), "installing": unit_active(INSTALL_UNIT),
                        "serving": unit_active(SERVE_UNIT), "models": [p.stem[4:] for p in scripts],
-                       "port": STRATA_PORT, "job": state.get("strata", {})},
+                       "port": STRATA_PORT, "job": state.get("strata", {}), "ngram": ngram_view(state)},
             "rocmfpx": {"source": FPX_URL, "path": str(FPX), "arch": arch(), "job": build,
                          "building": unit_active(FPX_UNIT)}, "hipblaslt": tuning()}
 
@@ -414,23 +419,32 @@ def strata_options() -> dict[str, str]:
         if isinstance(entry, dict) and "strata-swap-bridge" in str(entry.get("cmd", "")) and args.is_file():
             for line in args.read_text().splitlines():
                 flag, _, value = line.strip().partition(" ")
-                if flag == "--vision" and value.strip() in ("on", "off"):
+                if (flag, value.strip()) in {("--vision", "on"), ("--vision", "off"), ("--ngram", "default"), ("--ngram", "bf16")}:
                     values[flag] = value.strip()
     return values
 
 
-def text_only_config(config: Path) -> Path:
-    """A copy of a Strata run config with images off: no --vision, no "vision" section, and the GPU
-    encoder's VRAM taken back out of --vram-reserve-mib. Rewritten on every start, so it follows the config."""
+def run_config(config: Path, text_only: bool, ngram_bf16: bool) -> Path:
+    """A copy of a Strata run config with the Parameters choices applied. Text only: no --vision, no
+    "vision" section, and the GPU encoder's VRAM taken back out of --vram-reserve-mib. BF16 n-gram
+    table: --ple-gguf points at the full-precision table (still read from the SSD, --ple-io direct).
+    Rewritten on every start, so it follows the config."""
     cfg = json.loads(config.read_text())
-    args = [arg for arg in cfg.get("args", []) if arg != "--vision"]
-    vision = cfg.pop("vision", None)
-    if isinstance(vision, dict) and vision.get("gpu") and "--vram-reserve-mib" in args:
-        index = args.index("--vram-reserve-mib") + 1
-        if index < len(args) and args[index].isdigit():
-            args[index] = str(max(0, int(args[index]) - VISION_VRAM_MIB))
+    args = list(cfg.get("args", []))
+    if text_only:
+        args = [arg for arg in args if arg != "--vision"]
+        vision = cfg.pop("vision", None)
+        if isinstance(vision, dict) and vision.get("gpu") and "--vram-reserve-mib" in args:
+            index = args.index("--vram-reserve-mib") + 1
+            if index < len(args) and args[index].isdigit():
+                args[index] = str(max(0, int(args[index]) - VISION_VRAM_MIB))
+    if ngram_bf16:
+        if "--ple-gguf" in args[:-1]:
+            args[args.index("--ple-gguf") + 1] = str(NGRAM_FILE)
+        else:
+            args += ["--ple-gguf", str(NGRAM_FILE)]
     cfg["args"] = args
-    out = config.with_name(config.stem + ".text-only.json")
+    out = config.with_name(config.stem + (".text-only" if text_only else "") + (".ngram-bf16" if ngram_bf16 else "") + ".json")
     tmp = out.with_suffix(".tmp")
     tmp.write_text(json.dumps(cfg, indent=2))
     os.replace(tmp, out)
@@ -460,9 +474,15 @@ def strata_command(script: Path) -> list[str]:
         words = shlex.split(line)
         if words[:1] == ["exec"] and "--config" in words[:-1]:
             words = words[1:]
-            if strata_options().get("--vision") == "off":
+            options = strata_options()
+            text_only = options.get("--vision") == "off"
+            ngram = options.get("--ngram") == "bf16" and NGRAM_FILE.is_file()
+            if options.get("--ngram") == "bf16" and not ngram:
+                print("strata: the BF16 n-gram table is not downloaded (Models -> Core Backend -> Strata); using the model's own",
+                      file=sys.stderr, flush=True)
+            if text_only or ngram:
                 index = words.index("--config") + 1
-                words[index] = str(text_only_config(Path(words[index])))
+                words[index] = str(run_config(Path(words[index]), text_only, ngram))
             return words + ["--slot-save-path", str(session_dir())]
     return ["sh", str(script)]
 
@@ -481,6 +501,67 @@ def run_strata_serve(name: str) -> int:
     # the server's own SIGTERM path ends the engine with QUIT; dying here instead would leave it to systemd's SIGKILL
     signal.signal(signal.SIGTERM, lambda *_: proc.send_signal(signal.SIGTERM))
     return proc.wait()
+
+
+def ngram_view(state: dict) -> dict:
+    job = dict(state.get("ngram") or {})
+    running = unit_active(NGRAM_UNIT)
+    if job.get("phase") in ("queued", "downloading", "checking") and not running:
+        job.update(phase="failed", error=job.get("error") or "The download stopped; start it again to resume")
+    part = NGRAM_FILE.with_name(NGRAM_FILE.name + ".part")
+    return {"present": NGRAM_FILE.is_file(), "path": str(NGRAM_FILE), "bytes": NGRAM_BYTES, "running": running,
+            "partial": part.stat().st_size if part.is_file() else 0, "job": job}
+
+
+def set_ngram(**job) -> None:
+    data = read_state()
+    data["ngram"] = {**(data.get("ngram") or {}), **job}
+    save_state(data)
+
+
+def download_ngram() -> dict:
+    if unit_active(NGRAM_UNIT):
+        return {"message": "The BF16 n-gram table is already downloading"}
+    if NGRAM_FILE.is_file():
+        return {"message": "The BF16 n-gram table is already downloaded"}
+    NGRAM_FILE.parent.mkdir(parents=True, exist_ok=True)
+    part = NGRAM_FILE.with_name(NGRAM_FILE.name + ".part")
+    need = NGRAM_BYTES - (part.stat().st_size if part.is_file() else 0)
+    free = os.statvfs(NGRAM_FILE.parent)
+    if free.f_bavail * free.f_frsize < need + 20 * 1024 ** 3:
+        raise Refused(f"Not enough disk space: the table needs {need / 1e9:.0f} GB more plus 20 GB to spare")
+    data = read_state()
+    data["ngram"] = {"phase": "queued", "started": time.time()}
+    save_state(data)
+    launch(NGRAM_UNIT, "strata-ngram")
+    return {"message": "Downloading the BF16 n-gram table (102 GB)"}
+
+
+def cancel_ngram() -> dict:
+    if unit_active(NGRAM_UNIT):
+        subprocess.run(["systemctl", "--user", "stop", NGRAM_UNIT + ".service"], timeout=60, check=True)
+    set_ngram(phase="cancelled", error="")
+    return {"message": "Stopped; the download resumes where it left off"}
+
+
+def run_ngram() -> int:
+    last = [0.0]
+
+    def progress(done: int, total: int) -> None:
+        if time.time() - last[0] >= 5:
+            last[0] = time.time()
+            set_ngram(phase="downloading", done=done, total=total)
+    try:
+        set_ngram(phase="downloading", error="")
+        strata_ngram.download(NGRAM_FILE, progress)
+        set_ngram(phase="checking", done=NGRAM_BYTES, total=NGRAM_BYTES)
+        reference = next(iter(sorted((ROOT / "Strata-data" / "models").glob("*/*-00002-of-00002.gguf"))), None)
+        error = strata_ngram.check(NGRAM_FILE, reference) if reference else None
+        set_ngram(phase="ready", finished=time.time(), row_error=error)
+        return 0
+    except Exception as exc:
+        set_ngram(phase="failed", error=str(exc)[:300], finished=time.time())
+        return 1
 
 
 def cancel_fpx() -> dict:
@@ -582,6 +663,10 @@ def handle(method: str, path: str, body: dict) -> tuple[int, dict]:
             return 200, start_tuning()
         if path == "/core/engines/rocmfpx-cancel":
             return 200, cancel_fpx()
+        if path == "/core/engines/strata-ngram":
+            return 200, download_ngram()
+        if path == "/core/engines/strata-ngram-cancel":
+            return 200, cancel_ngram()
         return 404, {"error": "not found"}
     except (Refused, ValueError) as exc:
         return 409, {"error": str(exc)}
@@ -598,6 +683,8 @@ if __name__ == "__main__":
         sys.exit(run_strata_install())
     if len(sys.argv) == 3 and sys.argv[1] == "strata-serve":
         sys.exit(run_strata_serve(sys.argv[2]))
+    if len(sys.argv) == 2 and sys.argv[1] == "strata-ngram":
+        sys.exit(run_ngram())
     if len(sys.argv) == 2 and sys.argv[1] == "rocmfpx-build":
         sys.exit(run_fpx_build())
     sys.exit(2)

@@ -24,7 +24,7 @@
     ["cache_save", "Save the model's cache between turns", "Before a local model is unloaded, its memory of the conversation is saved to disk and restored after the reload, so it doesn't re-read the whole chat (Strata and llama.cpp)"],
     ["notify", "Notifications", "Tell you when a session finishes or fails"],
   ];
-  let cfg = null, loaded = false, rules = [], current = null;
+  let cfg = null, loaded = false, rules = [], current = null, clis = [];
 
   async function call(url, options = {}) {
     const r = await fetch(url, { credentials: "same-origin", headers: { "Content-Type": "application/json" }, ...options });
@@ -55,6 +55,13 @@
       select.append(group);
     }
     if (hermes.error) select.append(new Option(hermes.error, "", false, false));
+    clis = options.clis || [];   // coding CLIs installed on the host, last (see subagents.js)
+    for (const c of clis) {
+      const group = el("optgroup"); group.label = `${c.name} · coding CLI`;
+      group.append(new Option(`${c.name} default${c.default ? ` (${c.default})` : ""}`, `cli:${c.id}|default`));
+      for (const m of c.models) group.append(new Option(m.label === m.id ? m.id : `${m.label} (${m.id})`, `cli:${c.id}|${m.id}`));
+      select.append(group);
+    }
     const value = cfg.model ? `${cfg.provider}|${cfg.model}` : "|";
     if (![...select.options].some((o) => o.value === value)) select.append(new Option(`${cfg.model} (${cfg.provider || "?"})`, value));
     select.value = value;
@@ -76,7 +83,7 @@
     vp.value = cfg.vid_preset;
     const labels = {
       minimax_h3: "MiniMax H3", ltx_2_5: "LTX 2.5",
-      qwen3: "Qwen3-TTS 1.7B", indextts2: "IndexTTS2", fish_s2: "Fish Audio S2 Pro", fish_v1: "Fish Audio 1.5",
+      qwen3: "Qwen3-TTS 1.7B", indextts2: "IndexTTS2", fish_s2: "Fish Audio S2 Pro", fish_drama3: "Fish Audio Drama 3",
       krea2: "Krea 2", lustify: "Lustify", qwen_image_21: "Qwen Image 2.1", moss: "MOSS-Image",
       yue2: "YuE2", minimax_music3: "MiniMax Music 3"
     };
@@ -88,6 +95,37 @@
     $("agent-vid-preset-field").hidden = cfg.video_model !== "minimax_h3";
     $("agent-max-jobs").value = cfg.max_jobs;
     $("agent-keep-loaded").value = String(cfg.keep_loaded_ask ?? 0);
+    markCli();
+  }
+
+  // With a coding CLI as the brain, the Hermes and local-model settings don't apply: grey them out.
+  function markCli() {
+    if (!cfg) return;
+    const id = cfg.provider?.startsWith("cli:") ? cfg.provider.slice(4) : "";
+    const cli = id && (clis.find((c) => c.id === id) || { id, name: id, efforts: [] });
+    const na = (node, why) => {
+      if (!node) return;
+      node.classList.toggle("sa-na", !!cli);
+      node.title = cli ? `${cli.name} doesn't use this: ${why}` : "";
+      for (const x of node.matches("select, input") ? [node] : node.querySelectorAll("select, input")) x.disabled = !!cli;
+    };
+    const think = $("agent-reasoning").closest("label");
+    if (cli?.efforts.length) { think.classList.remove("sa-na"); think.title = ""; $("agent-reasoning").disabled = false; }
+    else na(think, "it has no thinking-level setting");
+    na($("agent-keep-loaded").closest("label"), "it doesn't load a model on this GPU");
+    for (const key of ["gpu_guard", "cache_save"]) na($("agent-switches").querySelector(`input[data-key='${key}']`)?.closest("label"), "it doesn't use this GPU");
+    for (const pick of ["agent-perm-files", "agent-approval", "agent-loop-guard", "agent-limit-restarts"]) na($(pick).closest("label"), "it runs under its own safety mode, not Hermes'");
+    na($("agent-perms"), "these are Hermes' tools and memory");
+    let note = $("agent-cli-note");
+    if (cli && !note) {
+      note = el("p", "bb-section-note"); note.id = "agent-cli-note";
+      $("agent-model").closest(".bb-form-grid").after(note);
+    }
+    if (note) {
+      note.hidden = !cli;
+      note.textContent = cli ? `Each turn runs ${cli.name} on this machine in the Hermes workspace, with the whole brief and your own `
+        + `${cli.name} sign-in. Greyed settings are for Hermes and local models only.` : "";
+    }
   }
 
   function renderSwitches() {
@@ -112,6 +150,7 @@
       row.append(text, forget);
       host.querySelector("input[data-key='ask_services']")?.closest("label").after(row);
     }
+    markCli();
   }
 
   const LOOP_NOTES = {
@@ -150,6 +189,7 @@
       row.append(text, box);
       return row;
     }));
+    markCli();
   }
   $("agent-perm-files").addEventListener("change", async (e) => {
     await save({ permissions: { files: e.target.value } });
@@ -185,7 +225,11 @@
     save({ limit_restarts: +e.target.value });
   });
 
-  $("agent-model").addEventListener("change", (e) => { const [provider, model] = e.target.value.split("|"); save({ provider: model ? provider : "", model: model || "" }); });
+  $("agent-model").addEventListener("change", async (e) => {
+    const [provider, model] = e.target.value.split("|");
+    await save({ provider: model ? provider : "", model: model || "" });
+    markCli();
+  });
   $("agent-reasoning").addEventListener("change", (e) => save({ reasoning: e.target.value }));
   $("agent-vid-preset").addEventListener("change", (e) => save({ vid_preset: e.target.value }));
   for (const kind of ["video", "voice", "image", "music"]) {

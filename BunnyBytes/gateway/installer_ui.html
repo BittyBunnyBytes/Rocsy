@@ -188,7 +188,7 @@
   <header class="topbar">
     <svg viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="112" fill="#141c22"/><circle cx="256" cy="268" r="124" fill="#e9a04f"/><path fill="#f2f7fb" d="M256 186 C269 186 276 197 274 210 C320 182 380 162 464 156 C418 200 358 234 292 254 L308 314 L256 294 L204 314 L220 254 C154 234 94 200 48 156 C132 162 192 182 238 210 C236 197 243 186 256 186 Z"/></svg>
     <strong>Rocsy</strong><span class="tag">INSTALLER</span>
-    <span class="detected"><span id="detection-tag">Detected</span><b id="topbar-platform"></b></span>
+    <span class="detected"><span id="detection-tag">Detected</span><b id="topbar-platform"></b> <span class="badge big" id="topbar-untested" hidden>untested</span></span>
   </header>
 
   <div class="shell">
@@ -209,10 +209,11 @@
     <main class="page">
       <!-- 1 · System -->
       <section data-page="system">
-        <header><p class="eyebrow">Step 1 of 6</p><h2>Your system</h2><p>Rocsy runs in Docker. The installer checks what this machine already has and sets up anything missing on Arch Linux and Ubuntu.</p></header>
+        <header><p class="eyebrow">Step 1 of 6</p><h2>Your system</h2><p>Rocsy runs in Docker. The installer checks what this machine already has and sets up anything missing with your distribution’s package manager (APT, DNF, Zypper, pacman, APK, XBPS, eopkg or Portage).</p></header>
         <div class="card">
           <div class="platform"><div class="glyph" id="platform-glyph">L</div><div><strong class="platform-name" id="platform"></strong><span class="platform-kind" id="platform-kind"></span></div></div>
-          <div class="platform-picker" id="platform-picker" hidden><label class="field-title" for="preview-platform">Preview as</label><select id="preview-platform"><option value="auto">Auto detected</option><option value="arch">Arch Linux</option><option value="ubuntu">Ubuntu</option></select></div>
+          <div class="platform-picker" id="platform-picker" hidden><label class="field-title" for="preview-platform">Preview as</label><select id="preview-platform"><option value="auto">Auto detected</option><option value="windows10">Windows 10 (WSL2)</option><option value="windows11">Windows 11 (WSL2)</option></select></div>
+          <div class="callout danger" id="windows-note" style="margin:12px 0 14px" hidden><p><strong>Windows support is untested.</strong> Rocsy runs inside WSL2 (<span id="windows-distro">Ubuntu</span>) with Docker Engine there. The GPU needs the current AMD Windows driver and AMD’s ROCm for WSL in the distro; GPU tuning and some host features are Linux-only.</p></div>
           <div class="requirements" id="requirements"></div>
           <p class="req-note" id="req-note"></p>
           <div class="options" id="arch-upgrade-option" style="margin-top:14px" hidden><label class="option"><input id="allow-system-upgrade" type="checkbox"><span class="body"><strong>Refresh mirrors and update the system</strong><span class="desc">Only used if Docker packages need installing. CachyOS/Arch 404 errors usually mean a stale package database. This can upgrade packages beyond Docker and may need a reboot.</span></span><span class="badge">Arch</span></label></div>
@@ -296,9 +297,10 @@
         <div class="card">
           <h3>Open Rocsy</h3><p>Pick any; the website itself is always at <code>http://127.0.0.1:8080</code>.</p>
           <div class="options">
-            <label class="option"><input id="desktop-app" type="checkbox" checked><span class="body"><strong>Rocsy Desktop</strong><span class="desc">Rocsy in its own window, listed in your app menu.</span></span></label>
+            <label class="option"><input id="desktop-app" type="checkbox" checked><span class="body"><strong id="desktop-app-title">Rocsy Desktop</strong><span class="desc" id="desktop-app-desc">Rocsy in its own window, listed in your app menu.</span></span></label>
+            <label class="option" id="windows-autostart-option" hidden><input id="windows-autostart" type="checkbox"><span class="body"><strong>Start with Windows</strong><span class="desc">Starts WSL and Rocsy’s containers in the background when you sign in to Windows.</span></span><span class="badge big">untested</span></label>
             <label class="option"><input id="terminal-command" type="checkbox" checked><span class="body"><strong><code>rocsy</code> terminal command</strong><span class="desc">Chat with the Master Agent, and start, stop or check Rocsy from a terminal.</span></span></label>
-            <label class="option"><input id="desktop-launcher" type="checkbox"><span class="body"><strong>Desktop launcher</strong><span class="desc">A “Start Rocsy” icon on your desktop that starts the Docker suite.</span></span></label>
+            <label class="option" id="desktop-launcher-option"><input id="desktop-launcher" type="checkbox"><span class="body"><strong>Desktop launcher</strong><span class="desc">A “Start Rocsy” icon on your desktop that starts the Docker suite.</span></span></label>
           </div>
         </div>
         <div class="card">
@@ -477,7 +479,7 @@
       if (destination !== inspectedDestination) {
         document.querySelectorAll('input[name="install-mode"]').forEach(input => { input.checked = false; });
         // An existing install starts from the integrations and components it has now.
-        if (data.current) for (const [key, id] of [['terminal_command', 'terminal-command'], ['desktop_app', 'desktop-app'], ['host_helper', 'host-helper']]) $(id).checked = !!data.current[key];
+        if (data.current) for (const [key, id] of [['terminal_command', 'terminal-command'], ['desktop_app', 'desktop-app'], ['windows_autostart', 'windows-autostart'], ['host_helper', 'host-helper']]) $(id).checked = !!data.current[key];
         if (data.current?.components) for (const box of componentBoxes()) box.checked = !!data.current.components[box.dataset.component];
       }
       inspectedDestination = destination;
@@ -498,6 +500,11 @@
     if (!preview) inspectDestination().catch(() => {});
     if (preview) {
       $('platform-picker').hidden = false;
+      // Dev preview: one sample system per package manager (developer.py fills config.previews).
+      for (const [key, sample] of Object.entries(config.previews || {})) {
+        const option = new Option(`${sample.name} (${sample.manager_name || sample.immutable || 'no package manager'})`, key);
+        $('preview-platform').insertBefore(option, $('preview-platform').querySelector('[value="windows10"]'));
+      }
       $('preview-platform').value = 'auto';
       $('preview-platform').addEventListener('change', () => {
         family = $('preview-platform').value === 'auto' ? detected.family : $('preview-platform').value;
@@ -508,15 +515,31 @@
     }
 
     // ---- system ----
+    // Windows 10/11 (untested): the .cmd launcher runs this installer inside WSL2 Ubuntu.
+    const isWindows = () => preview ? family.startsWith('windows') : !!config.windows;
     function render() {
       const auto = !preview || $('preview-platform').value === 'auto';
-      const label = family === 'arch' ? 'Arch Linux' : family === 'ubuntu' ? 'Ubuntu' : 'Other Linux';
-      const name = auto ? detected.name : label;
+      const windowsName = preview ? (family === 'windows11' ? 'Windows 11' : 'Windows 10') + ' · WSL2 (Ubuntu)' : config.windows?.name;
+      const info = (!auto && config.previews?.[family]) || detected;
+      const name = isWindows() ? windowsName : info.name;
       $('platform').textContent = name;
       $('topbar-platform').textContent = name;
-      $('platform-glyph').textContent = family === 'arch' ? 'A' : family === 'ubuntu' ? 'U' : 'L';
-      $('platform-kind').textContent = family === 'other' ? 'Install Docker yourself before continuing' : `Automatic Docker setup for ${label}`;
-      $('arch-upgrade-option').hidden = family !== 'arch';
+      $('platform-glyph').textContent = (info.name || 'L').trim().charAt(0).toUpperCase();
+      $('platform-kind').textContent = info.manager ? `Automatic Docker setup with ${info.manager_name} · ${info.init} services`
+        : info.immutable ? `Read-only system (${info.immutable}): set Docker up by hand first` : 'Install Docker yourself before continuing';
+      $('arch-upgrade-option').hidden = info.manager !== 'pacman';
+      const win = isWindows();
+      $('windows-note').hidden = $('topbar-untested').hidden = !win;
+      $('windows-distro').textContent = config.windows?.distro || 'Ubuntu';
+      if (win) {
+        $('platform-glyph').textContent = 'W';
+        $('platform-kind').textContent = 'Runs inside WSL2 · untested';
+      }
+      $('windows-autostart-option').hidden = !win;
+      $('desktop-launcher-option').hidden = win;
+      if (win) $('desktop-launcher').checked = false;
+      $('desktop-app-title').textContent = win ? 'Windows shortcuts' : 'Rocsy Desktop';
+      $('desktop-app-desc').textContent = win ? 'Rocsy on the Windows desktop and Start menu: starts WSL and the containers, then opens Rocsy in its own Edge window.' : 'Rocsy in its own window, listed in your app menu.';
       $('detection-tag').textContent = auto ? 'Detected' : 'Simulated';
       const checks = [['Python 3.9+', 'python'], ['Docker Engine', 'docker'], ['Docker Compose plugin', 'compose'], ['Docker Buildx', 'buildx'], ['Docker daemon access', 'daemon']];
       $('requirements').replaceChildren(...checks.map(([title, key]) => {
@@ -528,12 +551,17 @@
       const missing = preview ? [] : checks.filter(([, key]) => !config.prerequisites[key]).map(([title]) => title);
       $('req-note').textContent = preview ? 'Preview: requirements are checked on the machine that runs the installer.' :
         !missing.length ? 'Everything Rocsy needs is already here.' :
-        family === 'other' ? `Missing: ${missing.join(', ')}. Install them with your package manager (commands below), then open the installer again.` :
+        !info.manager ? `Missing: ${missing.join(', ')}. Install them by hand (commands below), then open the installer again.` :
         `Missing: ${missing.join(', ')}. The installer sets these up for you.`;
       $('sub-system').textContent = preview ? 'Preview' : missing.length ? `${missing.length} to set up` : 'Ready';
-      if (!preview && family === 'other' && missing.length) $('setup-details').open = true;
-      $('setup-note').textContent = family === 'arch' ? 'Use these if automatic Arch setup fails:' : family === 'ubuntu' ? 'Use these if automatic Ubuntu setup fails:' : 'Use your distribution’s package manager to install Docker Engine, Compose and Buildx.';
-      $('setup-command').textContent = family === 'arch' ? 'sudo pacman -Syu --needed python docker docker-compose docker-buildx\nsudo systemctl enable --now docker.service\nsudo usermod -aG docker "$USER"\n# Sign out and back in before using docker compose without sudo.' : family === 'ubuntu' ? 'sudo apt update\nsudo apt install python3 docker.io docker-compose-v2 docker-buildx\nsudo systemctl enable --now docker.service\nsudo usermod -aG docker "$USER"\n# Sign out and back in before using docker compose without sudo.' : 'python3 --version\ndocker compose version\ndocker buildx version';
+      if (!preview && !info.manager && missing.length) $('setup-details').open = true;
+      $('setup-note').textContent = info.manager ? `Use these if automatic ${info.manager_name} setup fails:` : 'Set these up by hand, then open the installer again:';
+      if (win) {
+        $('setup-note').textContent = 'Inside Ubuntu (WSL2), if the Windows launcher could not set these up:';
+        $('setup-command').textContent = 'sudo apt update\nsudo apt install python3 python3-venv python3-yaml git docker.io docker-compose-v2 docker-buildx\nsudo systemctl enable --now docker.service\nsudo usermod -aG docker "$USER"\nsudo loginctl enable-linger "$USER"\n# systemd must be on: [boot] systemd=true in /etc/wsl.conf, then `wsl --shutdown` in Windows.';
+        return;
+      }
+      $('setup-command').textContent = info.manual || 'python3 --version\ndocker compose version\ndocker buildx version';
     }
     render();
 
@@ -552,7 +580,7 @@
       add('Optional services', services.length ? services.join(', ') : 'None', 'components', !services.length);
       add('Other backends', backends.length ? backends.join(', ') : 'None', 'components', !backends.length);
       add('Access', !passwordNeeded() ? 'Keeps the current password' : selected('password-mode') === 'none' ? 'No password' : passwordValid() ? 'Your own password' : 'Password not set yet', 'access');
-      const desk = [['desktop-app', 'Rocsy Desktop'], ['terminal-command', 'rocsy command'], ['desktop-launcher', 'Desktop launcher'], ['host-helper', 'Host services helper']].filter(([id]) => $(id).checked).map(([, label]) => label);
+      const desk = [['desktop-app', isWindows() ? 'Windows shortcuts' : 'Rocsy Desktop'], ['windows-autostart', 'Start with Windows'], ['terminal-command', 'rocsy command'], ['desktop-launcher', 'Desktop launcher'], ['host-helper', 'Host services helper']].filter(([id]) => $(id).checked).map(([, label]) => label);
       add('Desktop & helpers', desk.length ? desk.join(', ') : 'None', 'desktop', !desk.length);
       $('summary').replaceChildren(...rows.map(([term, value, target, muted]) => {
         const row = document.createElement('div');
@@ -583,7 +611,7 @@
       $('log-lines').scrollTop = $('log-lines').scrollHeight;
     }
     function showResult(body, simulated) {
-      $('result').textContent = simulated ? 'Simulation complete. No packages or files were changed.' : `Rocsy was ${body.mode === 'update' ? 'updated' : body.mode === 'repair' ? 'repaired' : 'built and started'} in ${body.destination}\n${body.password ? 'Initial Rocsy password: ' + body.password + '\nSave this password now.\n' : ''}${body.no_password ? 'No password is set. Anyone who can reach Rocsy can use it.\n' : ''}${body.docker_group_added ? 'Your account was added to the Docker group. Sign out and back in before using docker compose without sudo. No computer restart is needed.\n' : body.docker_session_needs_refresh ? 'Your Docker group access is not active in this login session. Sign out and back in before using docker compose without sudo. No computer restart is needed.\n' : ''}Open ${body.url}\n${body.desktop_launcher ? 'Desktop launcher: ' + body.desktop_launcher + '\n' : ''}${body.terminal_command ? 'Terminal command: rocsy (' + body.terminal_command.path + ')' + (body.terminal_command.on_path ? '' : ' — add ~/.local/bin to your PATH, then open a new terminal') + '\n' : ''}${body.desktop_app ? 'Rocsy Desktop is in your app menu' + (body.desktop_app.app_window ? '' : ' (install Chromium for its own window; until then it opens in your browser)') + '\n' : ''}${(body.backends || []).map(item => `${item.ok ? '✓' : '✗'} ${item.name}: ${item.message}`).join('\n')}${(body.backends || []).length ? '\n' : ''}To rebuild later:\n${body.command}`;
+      $('result').textContent = simulated ? 'Simulation complete. No packages or files were changed.' : `Rocsy was ${body.mode === 'update' ? 'updated' : body.mode === 'repair' ? 'repaired' : 'built and started'} in ${body.destination}\n${body.password ? 'Initial Rocsy password: ' + body.password + '\nSave this password now.\n' : ''}${body.no_password ? 'No password is set. Anyone who can reach Rocsy can use it.\n' : ''}${body.docker_group_added ? 'Your account was added to the Docker group. Sign out and back in before using docker compose without sudo. No computer restart is needed.\n' : body.docker_session_needs_refresh ? 'Your Docker group access is not active in this login session. Sign out and back in before using docker compose without sudo. No computer restart is needed.\n' : ''}Open ${body.url}\n${body.desktop_launcher ? 'Desktop launcher: ' + body.desktop_launcher + '\n' : ''}${body.terminal_command ? 'Terminal command: rocsy (' + body.terminal_command.path + ')' + (body.terminal_command.on_path ? '' : ' — add ~/.local/bin to your PATH, then open a new terminal') + '\n' : ''}${body.desktop_app ? 'Rocsy Desktop is in your app menu' + (body.desktop_app.app_window ? '' : ' (install Chromium for its own window; until then it opens in your browser)') + '\n' : ''}${(body.windows_shortcuts || []).map(link => 'Windows shortcut: ' + link + '\n').join('')}${body.windows ? 'Windows support is untested. Report problems with the full log (install.log in the Rocsy folder).\n' : ''}${(body.backends || []).map(item => `${item.ok ? '✓' : '✗'} ${item.name}: ${item.message}`).join('\n')}${(body.backends || []).length ? '\n' : ''}To rebuild later:\n${body.command}`;
       $('result').className = !simulated && (body.backends || []).some(item => !item.ok) ? 'result bad' : 'result ok';
       $('install-note').textContent = simulated ? 'Preview finished.' : 'Done. You can close this window.';
     }
@@ -625,6 +653,7 @@
       }
       const payload = {token: config.token, destination: $('destination').value, comfy_root: $('comfy-root').value, allow_existing: $('allow-existing').checked, desktop_launcher: $('desktop-launcher').checked,
         terminal_command: $('terminal-command').checked, desktop_app: $('desktop-app').checked, host_helper: $('host-helper').checked, allow_system_upgrade: $('allow-system-upgrade').checked, mode,
+        windows_autostart: isWindows() && $('windows-autostart').checked,
         password_mode: passwordMode, new_password: passwordMode === 'custom' ? $('new-password').value : '', no_password_ack: $('no-password-ack').checked,
         confirmation_phrase: mode === 'reinstall' ? $('reinstall-phrase').value : '', current_password: mode === 'reinstall' ? $('current-password').value : '',
         components: components()};

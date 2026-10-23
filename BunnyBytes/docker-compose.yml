@@ -47,6 +47,8 @@ services:
       FRAMEWORK_DATA_DIR: /data
       LLAMA_URL: http://127.0.0.1:${LLAMA_PORT:-8400}
       LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
+      HOSTCTL_URL: http://127.0.0.1:${HOSTCTL_PORT:-8899}     # external coding CLIs (Settings → Sub-agents)
+      HOSTCTL_SECRET: ${HOSTCTL_SECRET:-}
       VOICE_UPSTREAM: http://127.0.0.1:${VOICE_PORT:-8950}
       LOCK_UPSTREAM: http://127.0.0.1:${LOCK_PORT:-8600}
       VID_UPSTREAM: http://127.0.0.1:${H3_PORT:-8000}
@@ -227,6 +229,10 @@ services:
       BUNNY_FRAMEWORK_URL: http://127.0.0.1:8700
       VOICE_DATA_DIR: /data
       QWEN_TTS_MODEL_DIR: /models/qwen/Qwen3-TTS-12Hz-1.7B-Base
+      # Optional FlashAttention 2 for Qwen (Core Backend builds it for this image's torch);
+      # an empty folder until then. Picked per engine in Voice → Settings → Attention.
+      PYTHONPATH: /opt/voice-flash-attn/site
+      VOICE_FLASH_ATTN_DIR: /opt/voice-flash-attn/site
       VOICE_VOICES_DIR: /data/voices
       VOICE_WORKER_URL: http://127.0.0.1:7860
       COMFY_URL: ${COMFY_URL:-http://127.0.0.1:8188}
@@ -241,6 +247,7 @@ services:
       - ./shared/agentic-ui.css:/app/static/agentic-ui.css:ro
       - ./voice/data:/data
       - ./voice/models/qwen:/models/qwen:ro
+      - ${ROCSY_ROOT:?Set ROCSY_ROOT in .env}/core-backend-extras/voice/flash-attn:/opt/voice-flash-attn:ro
       # New-character music removal runs on the GPU through ComfyUI's
       # BunnyRemoveMusic node (voice/reference.py): clips go to its input
       # folder (a real bind mount - ComfyUI rejects symlinked inputs) and the
@@ -388,6 +395,8 @@ services:
       H3_LLAMA_URL: http://127.0.0.1:${LLAMA_PORT:-8400}
       H3_LLAMA_OVERRIDE_DIR: /llama-overrides
       H3_LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
+      HOSTCTL_URL: http://127.0.0.1:${HOSTCTL_PORT:-8899}     # external coding CLIs (Settings → Sub-agents)
+      HOSTCTL_SECRET: ${HOSTCTL_SECRET:-}
       H3_LOCK_URL: http://127.0.0.1:${LOCK_PORT:-8600}
       H3_QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
       H3_WORKFLOW_PATH: /app/workflows/MiniMax-H3.json

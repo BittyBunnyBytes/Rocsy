@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import integrations
+import windowshost
 
 # Outside the installation folder, so a failure can still be reported after a partial uninstall
 # (uninstall.status() reads it; Settings shows it).
@@ -79,6 +80,8 @@ def run(root: Path, mode: str) -> None:
     subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True, timeout=30)
     # The `rocsy` terminal command and the Rocsy Desktop menu entry go with it.
     integrations.remove_all(root)
+    # Windows (WSL2, untested): the Desktop / Start menu / Startup shortcuts this install made.
+    windowshost.remove_shortcuts(info.get('windows_shortcuts'), root)
     launcher_path = info.get('desktop_launcher')
     if isinstance(launcher_path, str):
         launcher = Path(launcher_path)

@@ -13,13 +13,24 @@ fail() {
     exit 1
 }
 
-python_ready() {
-    command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 9))' >/dev/null 2>&1
+# The newest Python 3.9+ on PATH (RHEL-like systems keep an old python3 next to python3.11 etc.).
+python_bin() {
+    for name in python3 python3.14 python3.13 python3.12 python3.11 python3.10 python3.9; do
+        if command -v "$name" >/dev/null 2>&1 && "$name" -c 'import sys; raise SystemExit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
+            command -v "$name"
+            return 0
+        fi
+    done
+    return 1
 }
 
 as_root() {
     if [ "$(id -u)" -eq 0 ]; then
         "$@"
+    elif [ -t 0 ] && command -v sudo >/dev/null 2>&1; then
+        sudo "$@"   # a terminal: sudo asks for the password here
+    elif [ -t 0 ] && command -v doas >/dev/null 2>&1; then
+        doas "$@"
     elif command -v pkexec >/dev/null 2>&1; then
         pkexec "$@"
     elif command -v sudo >/dev/null 2>&1; then
@@ -29,25 +40,51 @@ as_root() {
     fi
 }
 
-if ! python_ready; then
-    [ -r /etc/os-release ] || fail 'Python 3.9 or newer is needed. Install it, then open Rocsy again.'
-    # ID and ID_LIKE are supplied by the operating system's os-release file.
-    . /etc/os-release
-    case " ${ID:-} ${ID_LIKE:-} " in
-        *arch*)
-            command -v pacman >/dev/null 2>&1 || fail 'pacman is unavailable. Install Python 3.9 or newer manually.'
-            as_root "$(command -v pacman)" -S --needed --noconfirm python || fail 'Could not install Python. Check administrator authentication and package manager output.'
-            ;;
-        *ubuntu*|*linuxmint*|*mint*)
-            command -v apt-get >/dev/null 2>&1 || fail 'apt-get is unavailable. Install Python 3.9 or newer manually.'
-            as_root "$(command -v apt-get)" update || fail 'Could not update package lists for Python.'
-            as_root "$(command -v apt-get)" install -y python3 || fail 'Could not install Python 3.'
-            ;;
-        *)
-            fail 'Automatic Python setup supports Arch Linux and Ubuntu-based systems. Install Python 3.9 or newer, then open Rocsy again.'
-            ;;
-    esac
-fi
+# The package manager, from os-release ID / ID_LIKE first (Mint -> apt, Rocky -> dnf, Manjaro ->
+# pacman ...), else the first one on PATH. Same table as BunnyBytes/hostctl/pkgmanager.py.
+package_manager() {
+    words=''
+    if [ -r /etc/os-release ]; then
+        # ID and ID_LIKE are supplied by the operating system's os-release file.
+        words=$(. /etc/os-release; echo "${ID:-} ${ID_LIKE:-}")
+    fi
+    for word in $words; do
+        case "$word" in
+            debian|ubuntu|linuxmint|mint|pop|elementary|zorin|kali|raspbian|neon|devuan|mx|deepin) want=apt-get ;;
+            fedora|rhel|centos|rocky|almalinux|ol|nobara|amzn|mageia) want=dnf ;;
+            opensuse*|suse|sles) want=zypper ;;
+            arch|manjaro|endeavouros|cachyos|garuda|artix) want=pacman ;;
+            alpine|postmarketos) want=apk ;;
+            void) want=xbps-install ;;
+            solus) want=eopkg ;;
+            gentoo|funtoo) want=emerge ;;
+            *) continue ;;
+        esac
+        [ "$want" = dnf ] && ! command -v dnf >/dev/null 2>&1 && want=yum
+        if command -v "$want" >/dev/null 2>&1; then echo "$want"; return 0; fi
+    done
+    for want in apt-get dnf yum zypper pacman apk xbps-install eopkg emerge; do
+        if command -v "$want" >/dev/null 2>&1; then echo "$want"; return 0; fi
+    done
+    return 1
+}
 
-python_ready || fail 'The available Python 3 is older than 3.9. Upgrade the operating system or install a newer Python, then retry.'
-exec python3 "$ROOT/Install Rocsy.py" "$@"
+install_python() {
+    manager=$(package_manager) || fail 'No supported package manager was found. Install Python 3.9 or newer, then open Rocsy again.'
+    case "$manager" in
+        apt-get) as_root apt-get update && as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y python3 ;;
+        dnf|yum) as_root "$manager" install -y python3 || true
+                 # RHEL 8-like: python3 is 3.6, the newer ones are separate packages.
+                 python_bin >/dev/null || as_root "$manager" install -y python3.11 || as_root "$manager" install -y python39 ;;
+        zypper) as_root zypper --non-interactive install python3 ;;
+        pacman) as_root pacman -S --needed --noconfirm python ;;
+        apk) as_root apk add python3 ;;
+        xbps-install) as_root xbps-install -Sy python3 ;;
+        eopkg) as_root eopkg install -y python3 ;;
+        emerge) as_root emerge --noreplace dev-lang/python ;;
+    esac || fail "Could not install Python with $manager. Check administrator authentication and the package manager output."
+}
+
+python_bin >/dev/null || install_python
+PYTHON=$(python_bin) || fail 'The available Python 3 is older than 3.9. Install Python 3.9 or newer, then open Rocsy again.'
+exec "$PYTHON" "$ROOT/Install Rocsy.py" "$@"

@@ -6592,8 +6592,9 @@ const PE_TAB_FIELDS = {
   audio: ["original_volume", "mute_original", "audio_denoise", "remove_music", "normalize", "music_reference_id", "voices", ...Object.keys(PE_AUDIO_FX)],
   text: ["captions", "texts"],
 };
+let peBaseCache = null;
 function peDiffers(field) {
-  const value = pe.edit[field], base = peDefaults()[field];
+  const value = pe.edit[field], base = (peBaseCache ||= peDefaults())[field];
   if (Array.isArray(value)) return value.length > 0;
   return (value ?? null) !== (base ?? null) && !(value === "" && base == null);
 }
@@ -6688,7 +6689,7 @@ function peApplyFrame() {
   const place = { left: `${rect.left - stageRect.left}px`, top: `${rect.top - stageRect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` };
   Object.assign($("#pe-overlays").style, place);
   // Cinema bars: same arithmetic as postedit.effect_filters, on the kept part of the frame.
-  const bars = $("#pe-letterbox"), ratio = Number(pe.edit.letterbox);
+  const bars = $("#pe-bars"), ratio = Number(pe.edit.letterbox);
   const outW = pe.edit.width || rect.width, outH = pe.edit.height || rect.height;
   const bar = ratio ? Math.max(0, (outH - outW / ratio) / 2) / outH : 0;
   bars.hidden = !(bar > 0);

@@ -131,9 +131,11 @@
           <div class="inst-bulk-actions">
             <button type="button" class="link-button" id="bulk-all">Select all shown</button>
             <button type="button" class="link-button" id="bulk-clear">Clear</button>
+            <button type="button" class="secondary-button small" id="bulk-move" disabled>Move selected</button>
             <button type="button" class="secondary-button small danger" id="bulk-remove" disabled>Uninstall selected</button>
           </div>
         </div>
+        <div class="inst-moves" id="inst-moves" hidden></div>
         <div class="card-body" id="installed"></div>
       </div>
 
@@ -203,7 +205,7 @@
           <div class="core-nav-links" data-for="llm"><button type="button" data-jump="engine-llama">llama.cpp</button><button type="button" data-jump="engine-fpx">ROCmFPX</button><button type="button" data-jump="engine-strata">Strata</button><button type="button" data-jump="core-runtime-card">ROCm &amp; Vulkan</button><button type="button" data-jump="core-swap-card">llama-swap</button></div>
           <button type="button" data-group="voice" aria-pressed="false">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M5 11v2a7 7 0 0 0 14 0v-2M12 20v2M8 22h8"/></svg>
-            <span><strong>Voice engines</strong><small>Qwen3-TTS, IndexTTS2, Fish Audio</small></span></button>
+            <span><strong>Voice engines</strong><small>Qwen3-TTS, IndexTTS2, Fish Audio, voice creation</small></span></button>
           <div class="core-nav-links" data-for="voice"><button type="button" data-jump="core-voice-card">Install engines</button></div>
           <button type="button" data-group="comfy" aria-pressed="false">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
@@ -397,6 +399,18 @@
   </main>
 
   <!-- Model detail -->
+  <dialog class="move-dialog" id="move-dialog" aria-labelledby="move-title">
+    <form method="dialog">
+      <h2 id="move-title">Move</h2>
+      <p class="hint" id="move-lead"></p>
+      <div class="move-targets" id="move-targets" role="radiogroup" aria-labelledby="move-title"></div>
+      <p class="hint move-note">ComfyUI's models folder keeps a link under the same name, so ComfyUI, llama-swap and the studios still find it. Storage locations are set up in <a href="/Settings#storage-locations">Settings → Storage</a>.</p>
+      <div class="move-actions">
+        <button type="submit" class="secondary-button" value="cancel">Cancel</button>
+        <button type="submit" class="primary-button" id="move-go" value="go" disabled>Move</button>
+      </div>
+    </form>
+  </dialog>
   <div class="drawer-scrim" id="scrim" hidden></div>
   <aside class="drawer" id="drawer" aria-label="Model details" hidden>
     <div class="drawer-head">

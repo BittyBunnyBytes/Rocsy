@@ -3860,6 +3860,10 @@ async def _hermes_hold_end(job: dict[str, Any]) -> None:
 @asynccontextmanager
 async def _hermes_turn(job: dict[str, Any], label: str, turn_id: str):
     """One Hermes step's GPU turn, or the turn of the job's active hold (see _hermes_hold_start)."""
+    model = str((job.get("agentic_settings") or {}).get("model") or enhancer.load(store).get("model") or "")
+    if model.startswith("cli:"):
+        yield          # an external coding CLI on the host (Settings → Sub-agents) needs no GPU turn
+        return
     hold = job.get("hermes_hold")
     if hold is None:
         async with _hermes_own_turn(job, label, turn_id):

@@ -20,6 +20,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import windowshost
+
 REPO = "https://github.com/Comfy-Org/ComfyUI.git"
 ROCM_INDEX = re.compile(r"--index-url\s+(https://download\.pytorch\.org/whl/rocm[0-9]+(?:\.[0-9]+)*)\b")
 UNIT = "comfyui-supervisor.service"
@@ -98,6 +100,9 @@ def setup(comfy: Path, run, find=find_python) -> None:
     run([*pip, "torch", "torchvision", "torchaudio", "--index-url", match.group(1)],
         f"Installing PyTorch for ROCm ({match.group(1).rsplit('/', 1)[-1]}, several GB)…", True)
     run([*pip, "-r", str(comfy / "requirements.txt")], "Installing ComfyUI’s requirements…", True)
+    if windowshost.is_wsl():
+        # Windows (untested): PyTorch's own HSA runtime can't reach the GPU through WSL's /dev/dxg.
+        windowshost.fix_torch_hsa(comfy)
 
 
 def supervisor_status(root: Path) -> dict:

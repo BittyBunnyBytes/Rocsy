@@ -455,6 +455,23 @@ def _code_model(body: dict) -> dict | None:
     return {k: str(model.get(k) or "")[:200] for k in ("model", "provider", "reasoning")}
 
 
+@app.get("/Code/api/settings")
+async def code_settings(request: Request):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return {"model": await asyncio.to_thread(code_agent.load_settings)}
+
+
+@app.put("/Code/api/settings")
+async def code_settings_save(request: Request):
+    if (denied := _code_write_guard(request)) is not None:
+        return denied
+    body = await _json_body(request)
+    if body is None or not isinstance(body.get("model"), dict):
+        return JSONResponse({"error": "json_required"}, status_code=415)
+    return {"model": await asyncio.to_thread(code_agent.save_settings, body["model"])}
+
+
 @app.get("/Code/api/projects/{project_id}/agent")
 async def code_project_agent(request: Request, project_id: str):
     if not _has_valid_session(request):
@@ -1369,6 +1386,38 @@ async def service_action(request: Request, item_id: str, action: str):
         return JSONResponse({"error": "bad request"}, status_code=400)
     body = await _json_body(request) or {}
     return await _hostctl("POST", f"/items/{item_id}/{action}", {"force": bool(body.get("force"))})
+
+
+# Settings -> Storage: where model files live (hostctl/storage.py; moves start in Models -> Manager).
+@app.get("/api/storage-locations")
+async def storage_locations(request: Request):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return await _hostctl("GET", "/storage")
+
+
+@app.get("/api/storage-locations/browse")
+async def storage_locations_browse(request: Request, path: str = "", hidden: int = 0):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return await _hostctl("GET", f"/storage/browse?path={quote(path, safe='')}&hidden={1 if hidden else 0}")
+
+
+_STORAGE_ACTIONS = {"add": "/storage/locations/add", "remove": "/storage/locations/remove",
+                    "rename": "/storage/locations/rename", "defaults": "/storage/defaults", "apply": "/storage/apply"}
+
+
+@app.post("/api/storage-locations/{action}")
+async def storage_locations_action(request: Request, action: str):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1" or action not in _STORAGE_ACTIONS:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    body = await _json_body(request)
+    if body is None:
+        return JSONResponse({"error": "json_required"}, status_code=415)
+    allowed = {"path", "label", "subfolder", "id", "models", "loras", "llm", "force_llama"}
+    return await _hostctl("POST", _STORAGE_ACTIONS[action], {k: v for k, v in body.items() if k in allowed})
 
 
 # REA folders: host directories mounted read-only into the REA container (hostctl/reafolders.py).

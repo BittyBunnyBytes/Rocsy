@@ -155,10 +155,20 @@ function renderSettings() {
     if (!groups.has(field.group)) groups.set(field.group, []);
     const row = el('div', 'settings-field');
     const id = 'setting-' + field.key;
-    const input = el('input');
+    const input = el(field.kind === 'choice' ? 'select' : 'input');
     input.id = id;
     input.dataset.setting = field.key;
-    if (field.kind === 'toggle') {
+    if (field.kind === 'choice') {
+      const label = el('label', '', field.label);
+      label.htmlFor = id;
+      input.append(...field.options.map(option => {
+        const item = new Option(option.label, option.value);
+        item.disabled = Boolean(option.disabled) && option.value !== values[field.key];
+        return item;
+      }));
+      input.value = values[field.key] ?? field.default;
+      row.append(label, input);
+    } else if (field.kind === 'toggle') {
       input.type = 'checkbox';
       input.checked = Boolean(values[field.key]);
       const label = el('label', 'settings-toggle');
@@ -543,6 +553,7 @@ async function refresh(showReady = true) {
   try {
     const state = await api('state');
     engines = state.engines;
+    renderCreators(state.creators || []);
     const selectedEngine = $('engine').value;
     const selectedVoice = $('voice').value;
     $('engine').replaceChildren(...engines.map(item => new Option(item.name, item.id)));
@@ -879,19 +890,140 @@ $('voice-form').addEventListener('submit', async event => {
     showPickedVoice();
     update();
     event.target.reset();
-    builder.upload = builder.clip = null;
+    builder.upload = builder.clip = builder.recordClip = null;
+    design.takes = [];
+    design.autoSummary = '';
+    renderTakes();
+    $('design-state').textContent = '';
     $('clip-picker').hidden = $('compare').hidden = true;
     $('drop-title').textContent = 'Choose or drop an MP3, WAV, M4A…';
     $('drop-hint').textContent = 'Saved. Drop another recording to add one more.';
     $('build-state').textContent = '';
-    $('save-hint').textContent = 'Build the cleaned clip first.';
     updateBuildable();
+    updateDesignable();
+    syncSaveState();
     setStatus(`${data.voice.name} saved to the gallery.`, 'success');
     setView('characters');
     document.querySelector(`.character[data-voice="${data.voice.id}"]`)?.scrollIntoView({block: 'center'});
   } catch (error) {
     $('save-character').disabled = false;
     $('save-hint').textContent = error.message;
+  }
+});
+
+// ---- Add a character → Create a voice: describe it, preview takes, keep one as the reference ----
+// The kept take is a reference clip like a cleaned recording (same transcribe/save routes),
+// and its sample line is the exact transcript.
+const design = {creators: [], takes: [], busy: false, autoSummary: ''};
+let addSource = 'record';
+
+function syncSaveState() {
+  $('save-character').disabled = !builder.clip;
+  $('transcribe').disabled = !builder.clip;
+  $('save-hint').textContent = builder.clip ? '' : addSource === 'create' ? 'Preview a voice first.' : 'Build the cleaned clip first.';
+}
+
+function setAddSource(source) {
+  if (source === addSource) return;
+  if (addSource === 'record') builder.recordClip = builder.clip;
+  addSource = source;
+  const create = source === 'create';
+  for (const button of document.querySelectorAll('[data-add-source]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.addSource === source));
+  }
+  if (create) stopSelection();
+  $('design-step').hidden = !create;
+  $('record-step').hidden = $('clean-step').hidden = create;
+  $('character-step-num').textContent = create ? '2' : '3';
+  $('add-intro').textContent = create
+    ? 'Describe a voice, preview takes until it sounds right, and save the one you like as a character.'
+    : 'Upload a recording or import YouTube audio, trim a clean clip, and save it to the gallery.';
+  const take = create && design.takes.find(item => item.id === design.chosen);
+  builder.clip = create ? (take ? take.id : null) : builder.recordClip || null;
+  if (take) $('voice-transcript').value = take.text;
+  syncSaveState();
+}
+
+function renderCreators(creators) {
+  const key = JSON.stringify(creators);
+  if (key === renderCreators.key) return;
+  renderCreators.key = key;
+  design.creators = creators;
+  const selected = $('design-engine').value;
+  $('design-engine').replaceChildren(...creators.map(item => new Option(item.name, item.id)));
+  if (creators.some(item => item.id === selected)) $('design-engine').value = selected;
+  updateDesignable();
+}
+
+function updateDesignable() {
+  const creator = design.creators.find(item => item.id === $('design-engine').value);
+  $('design-engine-hint').textContent = creator ? creator.detail : 'No installed engine can create voices.';
+  $('design-preview').disabled = design.busy || !creator?.ready;
+  $('design-preview').textContent = design.takes.length ? 'Preview another take' : 'Preview voice';
+}
+
+function chooseTake(take) {
+  design.chosen = builder.clip = take.id;
+  for (const row of $('design-takes').children) {
+    const chosen = row.dataset.take === take.id;
+    row.classList.toggle('is-chosen', chosen);
+    row.querySelector('input').checked = chosen;
+  }
+  $('voice-transcript').value = take.text;
+  const summary = $('voice-summary');
+  if (!summary.value.trim() || summary.value === design.autoSummary) {
+    summary.value = design.autoSummary = take.description.slice(0, 300);
+  }
+  syncSaveState();
+}
+
+function renderTakes() {
+  $('design-takes').hidden = !design.takes.length;
+  $('design-takes').replaceChildren(...design.takes.map(take => {
+    const row = el('label', 'design-take');
+    row.dataset.take = take.id;
+    row.title = take.description;
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'design-take';
+    radio.setAttribute('aria-label', `Use take ${take.number}`);
+    radio.addEventListener('change', () => chooseTake(take));
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.preload = 'metadata';
+    audio.src = take.audio;
+    row.append(radio, audio, el('small', '', `Take ${take.number} · ${fmt(take.duration)}`));
+    return row;
+  }));
+}
+
+for (const button of document.querySelectorAll('[data-add-source]')) {
+  button.addEventListener('click', () => setAddSource(button.dataset.addSource));
+}
+$('design-engine').addEventListener('change', updateDesignable);
+$('design-preview').addEventListener('click', async () => {
+  const description = $('design-description').value.trim();
+  const text = $('design-text').value.trim();
+  if (!description || !text) { $('design-state').textContent = 'Describe the voice and write a sample line first.'; return; }
+  design.busy = true;
+  updateDesignable();
+  $('design-state').textContent = 'Starting…';
+  try {
+    const job = await api('reference/design', {method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify({engine: $('design-engine').value, description, text, language: $('design-language').value})});
+    const done = await waitJob(job.id, stage => { $('design-state').textContent = stage; });
+    const take = {id: job.id, number: (design.takes[0]?.number || 0) + 1, audio: done.audio,
+      duration: done.duration, text: done.text, description: done.description};
+    design.takes.unshift(take);
+    renderTakes();
+    if (addSource === 'create') chooseTake(take);
+    $('design-takes').querySelector('audio')?.play().catch(() => {});
+    $('design-state').textContent = `Take ${take.number} ready. Keep it, tweak the description and try again, or save it below.`;
+  } catch (error) {
+    $('design-state').textContent = error.message;
+  } finally {
+    design.busy = false;
+    updateDesignable();
   }
 });
 

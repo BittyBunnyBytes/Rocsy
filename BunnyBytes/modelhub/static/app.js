@@ -1305,8 +1305,8 @@ async function loadCore(fresh = false) {
       state.coreExtras.personal_hermes?.update_running || state.coreExtras.motion?.install_running ||
       state.coreExtras.rea?.install_running || state.coreExtras.rea?.checking || state.coreExtras.ytdlp?.running)) ||
     (state.swap && (state.swap.building || state.swap.fetch.running)) ||
-    (state.engines && (state.engines.strata.installing || state.engines.rocmfpx.building || state.engines.hipblaslt.running)) ||
-    state.voiceEngines?.engines?.some(engine => engine.running || engine.deepspeed?.running);
+    (state.engines && (state.engines.strata.installing || state.engines.strata.ngram?.running || state.engines.rocmfpx.building || state.engines.hipblaslt.running)) ||
+    state.voiceEngines?.engines?.some(engine => engine.running || engine.deepspeed?.running || engine.flash?.running);
   if (state.view === 'manager' && state.sub === 'core') coreTimer = setTimeout(loadCore, busy ? 3000 : 30000);
 }
 
@@ -1431,8 +1431,10 @@ const VIEW_LOGS = {
       'rea-tic80-download': state.coreExtras?.rea?.portable?.find(engine => engine.id === 'tic80')?.running,
       ...Object.fromEntries((state.coreExtras?.rea?.addons || []).map(addon => [`rea-${addon.id}-download`, addon.running])),
       'personal-hermes-update': state.coreExtras?.personal_hermes?.update_running})[key])},
-  voice: {path: key => key === 'indextts2-deepspeed' ? 'core/voice/indextts2/deepspeed/log' : `core/voice/${key}/log`,
+  voice: {path: key => key === 'indextts2-deepspeed' ? 'core/voice/indextts2/deepspeed/log' :
+      key === 'qwen3-flash' ? 'core/voice/qwen3/flash/log' : `core/voice/${key}/log`,
     running: key => key === 'indextts2-deepspeed' ? Boolean(state.voiceEngines?.engines?.find(engine => engine.id === 'indextts2')?.deepspeed?.running) :
+      key === 'qwen3-flash' ? Boolean(state.voiceEngines?.engines?.find(engine => engine.id === 'qwen3')?.flash?.running) :
       Boolean(state.voiceEngines?.engines?.find(engine => engine.id === key)?.running)},
   nodes: {path: () => 'comfy-setup/log', running: () => Boolean(state.nodes?.job?.running || state.setup?.host?.job?.running)},
   swap: {path: key => `core/swap/log/${key}`,
@@ -1901,7 +1903,7 @@ function renderVoiceEngines() {
   const container = $('core-voice');
   if (!container || !state.voiceEngines) return;
   const engines = state.voiceEngines.engines || [];
-  const busy = engines.some(engine => engine.running || engine.deepspeed?.running);
+  const busy = engines.some(engine => engine.running || engine.deepspeed?.running || engine.flash?.running);
   const rows = [];
   for (const engine of engines) {
     const row = el('div', 'lib-row core-build');
@@ -1913,6 +1915,7 @@ function renderVoiceEngines() {
     info.append(el('strong', '', engine.name),
       el('p', `hint${engine.phase === 'failed' ? ' error' : ''}`, detail),
       el('p', 'hint', `${engine.repo} · ${engine.path.replace(HOME_RE, '~/')}`));
+    if (engine.creates_voices) info.append(el('p', 'hint', 'Voice creation: adds “Create a voice” to Voice → Add character'));
     const actions = el('div', 'dl-actions');
     if (!engine.installed) {
       const button = el('button', 'secondary-button', 'Download & install');
@@ -1930,6 +1933,31 @@ function renderVoiceEngines() {
     actions.append(log);
     row.append(info, actions);
     rows.push(row, ...[viewLogPre('voice', engine.id)].filter(Boolean));
+    if (engine.id === 'qwen3' && engine.flash) {
+      const fa = engine.flash;
+      const addon = el('div', 'lib-row core-build');
+      const addonInfo = el('div', 'core-info');
+      const faDetail = fa.running ? `${fa.phase || 'Building'}…` :
+        fa.phase === 'failed' ? `Failed: ${fa.error || 'see log'}` :
+        fa.installed ? `Installed · built for torch ${fa.torch || '?'} · pick it in Voice → Settings → Attention` :
+        'Optional · ROCm GPU build for the Voice container, compiled on the CPU (30–90 min)';
+      addonInfo.append(el('strong', '', 'Qwen3-TTS · FlashAttention 2'),
+        el('p', `hint${fa.phase === 'failed' ? ' error' : ''}`, faDetail));
+      const addonActions = el('div', 'dl-actions');
+      const build = el('button', 'secondary-button', fa.installed ? 'Rebuild' : 'Build & install FlashAttention');
+      build.type = 'button'; build.disabled = busy || !engine.installed;
+      build.addEventListener('click', async () => {
+        build.disabled = true;
+        try { const reply = await post('core/voice/qwen3/flash', {}); toast(reply.message || 'Started', 'ok'); }
+        catch (error) { toast(error.message, 'error'); }
+        loadCore(true);
+      });
+      const faLog = el('button', 'link-button', viewLogState('voice')?.key === 'qwen3-flash' ? 'Hide log' : 'Log');
+      faLog.type = 'button'; faLog.addEventListener('click', () => toggleViewLog('voice', 'qwen3-flash'));
+      addonActions.append(build, faLog);
+      addon.append(addonInfo, addonActions);
+      rows.push(addon, ...[viewLogPre('voice', 'qwen3-flash')].filter(Boolean));
+    }
     if (engine.id === 'indextts2' && engine.deepspeed) {
       const ds = engine.deepspeed;
       const addon = el('div', 'lib-row core-build');
@@ -2668,7 +2696,32 @@ function renderEngines() {
     catch (error) { pre.textContent = error.message; }
   });
   controls.append(logButton);
-  row.append(info, controls); $('core-strata').replaceChildren(row);
+  row.append(info, controls);
+  const ngram = strata.ngram;
+  const ngramRow = el('div', 'lib-row core-build');
+  if (ngram && strata.installed) {
+    const job = ngram.job || {};
+    const gb = (bytes) => (bytes / 1e9).toFixed(1);
+    const ngramInfo = el('div', 'core-info');
+    ngramInfo.append(el('strong', '', 'Full-precision n-gram table · BF16'),
+      el('p', 'hint', ngram.present ? `Downloaded${job.row_error != null ? ` · checked against the model's table (median row difference ${(job.row_error * 100).toFixed(1)}%)` : ''}. Turn it on per model in llama-swap → Parameters → N-gram table.` :
+        ngram.running ? `${job.phase === 'checking' ? 'Checking' : 'Downloading'} · ${gb(job.done || ngram.partial)} of ${gb(ngram.bytes)} GB` :
+        job.phase === 'failed' ? `Download failed: ${job.error}` :
+        `Qwen's own n-gram table instead of the models' 4-bit copy: better quality at the same speed, read from the SSD. ${gb(ngram.bytes)} GB of disk${ngram.partial ? `, ${gb(ngram.partial)} GB already here` : ''}.`));
+    const ngramActions = el('div', 'dl-actions');
+    if (!ngram.present && !ngram.running) {
+      const get = el('button', 'secondary-button', ngram.partial ? 'Resume download' : 'Download (102 GB)');
+      get.type = 'button';
+      get.addEventListener('click', () => engineAction('strata-ngram'));
+      ngramActions.append(get);
+    }
+    if (ngram.running) {
+      const stop = el('button', 'link-button', 'Pause'); stop.type = 'button';
+      stop.addEventListener('click', () => engineAction('strata-ngram-cancel')); ngramActions.append(stop);
+    }
+    ngramRow.append(ngramInfo, ngramActions);
+  }
+  $('core-strata').replaceChildren(...(ngramRow.childElementCount ? [row, ngramRow] : [row]));
 
   const tune = data.hipblaslt;
   const tuneRow = el('div', 'lib-row core-build');
@@ -3183,7 +3236,7 @@ $('core-fetch').addEventListener('click', () => coreAction('fetch', {}));
 // ---- installed ------------------------------------------------------------------------------
 
 async function loadInstalled() {
-  if (!state.installed) $('installed').replaceChildren(el('p', 'empty', 'Reading your models folder…'));
+  if (!state.installed) { $('installed').replaceChildren(el('p', 'empty', 'Reading your models folder…')); watchMoves(); }
   try {
     state.installed = await api('installed');
     await loadBases();
@@ -3319,12 +3372,15 @@ function syncSelection() {
   $('bulk-count').textContent = items.length ? `${items.length} selected` : 'Nothing selected';
   $('bulk-size').textContent = items.length ? `${size(items.reduce((n, i) => n + i.size, 0))} would be freed` : 'Click rows to pick them · Shift-click picks a range';
   $('bulk-remove').disabled = !items.length;
+  $('bulk-move').disabled = !items.length;
+  $('bulk-move').textContent = items.length ? `Move ${items.length}…` : 'Move selected';
   $('bulk-remove').textContent = items.length ? `Uninstall ${items.length}` : 'Uninstall selected';
 }
 const installedItems = () => (state.installed?.groups || []).flatMap(g => g.items.map(item => ({...item, group: item.group || g.name})));
 $('bulk-all').addEventListener('click', () => setSelected(state.instVisible || [], true));
 $('bulk-clear').addEventListener('click', () => { state.instSelected.clear(); syncSelection(); });
 $('bulk-remove').addEventListener('click', bulkUninstall);
+$('bulk-move').addEventListener('click', () => openMove(installedItems().filter(i => state.instSelected.has(i.path))));
 
 async function bulkUninstall() {
   const items = installedItems().filter(i => state.instSelected.has(i.path));
@@ -3486,6 +3542,11 @@ function installedRow(item, biggest, flat = false, showSub = false) {
   if (flat) where.append(el('span', 'kind-dot'), el('span', 'inst-kind', item.sub ? `${item.group} · ${item.sub}` : item.group));
   else if (showSub && item.sub) where.append(el('span', 'inst-kind', item.sub));
   const parts = item.path.split('/');
+  if (item.stored) {
+    const tag = el('span', 'tag ' + (item.offline ? 'warn' : 'stored'), item.offline ? `${item.stored.label} · offline` : item.stored.managed ? `On ${item.stored.label}` : 'Linked');
+    tag.title = item.offline ? `Its file is on ${item.stored.target}, which isn't reachable (drive unplugged?)` : `Stored at ${item.stored.target.replace(HOME_RE, '~/')}`;
+    where.append(tag);
+  }
   if (item.location) where.append(el('span', 'hint', item.location));
   else if (parts.length > 2 && item.group !== 'LLMs') where.append(el('span', 'hint', `models/${parts.slice(0, -1).join('/')}`));
   if (where.childElementCount) main.append(where);
@@ -3529,9 +3590,124 @@ function installedRow(item, biggest, flat = false, showSub = false) {
   });
   const actions = el('div', 'lib-actions');
   if (BASE_GROUPS.includes(item.group)) actions.append(basePicker(item));
-  if (item.removable !== false) actions.append(remove);
+  if (item.removable !== false) {
+    const move = el('button', 'secondary-button small', 'Move');
+    move.type = 'button';
+    move.title = 'Store this file on another drive or folder (Settings → Storage)';
+    move.disabled = Boolean(state.moving?.has(item.path));
+    move.addEventListener('click', () => openMove([item]));
+    actions.append(move, remove);
+  }
   row.append(main, sizeCell, used, actions);
   return row;
+}
+
+// ---- Installed: move files between storage locations (Settings -> Storage; the host does the copying) ----
+state.moving = new Set();
+const MOVE_LIVE = ['queued', 'copying', 'verifying'];
+let movePoll = null;
+
+async function openMove(items) {
+  items = items.filter(i => i.removable !== false);
+  if (!items.length) return;
+  const dialog = $('move-dialog');
+  const total = items.reduce((n, i) => n + i.size, 0);
+  $('move-title').textContent = items.length === 1 ? `Move ${items[0].name}` : `Move ${items.length} files`;
+  $('move-lead').textContent = `${size(total)} · pick where ${items.length === 1 ? 'it' : 'they'} should live.`;
+  $('move-targets').replaceChildren(el('p', 'hint', 'Reading storage locations…'));
+  $('move-go').disabled = true;
+  dialog.showModal();
+  let data;
+  try { data = await api('storage'); } catch (error) { $('move-targets').replaceChildren(el('p', 'hint error', error.message)); return; }
+  const here = new Set(items.map(i => i.stored?.id || 'comfy'));
+  const targets = [data.builtin, ...data.locations];
+  if (!data.locations.length) {
+    const empty = el('p', 'hint', 'No other storage locations yet. ');
+    const link = el('a', '', 'Add one in Settings → Storage');
+    link.href = '/Settings#storage-locations';
+    empty.append(link);
+    $('move-targets').replaceChildren(empty);
+    dialog.querySelector('.move-note').hidden = true;
+    return;
+  }
+  dialog.querySelector('.move-note').hidden = false;
+  {
+  }
+  let picked = '';
+  $('move-targets').replaceChildren(...targets.map(target => {
+    const card = el('label', 'move-target');
+    const radio = el('input');
+    radio.type = 'radio';
+    radio.name = 'move-to';
+    radio.value = target.id;
+    const free = target.disk?.free || 0;
+    const reason = !target.online ? 'Not reachable (drive unplugged?)'
+      : !target.writable ? "Can't write there"
+      : !target.ready ? 'Still being connected to the apps (they refresh once idle)'
+      : here.size === 1 && here.has(target.id) ? (items.length === 1 ? 'It is already here' : 'They are all here already')
+      : free && free < total + 2 * GB && target.disk?.mount !== data.builtin.disk?.mount ? `Only ${size(free)} free` : '';
+    radio.disabled = Boolean(reason);
+    radio.addEventListener('change', () => { picked = target.id; $('move-go').disabled = false; });
+    const text = el('span', 'move-target-text');
+    text.append(el('strong', '', target.label), el('span', 'hint', target.path.replace(HOME_RE, '~/')));
+    const meta = el('span', 'move-target-meta', reason || [free ? `${size(free)} free` : '', target.disk?.model, target.disk?.fstype].filter(Boolean).join(' · '));
+    if (reason) card.classList.add('is-off');
+    card.append(radio, text, meta);
+    return card;
+  }));
+  dialog.onclose = async () => {
+    if (dialog.returnValue !== 'go' || !picked) return;
+    const failed = [];
+    for (const item of items) {
+      if ((item.stored?.id || 'comfy') === picked) continue;
+      try { await post('storage/move', {path: item.path, to: picked}); state.moving.add(item.path); }
+      catch (error) { failed.push(`${item.name}: ${error.message}`); }
+    }
+    if (failed.length) toast(failed.join('; '), 'error');
+    else toast(items.length === 1 ? 'Moving… the file stays usable until the switch' : `Moving ${items.length} files, one at a time…`, 'ok');
+    if (state.instSelecting) { state.instSelected.clear(); syncSelection(); }
+    watchMoves();
+  };
+}
+
+async function watchMoves() {
+  clearTimeout(movePoll);
+  let data;
+  try { data = await api('storage'); } catch { movePoll = setTimeout(watchMoves, 5000); return; }
+  const box = $('inst-moves');
+  const live = (data.jobs || []).filter(j => MOVE_LIVE.includes(j.state));
+  const recent = (data.jobs || []).filter(j => !MOVE_LIVE.includes(j.state) && j.finished > Date.now() / 1000 - 600 && state.moving.has(j.path));
+  const names = Object.fromEntries([data.builtin, ...data.locations].map(l => [l.id, l.label]));
+  box.hidden = !live.length && !recent.length;
+  box.replaceChildren(...[...live, ...recent].map(job => {
+    const row = el('div', 'move-row is-' + job.state);
+    const pct = job.total ? Math.min(100, job.bytes / job.total * 100) : 0;
+    const label = {queued: 'Waiting', copying: 'Copying', verifying: 'Checking the copy', done: 'Moved', failed: 'Failed', cancelled: 'Cancelled'}[job.state] || job.state;
+    const text = el('div', 'move-text');
+    text.append(el('strong', '', job.path.split('/').pop()),
+      el('span', 'hint', `${label} → ${names[job.to] || job.to}${job.state === 'copying' ? ` · ${size(job.bytes) || '0 MB'} of ${size(job.total)}` : ''}${job.error ? ` · ${job.error}` : job.note ? ` · ${job.note}` : ''}`));
+    const bar = el('div', 'size-bar');
+    const fill = el('span');
+    fill.style.width = `${job.state === 'done' ? 100 : job.state === 'verifying' ? 100 : pct}%`;
+    bar.append(fill);
+    row.append(text, bar);
+    if (MOVE_LIVE.includes(job.state)) {
+      const cancel = el('button', 'link-button danger', 'Cancel');
+      cancel.type = 'button';
+      cancel.addEventListener('click', () => post(`storage/move/${job.id}/cancel`).then(watchMoves).catch(e => toast(e.message, 'error')));
+      row.append(cancel);
+    }
+    return row;
+  }));
+  const finished = [...state.moving].filter(path => !live.some(j => j.path === path));
+  if (finished.length) {
+    finished.forEach(path => state.moving.delete(path));
+    const done = recent.filter(j => finished.includes(j.path));
+    if (done.some(j => j.state === 'failed')) toast(`Move failed: ${done.filter(j => j.state === 'failed').map(j => j.error).join('; ')}`, 'error');
+    loadInstalled();
+  }
+  live.forEach(j => state.moving.add(j.path));
+  if (live.length) movePoll = setTimeout(watchMoves, 1500);
 }
 
 // Manual base association ("Other models" file that is really MiniMax H3): the

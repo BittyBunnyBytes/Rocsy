@@ -279,9 +279,9 @@ class ParityTest(unittest.IsolatedAsyncioTestCase):
             row = {'request': 'r', 'guide': '', 'settings': {}, 'steer': ['brighter'], 'state': 'planning'}
             self.assertIn('USER STEERING', agentic.plan_input(row))
             self.assertIn('brighter', agentic.plan_input(row))
-            preview = await agentic.preview('voice', agentic.PreviewRequest(request='hi', settings={'engine': 'fish_v1'}))
-            self.assertEqual(preview['model'], 'fish_v1')
-            self.assertIn('Fish Audio 1.5', preview['messages'][0]['content'])
+            preview = await agentic.preview('voice', agentic.PreviewRequest(request='hi', settings={'engine': 'fish_drama3'}))
+            self.assertEqual(preview['model'], 'fish_drama3')
+            self.assertIn('Fish Audio Drama 3', preview['messages'][0]['content'])
 
 
     async def test_look_for_relevant_loras(self):

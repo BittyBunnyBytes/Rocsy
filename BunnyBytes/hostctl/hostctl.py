@@ -51,12 +51,15 @@ import reafolders
 import reamods
 import comfynodes
 import modelfind
+import storage
 import coreruntime
+import windowshost
 import coreswap
 import hermeslink
 import llama_optimize
 import loadpriority
 import gputune
+import codingclis
 import uninstall
 
 HOST = "127.0.0.1"
@@ -281,6 +284,17 @@ def all_items() -> list[dict[str, Any]]:
 
 # ---------------------------------------------------------------- actions --
 
+
+_PLATFORM: dict | None = None
+
+
+def platform_info() -> dict:
+    """Linux, or Windows via WSL2 (untested) - Settings → Services labels it."""
+    global _PLATFORM
+    if _PLATFORM is None:
+        _PLATFORM = windowshost.platform()
+    return _PLATFORM
+
 class Refused(Exception):
     def __init__(self, reason: str, can_force: bool = False):
         super().__init__(reason)
@@ -501,7 +515,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return self._send(403, {"error": "forbidden"})
         if self.path == "/items":
-            return self._send(200, {"items": all_items()})
+            return self._send(200, {"items": all_items(), "platform": platform_info()})
         if self.path == "/uninstall/status":
             status, reply = uninstall.status()
             return self._send(status, reply)
@@ -517,6 +531,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(*gputune.handle("GET", self.path, {}))
         if self.path == "/browser":
             return self._send(200, browser_status())
+        if self.path in ("/clis", "/clis?fresh=1"):
+            return self._send(200, codingclis.detect(fresh=self.path.endswith("fresh=1")))
+        if self.path.startswith("/storage"):
+            return self._send(*storage.handle("GET", self.path, {}))
         if self.path.startswith("/core/voice"):
             return self._send(*voiceengines.handle("GET", self.path))
         if self.path.startswith("/core/engines"):
@@ -640,9 +658,46 @@ class Handler(BaseHTTPRequestHandler):
             status, reply = 500, {"error": "Could not configure the Hermes connection"}
         self._send(status, reply)
 
+    def _stream_cli(self) -> None:
+        """POST /clis/run (NDJSON events) and /clis/chat (chat-completion SSE): see codingclis."""
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > 48 * 1024 * 1024:
+            return self._send(413, {"error": "Request too large"})
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("Expected an object")
+            if self.path == "/clis/chat":
+                lines = source = codingclis.chat_stream(body)
+                kind = "text/event-stream"
+                first = next(lines)        # starts the CLI: a bad request still gets a plain error
+            else:
+                run_id, source = codingclis.run(body)
+                lines, kind = (json.dumps(e) + "\n" for e in source), "application/x-ndjson"
+                first = json.dumps({"type": "started", "run": run_id}) + "\n"
+        except (ValueError, OSError) as exc:
+            return self._send(400, {"error": str(exc)[:300]})
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            self.wfile.write(first.encode())
+            for line in lines:
+                self.wfile.write(line.encode())
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            source.close()             # the caller went away: end the CLI with it
+        self.close_connection = True
+
     def do_POST(self) -> None:
         if not self._authorized():
             return self._send(403, {"error": "forbidden"})
+        if self.path in ("/clis/run", "/clis/chat"):
+            return self._stream_cli()
+        if self.path == "/clis/stop":
+            return self._send(200, {"stopped": codingclis.stop(str(self._small_json().get("run") or ""))})
         if self.path.startswith("/rea/mods/"):
             length = min(int(self.headers.get("Content-Length") or 0), 8192)
             try:
@@ -699,6 +754,12 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 body = {}
             return self._comfynodes("POST", body if isinstance(body, dict) else {})
+        if self.path.startswith("/storage/"):
+            # Settings -> Storage + Models -> Manager -> Move (storage.py).
+            status, reply = storage.handle("POST", self.path, self._small_json())
+            if self.path in ("/storage/move", "/storage/locations/add", "/storage/locations/remove"):
+                log.info("%s -> %s", self.path, reply.get("error") or "ok")
+            return self._send(status, reply)
         if self.path.startswith("/models/"):
             # Studios' missing-files dialog (via Models): find model files on disk, link them in.
             try:
@@ -865,6 +926,8 @@ def main() -> None:
     threading.Thread(target=hermes_context_loop, daemon=True).start()
     threading.Thread(target=gputune.background_loop, daemon=True).start()
     threading.Thread(target=warm_caches, daemon=True).start()
+    storage.busy_check = busy_check
+    storage.start_background()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     log.info("bunny-hostctl on %s:%s (%d items)", HOST, PORT, len(ITEMS))
     server.serve_forever()

@@ -5,7 +5,8 @@ serves video, image, music and voice generation, LoRA training, a local LLM serv
 agent that drives all of them, and every GPU job goes through one shared queue.
 
 > **v1.0.** Built and run daily on a single Linux box (RX 7900 XTX, ROCm). The installer sets
-> it up on Arch Linux and Ubuntu; other setups are by hand. See [Known limits](#known-limits).
+> it up on Arch Linux and Ubuntu; other setups are by hand. **Windows support is untested**
+> (see [Windows](#windows-untested)). See [Known limits](#known-limits).
 
 ## What's in it
 
@@ -39,7 +40,8 @@ Trainer/      LoRA trainer          Llama/  llama-swap config + launcher
 
 ## Requirements
 
-- Linux with Docker + Compose, an AMD GPU with ROCm (the stack is tuned for RDNA3)
+- Linux with Docker + Compose, an AMD GPU with ROCm (the stack is tuned for RDNA3). Windows 10/11
+  through WSL2 is supported by the installer but untested (see [Windows](#windows-untested))
 - [ComfyUI](https://github.com/comfyanonymous/ComfyUI) on the host (port 8188), run by
   `BunnyBytes/supervisors/comfyui_supervisor.py`
 - The models each studio uses (download them in `/Models`)
@@ -78,6 +80,26 @@ base image is a 20+ GB download).
 
 The full first-run guide (tunnel, verification, going live) is in
 [`BunnyBytes/README.md`](../BunnyBytes/README.md).
+
+## Windows (untested)
+
+**Nothing here has been tried on a real Windows PC yet.** Expect rough edges, and include
+`install.log` from the Rocsy folder when you report a problem.
+
+Extract the installer (`tar -xf rocsy-…-installer.tar.gz` in a terminal, or Explorer on
+Windows 11) and run **`Install Rocsy (Windows).cmd`**. It reads the Windows version and:
+
+| Windows | What the installer does |
+|---|---|
+| 11, and 10 version 2004 (build 19041) or newer | Runs Rocsy inside **WSL2** (Ubuntu). It installs WSL2 + Ubuntu 24.04 if missing (admin rights and a restart), turns on systemd, installs Docker Engine, Compose and Buildx in the distro as root, then runs the Linux installer there. Containers that use the GPU get WSL's `/dev/dxg` instead of `/dev/kfd`/`/dev/dri` (`BunnyBytes/docker-compose.wsl.yml`, generated). Rocsy shortcuts on the Desktop and Start menu start WSL and the containers, then open Rocsy in an Edge app window; "Start with Windows" is optional. |
+| 10 before version 2004, 8.1, 8, 7 | Can't run WSL2 or Docker, so Rocsy can't run there. The installer offers a shortcut to a Rocsy server elsewhere on your network instead (Firefox 115 ESR is the last Firefox for Windows 7/8/8.1). |
+
+For the GPU, install the current AMD Windows driver, and AMD's
+[ROCm for WSL](https://rocm.docs.amd.com/projects/radeon/en/latest/docs/install/wsl/install-radeon.html)
+inside the Ubuntu distro, then run the installer again and pick Repair. ComfyUI's PyTorch is switched to
+the ROCm-for-WSL runtime automatically when it's there. GPU tuning
+and other host tools are Linux-only. Settings → Services shows the Windows version with an
+"untested" note.
 
 ## Known limits
 

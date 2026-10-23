@@ -26,12 +26,12 @@ DONE = {"complete", "completed", "failed", "cancelled", "canceled", "error", "in
 KREA_MODELS = ("krea2", "lustify", "qwen_image_21", "moss")
 VIDEO_MODELS = ("minimax_h3", "ltx_2_5", "wan_2_2")
 AGENTIC_VIDEO_MODELS = ("minimax_h3", "wan_2_2")
-VOICE_MODELS = ("qwen3", "indextts2", "fish_s2", "fish_v1")
+VOICE_MODELS = ("qwen3", "indextts2", "fish_s2", "fish_drama3")
 MUSIC_MODELS = ("yue2", "minimax_music3")
 # Shown with every job the Master Agent starts, so the user sees which model a service runs.
 MODEL_LABELS = {"minimax_h3": "MiniMax H3", "ltx_2_5": "LTX 2.5", "wan_2_2": "Wan 2.2", "krea2": "Krea 2", "lustify": "Lustify",
                 "qwen_image_21": "Qwen Image 2.1", "moss": "MOSS-Image", "qwen3": "Qwen3 TTS", "indextts2": "IndexTTS2",
-                "fish_s2": "Fish S2", "fish_v1": "Fish v1", "yue2": "YuE 2", "minimax_music3": "MiniMax Music 3", "ltx25": "LTX 2.5"}
+                "fish_s2": "Fish S2", "fish_drama3": "Fish Drama 3", "yue2": "YuE 2", "minimax_music3": "MiniMax Music 3", "ltx25": "LTX 2.5"}
 # The image studio's id stays "Krea" (routes, containers), but the agent and the chat call it Image:
 # "Krea" next to the "krea2" model kept being read as one thing.
 SERVICE_NAMES = {"Krea": "Image"}

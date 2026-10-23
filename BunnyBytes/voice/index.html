@@ -147,11 +147,33 @@
       <div class="page-toolbar">
         <div>
           <h1 id="add-heading">Add a character</h1>
-          <p class="field-hint">Upload a recording or import YouTube audio, trim a clean clip, and save it to the gallery.</p>
+          <p class="field-hint" id="add-intro">Upload a recording or import YouTube audio, trim a clean clip, and save it to the gallery.</p>
+        </div>
+        <div class="jobs-filter add-source" role="group" aria-label="Voice source">
+          <button type="button" class="chip" data-add-source="record" aria-pressed="true">From a recording</button>
+          <button type="button" class="chip" data-add-source="create" aria-pressed="false">Create a voice</button>
         </div>
       </div>
       <form id="voice-form" class="builder">
-        <div class="card builder-step">
+        <div class="card builder-step" id="design-step" hidden>
+          <div class="card-head is-static"><span class="card-title"><span class="step-num">1</span> Describe the voice</span></div>
+          <div class="card-body">
+            <div class="field-pair">
+              <div class="field-row"><label for="design-engine">Engine</label><select id="design-engine"></select></div>
+              <div class="field-row"><label for="design-language">Language</label><select id="design-language"><option>English</option><option>Chinese</option><option>Japanese</option><option>Korean</option><option>German</option><option>French</option><option>Russian</option><option>Portuguese</option><option>Spanish</option><option>Italian</option></select></div>
+            </div>
+            <span class="field-hint" id="design-engine-hint"></span>
+            <div class="field-row"><label for="design-description">Voice description</label><textarea id="design-description" rows="3" maxlength="1000" placeholder="Female, late 20s, warm low alto, slightly raspy, relaxed and playful, speaks a little fast with a smile in her voice"></textarea><span class="field-hint">Age, gender, pitch, timbre, accent, mood and pace. More detail gives a more specific voice.</span></div>
+            <div class="field-row"><label for="design-text">Sample line</label><textarea id="design-text" rows="3" maxlength="400">Hey, it's good to finally meet you. Let me tell you a little about myself, and you can decide if you like how I sound.</textarea><span class="field-hint">This clip becomes the character's reference. One or two sentences (5–15 s) clone best.</span></div>
+            <div class="action-row">
+              <button type="button" class="secondary-button" id="design-preview" disabled>Preview voice</button>
+              <span class="field-hint" id="design-state" aria-live="polite"></span>
+            </div>
+            <div class="design-takes" id="design-takes" role="radiogroup" aria-label="Previews" hidden></div>
+          </div>
+        </div>
+
+        <div class="card builder-step" id="record-step">
           <div class="card-head is-static"><span class="card-title"><span class="step-num">1</span> Recording</span></div>
           <div class="card-body">
             <label class="drop-zone drop" id="drop">
@@ -179,7 +201,7 @@
           </div>
         </div>
 
-        <div class="card builder-step">
+        <div class="card builder-step" id="clean-step">
           <div class="card-head is-static"><span class="card-title"><span class="step-num">2</span> Clean up</span></div>
           <div class="card-body">
             <div class="effects">
@@ -199,7 +221,7 @@
         </div>
 
         <div class="card builder-step">
-          <div class="card-head is-static"><span class="card-title"><span class="step-num">3</span> Character</span></div>
+          <div class="card-head is-static"><span class="card-title"><span class="step-num" id="character-step-num">3</span> Character</span></div>
           <div class="card-body">
             <div class="field-pair">
               <div class="field-row"><label for="voice-name">Name</label><input id="voice-name" name="name" type="text" required maxlength="100" placeholder="Character name"></div>

@@ -23,6 +23,13 @@
   let lastKey = "";
   let busyAction = false;
   let statusTimer = null;
+  // Windows (WSL2) installs: support is untested, so say so above the service list.
+  const platformNote = document.createElement("p");
+  platformNote.className = "bb-status";
+  platformNote.dataset.kind = "warn";
+  platformNote.hidden = true;
+  platformNote.style.cssText = "margin:0 0 12px;color:var(--bb-amber)";
+  groupsEl.before(platformNote);
 
   function setStatus(text, kind = "") {
     status.textContent = text;
@@ -277,6 +284,8 @@
         if (response.status === 401) { location.href = "/login?next=/Settings%23services"; return; }
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        platformNote.hidden = !data.platform?.untested;
+        platformNote.textContent = data.platform?.untested ? `${data.platform.name} · untested. ${data.platform.note}` : "";
         // Unchanged: keep the rows, so keyboard focus and hover tooltips survive the poll.
         // "since" jitters by microseconds per poll; the minute bucket keeps "up N min" ticking.
         const key = JSON.stringify(data.items, (k, v) => (k === "since" && v ? Math.round(v / 60) : v)) + Math.floor(Date.now() / 60000);

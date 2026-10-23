@@ -26,25 +26,37 @@ from .script_parser import Segment, parse_script
 
 INDEX_ROOT = ROOT / "models" / "legacy" / "IndexTTS2"
 FISH_S2_ROOT = ROOT / "models" / "legacy" / "FishAudioS2"
-FISH_V1_ROOT = ROOT / "models" / "legacy" / "FishAudio1"
+DRAMA3_ROOT = ROOT / "models" / "legacy" / "FishDrama3"
 INDEX_PYTHON = INDEX_ROOT / ".venv/bin/python"
 FISH_S2_PYTHON = FISH_S2_ROOT / ".venv/bin/python"
-FISH_V1_PYTHON = FISH_V1_ROOT / ".venv/bin/python"
 INDEX_MODEL = INDEX_ROOT / "checkpoints"
 FISH_S2_MODEL = FISH_S2_ROOT / "checkpoints/s2-pro"
-FISH_V1_MODEL = FISH_V1_ROOT / "checkpoints/fish-speech-1.5"
-FISH_V1_CODEC = FISH_V1_MODEL / "firefly-gan-vq-fsq-8x1024-21hz-generator.pth"
+DRAMA3_MODEL = DRAMA3_ROOT / "checkpoints"
+DRAMA3_GGUF = "drama-3-backbone-8bit-experts-Q3_K_S.gguf"
+DRAMA3_SERVER_BIN = DRAMA3_ROOT / "audio.cpp/build/linux-hip-release/bin/audiocpp_server"
 
 ENGINE_NAMES = {
     "indextts2": "IndexTTS2",
     "fish_s2": "Fish Audio S2 Pro",
-    "fish_v1": "Fish Audio 1.5",
+    "fish_drama3": "Fish Audio Drama 3",
 }
 GENERATION_LOCK = threading.Lock()
+# sitecustomize.py in here applies ROCSY_SDPA_BACKEND inside the engines' own Python processes.
+SDPA_SHIM = Path(__file__).resolve().parent / "sdpa_shim"
+
+
+def _attention_env(settings: dict) -> dict:
+    backend = str(settings.get("attention", "sdpa")).removeprefix("sdpa_")
+    if backend not in ("flash", "efficient", "math"):
+        return {}
+    path = os.pathsep.join(filter(None, (str(SDPA_SHIM), os.environ.get("PYTHONPATH", ""))))
+    return {"ROCSY_SDPA_BACKEND": backend, "PYTHONPATH": path}
 
 
 class _FishS2Server:
     """Own the bundled Fish S2 API process so its checkpoints stay resident."""
+
+    key = "fish_s2"
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -104,10 +116,11 @@ class _FishS2Server:
     def status(self) -> dict:
         with self._lock:
             active = self._process is not None and self._process.poll() is None
-            return {"fish_s2": active}
+            return {self.key: active}
 
     def ensure(self, device: str, settings: dict, log: Callable[[str], None]) -> None:
-        runtime_key = (device, bool(settings.get("half", False)), bool(settings.get("compile", False)))
+        runtime_key = (device, bool(settings.get("half", False)), bool(settings.get("compile", False)),
+                       str(settings.get("attention", "sdpa")))
         with self._lock:
             if self._process is not None and self._process.poll() is None and self._runtime_key == runtime_key:
                 return
@@ -128,6 +141,7 @@ class _FishS2Server:
             self._process = subprocess.Popen(
                 command, cwd=FISH_S2_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, errors="replace", start_new_session=True,
+                env={**os.environ, **_attention_env(settings)},
             )
             self._runtime_key = runtime_key
             threading.Thread(target=self._read_logs, args=(self._process,), daemon=True).start()
@@ -179,18 +193,100 @@ class _FishS2Server:
         output.write_bytes(audio)
 
 
+class _Drama3Server(_FishS2Server):
+    """Own audio.cpp's server for Drama 3 (native HIP build of the fish_drama3 port)."""
+
+    key = "fish_drama3"
+
+    def ensure(self, device: str, settings: dict, log: Callable[[str], None]) -> None:
+        runtime_key = (int(settings.get("context_length", 4096)),)
+        with self._lock:
+            if self._process is not None and self._process.poll() is None and self._runtime_key == runtime_key:
+                return
+            self._stop_locked()
+            self._logs = []
+            self._port = self._free_port()
+            config = DRAMA3_ROOT / "rocsy-server.json"
+            # Every expert layer stays on the GPU (cpu_expert_layers=0): the Q3_K package is sized for it.
+            config.write_text(json.dumps({
+                "host": "127.0.0.1", "port": self._port, "backend": "hip", "threads": 8,
+                "lazy_load": False, "max_loaded_models": 1, "idle_unload_ms": 0,
+                "models": [{
+                    "id": "drama-3", "family": "fish_drama3", "path": str(DRAMA3_MODEL / DRAMA3_GGUF),
+                    "task": "tts", "mode": "offline",
+                    "session_options": {"fish_drama3.cpu_expert_layers": 0,
+                                        "fish_drama3.context_length": runtime_key[0]},
+                }],
+            }, indent=2))
+            self._process = subprocess.Popen(
+                [str(DRAMA3_SERVER_BIN), "--config", str(config)], cwd=DRAMA3_ROOT,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
+                start_new_session=True,
+            )
+            self._runtime_key = runtime_key
+            threading.Thread(target=self._read_logs, args=(self._process,), daemon=True).start()
+
+        log("Starting the Drama 3 server; loading the model once into VRAM")
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline:
+            with self._lock:
+                process = self._process
+                logs = self._logs[-12:]
+            if process is None or process.poll() is not None:
+                self.stop()
+                raise RuntimeError("Drama 3 server stopped during startup:\n" + "\n".join(logs))
+            try:
+                models = json.loads(self._request("/v1/models", timeout=2))
+                if any(item.get("id") == "drama-3" for item in models.get("data", [])):
+                    log("Drama 3 is loaded and ready; later segments reuse this model")
+                    return
+            except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+                pass
+            time.sleep(0.5)
+        self.stop()
+        raise RuntimeError("Drama 3 server did not become ready within ten minutes")
+
+    def synthesize(self, segment: Segment, voice: dict, output: Path, settings: dict,
+                   log: Callable[[str], None]) -> None:
+        text = f"[{segment.emotion}] {segment.text}" if segment.emotion else segment.text
+        options = {
+            "temperature": float(settings.get("temperature", 1.0)),
+            "top_p": float(settings.get("top_p", 0.9)),
+            "seed": int(settings.get("seed", 42)),
+        }
+        if int(settings.get("max_new_tokens", 0)) > 0:
+            options["max_tokens"] = int(settings["max_new_tokens"])
+        payload = {
+            "model": "drama-3", "input": text,
+            "voice_ref": {"type": "path", "path": str(voice["audio_path"])},
+            "reference_text": voice.get("transcript", ""),
+            "options": options,
+        }
+        log("Generating with the resident Drama 3 model")
+        try:
+            audio = self._request("/v1/audio/speech", payload, timeout=900)
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[-2000:]
+            raise RuntimeError(f"Drama 3 server request failed ({exc.code}): {detail}") from exc
+        if len(audio) <= 44 or audio[:4] != b"RIFF":
+            raise RuntimeError("Drama 3 server returned no audio")
+        output.write_bytes(audio)
+
+
 FISH_S2_SERVER = _FishS2Server()
+DRAMA3_SERVER = _Drama3Server()
 atexit.register(FISH_S2_SERVER.stop)
+atexit.register(DRAMA3_SERVER.stop)
 
 
 def loaded_model_status() -> dict:
     """Return models intentionally kept alive by BunnyVoice."""
-    return FISH_S2_SERVER.status()
+    return {**FISH_S2_SERVER.status(), **DRAMA3_SERVER.status()}
 
 
 def unload_models() -> dict:
     """Release all persistent model processes. Safe to call repeatedly."""
-    return {"unloaded": ["fish_s2"] if FISH_S2_SERVER.stop() else []}
+    return {"unloaded": [server.key for server in (FISH_S2_SERVER, DRAMA3_SERVER) if server.stop()]}
 
 
 def _split_text(text: str, max_chars: int, min_chars: int) -> list[str]:
@@ -246,11 +342,11 @@ def _prepare_segments(segments: list[Segment], settings: dict) -> list[Segment]:
 
 
 def model_file_statuses() -> list[dict]:
-    """Return model readiness without importing PyTorch in three subprocesses."""
+    """Return model readiness without importing PyTorch in the engine subprocesses."""
     specs = [
         ("indextts2", INDEX_PYTHON, INDEX_MODEL, ["gpt.pth", "s2mel.pth"]),
         ("fish_s2", FISH_S2_PYTHON, FISH_S2_MODEL, ["codec.pth", "model.safetensors.index.json"]),
-        ("fish_v1", FISH_V1_PYTHON, FISH_V1_MODEL, ["model.pth", FISH_V1_CODEC.name]),
+        ("fish_drama3", DRAMA3_SERVER_BIN, DRAMA3_MODEL, [DRAMA3_GGUF]),
     ]
     return [
         {
@@ -265,9 +361,10 @@ def model_file_statuses() -> list[dict]:
     ]
 
 
-def _run(command: list[str], cwd: Path, log: Callable[[str], None]) -> None:
+def _run(command: list[str], cwd: Path, log: Callable[[str], None], env_extra: dict | None = None) -> None:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    env.update(env_extra or {})
     process = subprocess.Popen(
         command,
         cwd=cwd,
@@ -310,12 +407,12 @@ def resolve_device(python: Path, requested: str) -> str:
 def model_statuses() -> list[dict]:
     quick = model_file_statuses()
     specs = [(item["id"], {
-        "indextts2": INDEX_PYTHON, "fish_s2": FISH_S2_PYTHON, "fish_v1": FISH_V1_PYTHON,
+        "indextts2": INDEX_PYTHON, "fish_s2": FISH_S2_PYTHON, "fish_drama3": DRAMA3_SERVER_BIN,
     }[item["id"]], item["ready"]) for item in quick]
     def probe(spec) -> dict:
         key, python, ready = spec
-        gpu = False
-        if python.is_file():
+        gpu = key == "fish_drama3" and python.is_file()  # HIP-only build: no CPU path to probe
+        if python.is_file() and key != "fish_drama3":
             try:
                 gpu = resolve_device(python, "auto") == "cuda"
             except Exception:
@@ -348,7 +445,7 @@ def _index(segment: Segment, voice: dict, output: Path, device: str, settings: d
     if emotion:
         command += ["--emotion-text", emotion]
         command += ["--emotion-weight", str(settings.get("emotion_weight", 1.0))]
-    _run(command, INDEX_ROOT, log)
+    _run(command, INDEX_ROOT, log, _attention_env(settings))
 
 
 def _index_batch(tasks: list[tuple[Segment, dict, Path]], device: str, settings: dict,
@@ -376,7 +473,7 @@ def _index_batch(tasks: list[tuple[Segment, dict, Path]], device: str, settings:
         command.append(f"--{flag}" if settings.get(key, False) else f"--no-{flag}")
     if settings.get("verbose", False):
         command.append("--verbose")
-    _run(command, INDEX_ROOT, log)
+    _run(command, INDEX_ROOT, log, _attention_env(settings))
 
 
 def _fish_s2(segment: Segment, voice: dict, output: Path, device: str, settings: dict, work: Path, log) -> None:
@@ -384,44 +481,9 @@ def _fish_s2(segment: Segment, voice: dict, output: Path, device: str, settings:
     FISH_S2_SERVER.synthesize(segment, voice, output, settings, log)
 
 
-def _fish_v1(segment: Segment, voice: dict, output: Path, device: str, settings: dict, work: Path, log) -> None:
-    work.mkdir(parents=True, exist_ok=True)
-    prompt_wav = work / "prompt.wav"
-    _run([
-        str(FISH_V1_PYTHON), "-m", "fish_speech.models.vqgan.inference",
-        "--input-path", voice["audio_path"],
-        "--output-path", str(prompt_wav),
-        "--checkpoint-path", str(FISH_V1_CODEC),
-        "--device", device,
-    ], FISH_V1_ROOT, log)
-    semantic_dir = work / "semantic"
-    command = [
-        str(FISH_V1_PYTHON), "-m", "fish_speech.models.text2semantic.inference",
-        "--text", segment.text,
-        "--prompt-text", voice.get("transcript", ""),
-        "--prompt-tokens", str(prompt_wav.with_suffix(".npy")),
-        "--checkpoint-path", str(FISH_V1_MODEL),
-        "--output-dir", str(semantic_dir),
-        "--device", device,
-        "--temperature", str(settings.get("temperature", 0.7)),
-        "--top-p", str(settings.get("top_p", 0.7)),
-        "--repetition-penalty", str(settings.get("repetition_penalty", 1.2)),
-        "--seed", str(int(settings.get("seed", 42))),
-        "--compile" if settings.get("compile", False) else "--no-compile",
-        "--half" if device == "cuda" and settings.get("half", False) else "--no-half",
-        "--iterative-prompt" if settings.get("iterative_prompt", True) else "--no-iterative-prompt",
-        "--chunk-length", str(int(settings.get("chunk_length", 100))),
-    ]
-    if int(settings.get("max_new_tokens", 0)) > 0:
-        command += ["--max-new-tokens", str(int(settings["max_new_tokens"]))]
-    _run(command, FISH_V1_ROOT, log)
-    _run([
-        str(FISH_V1_PYTHON), "-m", "fish_speech.models.vqgan.inference",
-        "--input-path", str(semantic_dir / "codes_0.npy"),
-        "--output-path", str(output),
-        "--checkpoint-path", str(FISH_V1_CODEC),
-        "--device", device,
-    ], FISH_V1_ROOT, log)
+def _fish_drama3(segment: Segment, voice: dict, output: Path, device: str, settings: dict, work: Path, log) -> None:
+    DRAMA3_SERVER.ensure(device, settings, log)
+    DRAMA3_SERVER.synthesize(segment, voice, output, settings, log)
 
 
 def _silence(path: Path, seconds: float) -> None:
@@ -543,14 +605,16 @@ def generate_script(script: str, engine: str, voice_id: str, device_request: str
         script,
         default_voice["name"],
         default_emotion,
-        preserve_unknown_brackets=engine == "fish_s2",
+        preserve_unknown_brackets=engine in {"fish_s2", "fish_drama3"},
     )
     segment_settings = config.get("segments", {})
     segments = _prepare_segments(segments, segment_settings)
     if not segments:
         raise ValueError("The script contains no speech")
-    python = {"indextts2": INDEX_PYTHON, "fish_s2": FISH_S2_PYTHON, "fish_v1": FISH_V1_PYTHON}[engine]
-    device = resolve_device(python, device_request)
+    if engine == "fish_drama3":
+        device = "cuda"  # audio.cpp's HIP backend; it has no CPU mode in Rocsy
+    else:
+        device = resolve_device({"indextts2": INDEX_PYTHON, "fish_s2": FISH_S2_PYTHON}[engine], device_request)
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     output = OUTPUTS_DIR / f"{engine}-{time.strftime('%Y%m%d-%H%M%S')}.wav"
 
@@ -577,7 +641,7 @@ def generate_script(script: str, engine: str, voice_id: str, device_request: str
                 elif engine == "fish_s2":
                     _fish_s2(segment, voice, part, device, settings, work / f"s2-{index}", lambda line: update("Generating", max(2, int(index / total * 85)), line))
                 else:
-                    _fish_v1(segment, voice, part, device, settings, work / f"v1-{index}", lambda line: update("Generating", max(2, int(index / total * 85)), line))
+                    _fish_drama3(segment, voice, part, device, settings, work / f"drama3-{index}", lambda line: update("Generating", max(2, int(index / total * 85)), line))
             parts.append(part)
         if index_tasks:
             update("Generating batch", 8, f"Loading IndexTTS2 once for {len(index_tasks)} speech segments")

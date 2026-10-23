@@ -1,5 +1,15 @@
 ROCSY INSTALLER
 
+WINDOWS (UNTESTED): run "Install Rocsy (Windows).cmd" instead of the steps below.
+   It detects Windows 7, 8, 8.1, 10 and 11. On Windows 11, and Windows 10 version
+   2004 (build 19041) or newer, it sets up WSL2 + Ubuntu, systemd and Docker Engine
+   there, then runs this installer inside WSL2 and adds Rocsy shortcuts to the
+   Windows desktop and Start menu. Windows 7, 8, 8.1 and older Windows 10 can't run
+   WSL2 or Docker: it offers a shortcut to a Rocsy server on your network instead.
+   For the GPU: the current AMD Windows driver, plus AMD's ROCm for WSL in Ubuntu.
+   Windows support has not been tested on real hardware yet; keep install.log
+   (in the Rocsy folder) for bug reports.
+
 1. Extract this tar.gz archive with your archive manager.
 2. Open "Install Rocsy.desktop" from the extracted folder. Your desktop may ask
    you to allow launching this downloaded file.

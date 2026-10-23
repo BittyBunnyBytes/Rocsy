@@ -27,6 +27,8 @@ sys.path.append(str(BUNDLE / 'BunnyBytes' / 'hostctl'))
 import integrations  # noqa: E402  (the `rocsy` command + Rocsy Desktop; shared with the uninstall worker)
 import comfyinstall  # noqa: E402  (ComfyUI + its supervisor; shared with Models → Core Backend)
 import dockeraccess  # noqa: E402  (docker group + bind folders; shared with the host helper)
+import windowshost  # noqa: E402  (Windows via WSL2, untested: GPU override, Windows shortcuts)
+import pkgmanager  # noqa: E402  (APT, DNF, Zypper, pacman, APK, XBPS, eopkg, Portage; init systems)
 STATE_LOCK = threading.Lock()
 STATE = {'job_id': None, 'phase': 'idle', 'progress': 0, 'message': '', 'log': [], 'result': None}
 LOG_FILE = None  # <dest>/install.log once the destination exists: the full, untrimmed log
@@ -38,7 +40,11 @@ ERROR_LINE = re.compile(r'\bERROR\b|failed to solve|did not complete successfull
 TRANSIENT_DOWNLOAD = re.compile(r'failed retrieving file|failed to retrieve some files|Failed to fetch|'
                                 r'Connection reset|Connection timed out|Temporary failure resolving|'
                                 r'Could not connect|SSL_ERROR|Recv failure|unexpected EOF|'
-                                r'ReadTimeoutError|Connection broken|IncompleteRead', re.I)
+                                r'ReadTimeoutError|Connection broken|IncompleteRead|'
+                                # DNF/YUM, Zypper, APK, XBPS, Portage
+                                r'Curl error|Cannot download|Failed to download|Download \(curl\) error|'
+                                r'Timeout was reached|Could not resolve host|temporary error|network error|'
+                                r'Operation too slow|Unable to connect|failed to fetch', re.I)
 # What the installer can set up. Services are Compose profiles (COMPOSE_PROFILES in BunnyBytes/.env,
 # so later rebuilds keep the choice); backends run once, after Rocsy is up, and each may fail alone.
 COMPONENTS = {'motion': True, 'rea': False, 'trainer': False, 'comfyui': True, 'hermes': True, 'ytdlp': True}
@@ -69,17 +75,10 @@ def run_install(job_id, payload):
 
 
 def distro():
-    values = {}
-    try:
-        for line in Path('/etc/os-release').read_text().splitlines():
-            if '=' in line:
-                key, value = line.split('=', 1)
-                values[key] = value.strip('"')
-    except OSError:
-        pass
-    distro_id = values.get('ID', '').lower()
-    family = 'arch' if distro_id == 'arch' or 'arch' in values.get('ID_LIKE', '').split() else 'ubuntu' if distro_id in {'ubuntu', 'linuxmint', 'mint'} or 'ubuntu' in values.get('ID_LIKE', '').split() else 'other'
-    return {'id': distro_id, 'name': values.get('PRETTY_NAME', 'Linux'), 'family': family}
+    """This Linux, by its package manager: family = the manager id ('apt', 'dnf', 'pacman', …),
+    or 'other' when there is none Rocsy can drive (unknown, or an immutable system)."""
+    info = pkgmanager.detect()
+    return {**info, 'family': info['manager'] or 'other', 'manual': pkgmanager.manual_steps(info)}
 
 
 def prerequisites():
@@ -175,13 +174,15 @@ def privileged(command):
     if os.geteuid() == 0:
         return command
     # In the terminal, sudo asks for the password right there (it reads /dev/tty, not stdin).
-    if TERMINAL['on'] and sys.stdin.isatty() and (executable := shutil.which('sudo')):
+    if TERMINAL['on'] and sys.stdin.isatty() and (executable := shutil.which('sudo') or shutil.which('doas')):
         return [executable, *command]
     if executable := shutil.which('pkexec'):
         return [executable, *command]
     if executable := shutil.which('sudo'):
         return [executable, '-n', *command]
-    raise RuntimeError('Install a graphical authentication agent (pkexec) or configure sudo, then retry.')
+    if executable := shutil.which('doas'):
+        return [executable, '-n', *command]
+    raise RuntimeError('Install a graphical authentication agent (pkexec) or configure sudo or doas, then retry.')
 
 
 def package_installed(name):
@@ -240,8 +241,10 @@ def prepare_bind_mount_permissions(compose_dir, use_group, progress):
 
 
 def log_docker_diagnostics():
-    for command in (['systemctl', 'status', 'docker.service', '--no-pager', '--full'],
-                    ['journalctl', '-u', 'docker.service', '-n', '30', '--no-pager']):
+    commands = ((['systemctl', 'status', 'docker.service', '--no-pager', '--full'],
+                 ['journalctl', '-u', 'docker.service', '-n', '30', '--no-pager'])
+                if pkgmanager.init_system() == 'systemd' else (['rc-service', 'docker', 'status'], ['sv', 'status', 'docker']))
+    for command in commands:
         try:
             result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
                                     text=True, errors='replace', timeout=10)
@@ -257,84 +260,195 @@ def ensure_docker(progress, allow_system_upgrade=False):
     if not state['python']:
         raise RuntimeError('Python 3.9 or newer is required.')
     if not (state['docker'] and state['compose'] and state['buildx']):
-        family = distro()['family']
-        if family == 'arch':
-            manager = shutil.which('pacman')
-            if not manager:
-                raise RuntimeError('pacman is unavailable; install Docker, Compose and Buildx manually.')
-            packages = ['docker', 'docker-compose', 'docker-buildx']
-            command = [manager, '-Syu' if allow_system_upgrade else '-S', '--needed', '--noconfirm', *packages]
-            try:
-                # pacman keeps what it already downloaded, so a retry only fetches the missing files.
-                run_with_retries(privileged(command), progress, 8,
-                                 'Updating the system and installing Docker packages…' if allow_system_upgrade else 'Downloading and installing Docker packages…',
-                                 'Retrying failed package downloads')
-            except CommandFailed as exc:
-                if '404' not in exc.output:
-                    raise
-                if not allow_system_upgrade:
-                    raise RuntimeError('Docker package URLs returned 404. Select “Refresh mirrors and update the system” in the installer, then retry.') from exc
-                mirrors = shutil.which('cachyos-rate-mirrors') if distro()['id'] == 'cachyos' else None
-                if not mirrors:
-                    raise RuntimeError('Package URLs still return 404 after a system refresh. Update your mirrors, then retry.') from exc
-                run_command(privileged([mirrors]), progress, 9, 'Refreshing CachyOS mirrors…')
-                run_command(privileged(command), progress, 12, 'Retrying the system update and Docker installation…')
-        elif family == 'ubuntu':
-            manager = shutil.which('apt-get')
-            if not manager:
-                raise RuntimeError('apt-get is unavailable; install Docker, Compose and Buildx manually.')
-            official = package_installed('docker-ce')
-            if state['docker'] and not official and not package_installed('docker.io'):
-                raise RuntimeError('An existing Docker installation is not managed by apt. Install its missing plugins manually.')
-            packages = (['docker-compose-plugin', 'docker-buildx-plugin'] if official
-                        else ['docker.io', 'docker-compose-v2', 'docker-buildx'])
-            run_with_retries(privileged([manager, 'update']), progress, 6, 'Updating package lists…',
-                             'Retrying package list downloads')
-            run_with_retries(privileged([manager, 'install', '-y', *packages]), progress, 12,
-                             'Downloading and installing Docker packages…', 'Retrying failed package downloads')
+        host = distro()
+        manager = host['manager']
+        if host['immutable']:
+            raise RuntimeError(f'{host["name"]} has a read-only system ({host["immutable"]}), so the installer can\'t add Docker. '
+                               'Follow “Manual setup commands” in the installer, then retry.')
+        if not manager:
+            raise RuntimeError(f'No supported package manager was found. Install Docker Engine, Compose and Buildx ({pkgmanager.DOCKER_DOCS}), then retry.')
+        if manager == 'pacman':
+            install_docker_pacman(host, progress, allow_system_upgrade)
         else:
-            raise RuntimeError('Automatic Docker setup supports Arch Linux and Ubuntu-based systems. Install Docker Engine, Compose and Buildx, then retry.')
+            install_docker_packages(host, state, progress)
         state = prerequisites()
         if not (state['docker'] and state['compose'] and state['buildx']):
-            raise RuntimeError('Docker packages installed, but Docker Compose or Buildx is unavailable. Check the log and retry.')
+            missing = [name for key, name in (('docker', 'Docker Engine'), ('compose', 'Docker Compose'), ('buildx', 'Buildx')) if not state[key]]
+            raise RuntimeError(f'{", ".join(missing)} still missing after installing with {host["manager_name"]}. '
+                               f'Install {"it" if len(missing) == 1 else "them"} by hand ({pkgmanager.DOCKER_DOCS}), then retry.')
     if not state['daemon']:
-        systemctl = shutil.which('systemctl')
-        if systemctl and not command_ok([systemctl, 'is-active', '--quiet', 'docker.service']):
-            try:
-                run_command(privileged([systemctl, 'enable', '--now', 'docker.service']), progress, 18,
-                            'Starting Docker Engine…')
-            except CommandFailed:
-                log_line('Docker service did not start; trying Docker socket activation…')
-                try:
-                    run_command(privileged([systemctl, 'enable', '--now', 'docker.socket']), progress, 19,
-                                'Starting Docker socket…')
-                except CommandFailed as exc:
-                    log_docker_diagnostics()
-                    raise RuntimeError('Docker Engine could not start. Read the service diagnostics in the installer log.') from exc
+        start_docker_service(progress)
         if command_ok(['docker', 'info']):
             return False
+        manager = distro()['manager']
+        if not (shutil.which('sg') or shutil.which('newgrp')) and manager and pkgmanager.packages(manager, 'shadow'):
+            # BusyBox systems (Alpine, Void) have no sg/newgrp/usermod without the shadow tools.
+            run_with_retries(privileged(pkgmanager.install_command(manager, pkgmanager.packages(manager, 'shadow'))),
+                             progress, 20, 'Installing the shadow tools for Docker group access…', 'Retrying failed package downloads')
         if not (shutil.which('sg') or shutil.which('newgrp')):
             raise RuntimeError('Docker is running, but this session cannot access it and neither sg nor newgrp is available.')
         try:
             docker_group = grp.getgrnam('docker')
         except KeyError:
-            groupadd = shutil.which('groupadd')
-            if not groupadd:
+            if groupadd := shutil.which('groupadd'):
+                run_command(privileged([groupadd, '-f', 'docker']), progress, 21, 'Preparing Docker access…')
+            elif addgroup := shutil.which('addgroup'):
+                run_command(privileged([addgroup, '-S', 'docker']), progress, 21, 'Preparing Docker access…')
+            else:
                 raise RuntimeError('Docker group is missing and groupadd is unavailable.')
-            run_command(privileged([groupadd, '-f', 'docker']), progress, 21, 'Preparing Docker access…')
             docker_group = grp.getgrnam('docker')
         username = pwd.getpwuid(os.getuid()).pw_name
         if username not in docker_group.gr_mem and pwd.getpwuid(os.getuid()).pw_gid != docker_group.gr_gid:
-            usermod = shutil.which('usermod')
-            if not usermod:
+            if usermod := shutil.which('usermod'):
+                command = [usermod, '-aG', 'docker', username]
+            elif addgroup := shutil.which('addgroup'):
+                command = [addgroup, username, 'docker']  # BusyBox
+            else:
                 raise RuntimeError('usermod is unavailable; grant this account Docker access manually.')
-            run_command(privileged([usermod, '-aG', 'docker', username]), progress, 23,
-                        'Granting this account Docker access…')
+            run_command(privileged(command), progress, 23, 'Granting this account Docker access…')
         if not command_ok(docker_command(['docker', 'info'], True)):
             log_docker_diagnostics()
             raise RuntimeError('Docker is installed, but this account cannot reach the daemon. Check the log, then sign out and back in if group membership was just changed.')
         return True
     return False
+
+
+def install_docker_pacman(host, progress, allow_system_upgrade):
+    """pacman: Docker, Compose and Buildx; a 404 means a stale package database (offer -Syu)."""
+    manager = shutil.which('pacman')
+    if not manager:
+        raise RuntimeError('pacman is unavailable; install Docker, Compose and Buildx manually.')
+    packages = ['docker', 'docker-compose', 'docker-buildx']
+    command = [manager, '-Syu' if allow_system_upgrade else '-S', '--needed', '--noconfirm', *packages]
+    try:
+        # pacman keeps what it already downloaded, so a retry only fetches the missing files.
+        run_with_retries(privileged(command), progress, 8,
+                         'Updating the system and installing Docker packages…' if allow_system_upgrade else 'Downloading and installing Docker packages…',
+                         'Retrying failed package downloads')
+    except CommandFailed as exc:
+        if '404' not in exc.output:
+            raise
+        if not allow_system_upgrade:
+            raise RuntimeError('Docker package URLs returned 404. Select “Refresh mirrors and update the system” in the installer, then retry.') from exc
+        mirrors = shutil.which('cachyos-rate-mirrors') if host['id'] == 'cachyos' else None
+        if not mirrors:
+            raise RuntimeError('Package URLs still return 404 after a system refresh. Update your mirrors, then retry.') from exc
+        run_command(privileged([mirrors]), progress, 9, 'Refreshing CachyOS mirrors…')
+        run_command(privileged(command), progress, 12, 'Retrying the system update and Docker installation…')
+
+
+def refresh_packages(manager, progress, percent=6):
+    if refresh := pkgmanager.refresh_command(manager):
+        run_with_retries(privileged(refresh), progress, percent, 'Updating package lists…', 'Retrying package list downloads')
+
+
+def install_docker_packages(host, state, progress):
+    """APT, DNF/YUM, Zypper, APK, XBPS, eopkg, Portage: the distro's Docker packages, or Docker's own
+    repository where the distro has no Docker Engine / Compose plugin / Buildx (RHEL rebuilds, older Debian)."""
+    manager = host['manager']
+    if manager == 'apt':
+        official = package_installed('docker-ce')
+        if state['docker'] and not official and not package_installed('docker.io'):
+            raise RuntimeError('An existing Docker installation is not managed by apt. Install its missing plugins manually.')
+    else:
+        official = False
+    refresh_packages(manager, progress)
+    packages = ['docker-compose-plugin', 'docker-buildx-plugin'] if official else pkgmanager.docker_packages(manager)
+    if packages:
+        run_with_retries(privileged(pkgmanager.install_command(manager, packages)), progress, 12,
+                         'Downloading and installing Docker packages…', 'Retrying failed package downloads')
+    state = prerequisites()
+    if state['docker'] and state['compose'] and state['buildx']:
+        return
+    # The distro has no (or an old) Docker Engine, Compose plugin or Buildx: Docker's own repository.
+    log_line(f'{host["manager_name"]} packages left part of Docker missing; trying Docker’s own repository.')
+    if not add_docker_repository(host, progress):
+        if not packages:
+            raise RuntimeError(f'{host["manager_name"]} has no Docker packages here. Install Docker Engine, Compose and Buildx ({pkgmanager.DOCKER_DOCS}), then retry.')
+        return  # ensure_docker reports what is still missing
+    command = pkgmanager.install_command(manager, pkgmanager.DOCKER_CE_PACKAGES)
+    if manager in ('dnf', 'yum'):
+        command.insert(command.index('-y'), '--allowerasing')  # docker-ce replaces Fedora's moby-engine
+    run_with_retries(privileged(command), progress, 14, 'Installing Docker from Docker’s repository…', 'Retrying failed package downloads')
+
+
+def download(url, timeout=60):
+    import urllib.request
+    with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310  (fixed https URLs below)
+        return response.read()
+
+
+def install_root_file(data, target, progress, percent, message):
+    """Write `data` to a root-owned file through the privileged helper (sudo/pkexec/doas)."""
+    import tempfile
+    with tempfile.NamedTemporaryFile(delete=False) as stream:
+        stream.write(data)
+    try:
+        os.chmod(stream.name, 0o644)
+        run_command(privileged(['install', '-D', '-m', '644', stream.name, str(target)]), progress, percent, message)
+    finally:
+        os.unlink(stream.name)
+
+
+def add_docker_repository(host, progress):
+    """Docker's own APT or RPM repository (docs.docker.com/engine/install). Returns False when
+    this distro has none, so the distro packages that do exist are installed instead."""
+    values = pkgmanager.os_release()
+    manager = host['manager']
+    try:
+        if manager == 'apt' and (repo := pkgmanager.docker_apt_repo(values)):
+            base, codename = repo
+            arch = subprocess.run(['dpkg', '--print-architecture'], capture_output=True, text=True, timeout=10).stdout.strip() or 'amd64'
+            install_root_file(download(f'https://download.docker.com/linux/{base}/gpg'), '/etc/apt/keyrings/docker.asc',
+                              progress, 7, 'Adding Docker’s package signing key…')
+            line = f'deb [arch={arch} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/{base} {codename} stable\n'
+            install_root_file(line.encode(), '/etc/apt/sources.list.d/docker.list', progress, 7, 'Adding Docker’s APT repository…')
+            refresh_packages(manager, progress, 8)
+            return True
+        if manager in ('dnf', 'yum') and (url := pkgmanager.docker_rpm_repo(values)):
+            install_root_file(download(url), '/etc/yum.repos.d/docker-ce.repo', progress, 7, 'Adding Docker’s RPM repository…')
+            return True
+    except OSError as exc:  # urllib errors are OSErrors
+        log_line(f'Could not add Docker’s repository: {exc}')
+    return False
+
+
+def start_docker_service(progress):
+    """Enable + start Docker under systemd, OpenRC, dinit or runit, then wait for it to answer."""
+    init = pkgmanager.init_system()
+    commands = pkgmanager.service_commands(init)
+    if not commands:
+        raise RuntimeError(f'Start the docker service with your init system ({init}), then retry.')
+    if init == 'systemd':
+        systemctl = shutil.which('systemctl')
+        if command_ok([systemctl, 'is-active', '--quiet', 'docker.service']):
+            return
+        try:
+            run_command(privileged([systemctl, 'enable', '--now', 'docker.service']), progress, 18, 'Starting Docker Engine…')
+        except CommandFailed:
+            log_line('Docker service did not start; trying Docker socket activation…')
+            try:
+                run_command(privileged([systemctl, 'enable', '--now', 'docker.socket']), progress, 19, 'Starting Docker socket…')
+            except CommandFailed as exc:
+                log_docker_diagnostics()
+                raise RuntimeError('Docker Engine could not start. Read the service diagnostics in the installer log.') from exc
+        return
+    try:
+        for command in commands:
+            run_command(privileged([shutil.which(command[0]) or command[0], *command[1:]]), progress, 18,
+                        f'Starting Docker Engine ({init})…')
+    except CommandFailed as exc:
+        log_docker_diagnostics()
+        raise RuntimeError('Docker Engine could not start. Read the service diagnostics in the installer log.') from exc
+    for _ in range(20):  # runit/OpenRC return before dockerd listens
+        if os.path.exists('/var/run/docker.sock'):
+            break
+        time.sleep(1)
+
+
+def systemd_user_ok():
+    """User units (host helper, ComfyUI supervisor) need systemd as the init system."""
+    return pkgmanager.init_system() == 'systemd' and shutil.which('systemctl') is not None
 
 
 def safe_destination(raw):
@@ -624,19 +738,23 @@ def ensure_host_tools(progress, components, host_helper, download_comfy):
         missing.append('yaml')
     if (host_helper or (components['comfyui'] and download_comfy)) and not command_ok([sys.executable, '-c', 'import ensurepip, venv']):
         missing.append('venv')
+    # Core Backend builds llama.cpp on the host: cmake, Ninja and a C++ compiler.
+    if host_helper and not (shutil.which('cmake') and (shutil.which('ninja') or shutil.which('samu'))
+                            and (shutil.which('c++') or shutil.which('g++'))):
+        missing.append('build')
     if not missing:
         return
-    family = distro()['family']
-    names = {'arch': {'git': 'git', 'yaml': 'python-yaml', 'venv': 'python'},
-             'ubuntu': {'git': 'git', 'yaml': 'python3-yaml', 'venv': 'python3-venv'}}.get(family)
-    if not names:
+    host = distro()
+    manager = host['manager']
+    packages = pkgmanager.packages(manager, *missing) if manager else []
+    if not packages:
+        if 'build' in missing and len(missing) == 1:
+            log_line('cmake/Ninja/a C++ compiler are missing; Core Backend builds need them. Install them, then build again.')
+            return
         raise RuntimeError(f'Install {", ".join(missing)} for Python 3 (or turn those components off), then retry.')
-    packages = sorted({names[item] for item in missing})
-    if family == 'arch':
-        command = [shutil.which('pacman') or 'pacman', '-S', '--needed', '--noconfirm', *packages]
-    else:
-        command = [shutil.which('apt-get') or 'apt-get', 'install', '-y', *packages]
-    run_with_retries(privileged(command), progress, 24, f'Installing {", ".join(packages)}…', 'Retrying failed package downloads')
+    refresh_packages(manager, progress, 24)
+    run_with_retries(privileged(pkgmanager.install_command(manager, packages)), progress, 24,
+                     f'Installing {", ".join(packages)}…', 'Retrying failed package downloads')
 
 
 def run_backend_job(dest, job, use_group, progress, percent, message):
@@ -705,8 +823,14 @@ def install_backends(dest, comfy, existing_comfy, components, use_group, progres
         def comfyui():
             if not existing_comfy:
                 setup_comfyui(comfy, progress)
+            if not systemd_user_ok():
+                return (f'Installed, but the supervisor needs systemd. Start ComfyUI yourself: '
+                        f'{comfy}/.venv/bin/python {comfy}/main.py --listen 127.0.0.1 --port 8188')
             setup_supervisor(dest, comfy)
-            return 'Ready; the studios start it when they need it.' if not existing_comfy else 'Supervisor set up for your ComfyUI folder.'
+            note = ''
+            if windowshost.is_wsl() and not windowshost.gpu_status()['rocm_wsl']:
+                note = f' ROCm for WSL is missing, so it can\'t use the GPU yet: {windowshost.ROCM_WSL_DOCS}'
+            return ('Ready; the studios start it when they need it.' if not existing_comfy else 'Supervisor set up for your ComfyUI folder.') + note
         attempt('ComfyUI', comfyui)
     if components['hermes'] and not hermes_ready(dest):
         def hermes():
@@ -718,6 +842,58 @@ def install_backends(dest, comfy, existing_comfy, components, use_group, progres
             return 'Installed and running.'
         attempt('Hermes Agent', hermes)
     return results
+
+
+def check_wsl(payload, dest):
+    """Windows (WSL2, untested): fail before copying anything when the distro isn't ready."""
+    if not windowshost.is_wsl():
+        return None
+    windows = windowshost.windows_version()
+    if windows and not windows['wsl2']:
+        raise ValueError(windows['reason'])
+    if not Path('/run/systemd/system').is_dir():
+        raise ValueError('systemd is off in this WSL distro. Run “Install Rocsy (Windows).cmd” from Windows: '
+                         'it turns systemd on and restarts the distro.')
+    if (payload.get('desktop_app') or payload.get('windows_autostart')) and not windowshost.SAFE_DEST.match(str(dest)):
+        raise ValueError('For the Windows shortcuts, the Rocsy folder may only use letters, digits, spaces and . _ - /')
+    return windows
+
+
+def setup_wsl_compose(compose_dir, env_file, use_group, progress):
+    """GPU containers get WSL's /dev/dxg instead of /dev/kfd + /dev/dri (docker-compose.wsl.yml)."""
+    progress(88, 'Adapting the containers to WSL (Windows, untested)…')
+    version = subprocess.run(docker_command(['docker', 'compose', 'version', '--short'], use_group),
+                             capture_output=True, text=True, timeout=30).stdout
+    if not windowshost.compose_supports_override(version):
+        raise RuntimeError(f'Docker Compose {version.strip() or "(unknown)"} is too old for WSL; 2.24 or newer is needed.')
+    result = subprocess.run(docker_command(['docker', 'compose', '-f', 'docker-compose.yml', *profile_args(ALL_PROFILES),
+                                            'config', '--no-interpolate', '--format', 'json'], use_group),
+                            cwd=compose_dir, capture_output=True, text=True, timeout=120)
+    if result.returncode:
+        raise RuntimeError('docker compose config failed: ' + (result.stderr.strip().splitlines() or ['?'])[-1])
+    gpu = windowshost.gpu_status()
+    (compose_dir / windowshost.OVERRIDE_NAME).write_text(
+        windowshost.compose_override(json.loads(result.stdout), gpu['dxg'], gpu['rocm_wsl']))
+    set_env_value(env_file, 'COMPOSE_FILE', windowshost.compose_files_value(compose_dir))
+    if not gpu['dxg']:
+        log_line('WSL has no GPU (/dev/dxg missing): containers start without one. Install the current AMD '
+                 'Windows driver, then run Repair.')
+    elif not gpu['rocm_wsl']:
+        log_line(f'ROCm for WSL is not installed in this distro, so ROCm apps can\'t use the GPU yet: {windowshost.ROCM_WSL_DOCS}')
+    return gpu
+
+
+def apply_windows_shortcuts(dest, payload, info, distro):
+    """Rocsy Desktop on Windows = Desktop + Start menu shortcuts (Edge app window); optional Startup entry."""
+    windowshost.remove_shortcuts(info.get('windows_shortcuts'), dest)
+    info.pop('windows_shortcuts', None)
+    if not (payload.get('desktop_app') or payload.get('windows_autostart')):
+        return None
+    port = int(env_value(dest / 'BunnyBytes' / '.env', 'GATEWAY_PORT') or 8080)
+    record = windowshost.install_shortcuts(dest, distro, port, dest / 'BunnyBytes/gateway/static/icons/rocsy.ico',
+                                           bool(payload.get('desktop_app')), bool(payload.get('windows_autostart')))
+    info['windows_shortcuts'] = record
+    return record
 
 
 def install(payload, progress=lambda _percent, _message: None):
@@ -771,6 +947,11 @@ def install(payload, progress=lambda _percent, _message: None):
             raise ValueError('bunny-hostctl is already set up for another Rocsy installation. Turn off the host services helper.')
     if type(payload.get('allow_system_upgrade', False)) is not bool:
         raise ValueError('Choose whether system updates are allowed.')
+    if type(payload.get('windows_autostart', False)) is not bool:
+        raise ValueError('Choose whether Rocsy starts when you sign in to Windows.')
+    windows = check_wsl(payload, dest)
+    if windows:
+        payload = {**payload, 'desktop_launcher': False}  # Linux desktop files; Windows gets shortcuts instead
     components = chosen_components(payload.get('components'), dest if prior and mode in {'update', 'repair'} else None)
     owned_destination = not dest.exists() or not any(dest.iterdir())
     if not prior and dest.exists() and any(dest.iterdir()) and not payload.get('allow_existing'):
@@ -800,6 +981,8 @@ def install(payload, progress=lambda _percent, _message: None):
         run_command(docker_command(['docker', 'compose', *profile_args(ALL_PROFILES), 'down', '--remove-orphans', '--volumes'], use_group),
                     progress, 25, 'Removing Rocsy containers and volumes…', cwd=compose_dir)
         remove_managed_launcher(prior, dest)
+        if windows:
+            windowshost.remove_shortcuts(prior.get('windows_shortcuts'), dest)
         remove_supervisor(dest)
         integrations.remove_all(dest)
         shutil.rmtree(dest)
@@ -878,13 +1061,19 @@ def install(payload, progress=lambda _percent, _message: None):
                                       'owned_destination': owned_destination,
                                       'password_mode': password_mode}) + '\n')
     progress(85, 'Preparing the host helper…')
-    setup_host_helper(dest, env_file, payload.get('host_helper', False))
+    if systemd_user_ok():
+        setup_host_helper(dest, env_file, payload.get('host_helper', False))
+    else:
+        # OpenRC/runit/dinit systems: no user units, so no helper (Settings → Services, uninstall from Settings).
+        log_line('No systemd here: the host services helper is skipped. Uninstall with `docker compose down` in BunnyBytes/.')
+        payload = {**payload, 'host_helper': False}
     compose_dir = dest / 'BunnyBytes'
     previous_profiles = set(env_value(env_file, 'COMPOSE_PROFILES').split(',')) - {''}
     profiles = [name for name in SERVICE_PROFILES if components[name]]
     if hermes_ready(dest):
         profiles.append('hermes')  # its image builds from the downloaded source
     set_env_value(env_file, 'COMPOSE_PROFILES', ','.join(profiles))
+    gpu = setup_wsl_compose(compose_dir, env_file, use_group, progress) if windows else None
     prepare_bind_folders(compose_dir)
     # Services turned off in an Update/Repair: stop and remove their containers (data volumes stay).
     dropped = [service for name in sorted(previous_profiles - set(profiles)) for service in PROFILE_SERVICES.get(name, [])]
@@ -911,7 +1100,20 @@ def install(payload, progress=lambda _percent, _message: None):
         marker.write_text(json.dumps(info) + '\n')
     progress(98, 'Setting up the rocsy command and Rocsy Desktop…')
     info = json.loads(marker.read_text())
-    added = apply_integrations(dest, payload, info)
+    shortcuts = None
+    if windows:
+        # Rocsy Desktop is a Windows shortcut here; the Linux menu entry would need WSLg + Chromium.
+        added = apply_integrations(dest, {**payload, 'desktop_app': False}, info)
+        progress(98, 'Creating the Windows shortcuts…')
+        try:
+            shortcuts = apply_windows_shortcuts(dest, payload, info, os.environ.get('WSL_DISTRO_NAME', ''))
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
+            log_line(f'Windows shortcuts failed: {exc}')
+            backends.append({'name': 'Windows shortcuts', 'ok': False,
+                             'message': f'{exc} Start Rocsy with `rocsy up` in Ubuntu, then open http://127.0.0.1:8080/.'})
+        info['windows_autostart'] = bool(payload.get('windows_autostart')) and bool(shortcuts)
+    else:
+        added = apply_integrations(dest, payload, info)
     info['host_helper'] = payload.get('host_helper', False)
     marker.write_text(json.dumps(info) + '\n')
     progress(99, 'Rocsy containers started.')
@@ -921,7 +1123,9 @@ def install(payload, progress=lambda _percent, _message: None):
             'docker_group_added': docker_group_added, 'docker_session_needs_refresh': use_group,
             'command': f'cd {shlex.quote(str(compose_dir))} && docker compose up -d --build', 'comfy': str(comfy),
             'desktop_launcher': str(launcher) if launcher else None, 'backends': backends,
-            'components': components}
+            'components': components,
+            'windows': windowshost.platform() if windows else None, 'gpu': gpu,
+            'windows_shortcuts': shortcuts['links'] if shortcuts else []}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -939,7 +1143,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urlsplit(self.path)
         if url.path == '/':
-            config = {'preview': False, 'token': TOKEN, 'distro': distro(), 'prerequisites': prerequisites(), 'default_dir': DEFAULT_DIR}
+            config = {'preview': False, 'token': TOKEN, 'distro': distro(), 'prerequisites': prerequisites(), 'default_dir': DEFAULT_DIR,
+                      'windows': windowshost.platform() if windowshost.is_wsl() else None}
             html = UI.replace('__ROCSY_CONFIG__', json.dumps(config).replace('<', '\\u003c'))
             return self._send(200, html, 'text/html')
         if url.path == '/status' and self.headers.get('Host') == f'127.0.0.1:{self.server.server_port}':
@@ -969,7 +1174,9 @@ class Handler(BaseHTTPRequestHandler):
                 password_required = bool(prior and reinstall_password_required(dest, prior))
                 # Update/Repair start from what this install has now.
                 current = {'terminal_command': integrations.owns_command(dest),
-                           'desktop_app': integrations.owns_desktop(dest),
+                           'desktop_app': (bool((prior.get('windows_shortcuts') or {}).get('links')) if windowshost.is_wsl()
+                                           else integrations.owns_desktop(dest)),
+                           'windows_autostart': bool(prior.get('windows_autostart')),
                            'host_helper': host_helper_installed(dest),
                            'components': current_components(dest)} if prior else None
                 return self._send(200, json.dumps({'installed': bool(prior),
@@ -1006,7 +1213,8 @@ The default install: Rocsy in the default folder with Motion, ComfyUI (downloade
 supervisor), Hermes Agent and yt-dlp; REA and the Trainer are left out. It sets a generated
 password (printed at the end), the rocsy command, Rocsy Desktop and the host services helper.
 On a folder that already has Rocsy, the default is Update, which keeps everything as it is.
-Without a graphical session the installer starts in the terminal by itself."""
+Without a graphical session the installer starts in the terminal by itself.
+On Windows, run "Install Rocsy (Windows).cmd" instead (untested): it runs this inside WSL2."""
 FLAG_ALIASES = {'--cli': '--terminal', '-t': '--terminal', '-y': '--defaults', '--yes': '--defaults', '-h': '--help'}
 
 
@@ -1019,7 +1227,7 @@ class Style:
 
 def parse_terminal_args(argv):
     """argv after the bundle and default folder → options; options['ui'] means the browser installer."""
-    options = {'terminal': False, 'defaults': False, 'verbose': False, 'help': False, 'dir': None}
+    options = {'terminal': False, 'defaults': False, 'verbose': False, 'help': False, 'dir': None, 'windows': False}
     items = list(argv)
     while items:
         arg = FLAG_ALIASES.get(items[0], items[0])
@@ -1028,11 +1236,12 @@ def parse_terminal_args(argv):
             options['dir'] = items.pop(0)
         elif arg.startswith('--dir='):
             options['dir'] = arg.partition('=')[2]
-        elif arg in ('--terminal', '--defaults', '--verbose', '--help'):
+        elif arg in ('--terminal', '--defaults', '--verbose', '--help', '--windows'):
             options[arg[2:]] = True
         else:
             raise SystemExit(f'Unknown option {arg!r}. Run with --help to see the options.')
-    graphical = os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')
+    # --windows: started by “Install Rocsy (Windows).cmd”; the browser UI opens in Windows.
+    graphical = os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY') or options['windows']
     options['ui'] = bool(graphical) and not (options['terminal'] or options['defaults'] or options['help'] or options['verbose'])
     return options
 
@@ -1094,10 +1303,13 @@ COMPONENT_TEXT = {
 def default_payload(dest, prior):
     """The default install (or Update of an existing one), as an install() payload."""
     payload = {'destination': str(dest), 'comfy_root': '', 'allow_existing': False, 'desktop_launcher': False,
-               'allow_system_upgrade': False, 'components': None}
+               'allow_system_upgrade': False, 'components': None, 'windows_autostart': False}
     if prior:
+        info = prior if isinstance(prior, dict) else {}
         payload.update(mode='update', terminal_command=integrations.owns_command(dest),
-                       desktop_app=integrations.owns_desktop(dest), host_helper=host_helper_installed(dest))
+                       desktop_app=(bool((info.get('windows_shortcuts') or {}).get('links')) if windowshost.is_wsl()
+                                    else integrations.owns_desktop(dest)),
+                       windows_autostart=bool(info.get('windows_autostart')), host_helper=host_helper_installed(dest))
     else:
         payload.update(mode='install', terminal_command=True, desktop_app=True, host_helper=True,
                        password_mode='custom', new_password=secrets.token_urlsafe(18))
@@ -1162,11 +1374,16 @@ def customize(ask, style, dest_default, family):
             payload['password_mode'] = 'custom'
 
     print(style.bold('\n4. Desktop & helpers'))
-    payload['desktop_app'] = ask.yes('Rocsy Desktop (its own window, in the app menu)?', payload['desktop_app'])
-    payload['terminal_command'] = ask.yes('The rocsy terminal command?', payload['terminal_command'])
-    payload['desktop_launcher'] = ask.yes('A "Start Rocsy" icon on the desktop?', False)
+    if windowshost.is_wsl():
+        payload['desktop_app'] = ask.yes('Rocsy shortcuts on the Windows desktop and Start menu?', payload['desktop_app'])
+        payload['windows_autostart'] = ask.yes('Start Rocsy in the background when you sign in to Windows?', payload['windows_autostart'])
+        payload['terminal_command'] = ask.yes('The rocsy terminal command (in Ubuntu)?', payload['terminal_command'])
+    else:
+        payload['desktop_app'] = ask.yes('Rocsy Desktop (its own window, in the app menu)?', payload['desktop_app'])
+        payload['terminal_command'] = ask.yes('The rocsy terminal command?', payload['terminal_command'])
+        payload['desktop_launcher'] = ask.yes('A "Start Rocsy" icon on the desktop?', False)
     payload['host_helper'] = ask.yes('Host services helper (Settings → Services, GPU tuning, Core Backend)?', payload['host_helper'])
-    if family == 'arch':
+    if family == 'pacman':
         payload['allow_system_upgrade'] = ask.yes('If Docker packages need installing, refresh mirrors and update the whole system?', False)
     return payload, generated
 
@@ -1182,7 +1399,8 @@ def summary_lines(payload, style, generated=None):
     off = [COMPONENT_TEXT[key][0] for key, value in chosen.items() if not value]
     access = ('current password kept' if payload['mode'] in ('update', 'repair') else 'no password' if payload.get('password_mode') == 'none'
               else 'generated password (shown at the end)' if generated else 'your own password')
-    desk = [name for key, name in (('desktop_app', 'Rocsy Desktop'), ('terminal_command', 'rocsy command'),
+    desk = [name for key, name in (('desktop_app', 'Windows shortcuts' if windowshost.is_wsl() else 'Rocsy Desktop'),
+                                   ('windows_autostart', 'starts at Windows sign-in'), ('terminal_command', 'rocsy command'),
                                    ('desktop_launcher', 'desktop launcher'), ('host_helper', 'host helper')) if payload.get(key)]
     return [f'  Folder      {payload["destination"]}  ({payload["mode"]})',
             f'  ComfyUI     {payload["comfy_root"] or "set up inside the Rocsy folder"}',
@@ -1201,11 +1419,18 @@ def terminal_main(options, read=input, secret=None):
     host = distro()
     state = prerequisites()
     print(style.accent(style.bold('Rocsy installer')) + style.dim('  ·  terminal'))
+    windows = windowshost.platform() if windowshost.is_wsl() else None
+    if windows:
+        print('  ' + style.warn(f'{windows["name"]} — {windowshost.UNTESTED} Rocsy runs inside WSL2.'))
     print(f'  {host["name"]}: ' + ', '.join(
         (style.ok('✓ ') if state[key] else style.warn('○ ')) + name for key, name in
         (('python', 'Python 3.9+'), ('docker', 'Docker'), ('compose', 'Compose'), ('buildx', 'Buildx'), ('daemon', 'Docker access'))))
+    if host['manager']:
+        print(style.dim(f'  Packages: {host["manager_name"]} · services: {host["init"]}'))
     if not all(state.values()) and host['family'] == 'other':
-        print(style.bad('  Install Docker Engine, Compose and Buildx with your package manager first.'))
+        print(style.bad('  Install Docker Engine, Compose and Buildx first:' if not host['immutable']
+                        else f'  This system is read-only ({host["immutable"]}). Set Docker up first:'))
+        print('\n'.join('    ' + line for line in host['manual'].splitlines()))
         return 1
     ask = Prompter(style, read, secret)
     generated = None
@@ -1278,6 +1503,10 @@ def terminal_main(options, read=input, secret=None):
         print('  Terminal    rocsy' + ('' if result['terminal_command'].get('on_path') else '  (add ~/.local/bin to PATH, then open a new terminal)'))
     if result.get('desktop_app'):
         print('  Desktop     Rocsy Desktop is in your app menu')
+    for link in result.get('windows_shortcuts') or []:
+        print(f'  Windows     {link}')
+    if result.get('windows'):
+        print(style.warn(f'  {windowshost.UNTESTED} The Rocsy shortcut starts WSL and the containers, then opens Rocsy.'))
     for item in result.get('backends') or []:
         mark = style.ok('✓') if item['ok'] else style.bad('✗')
         print(f'  {mark} {item["name"]}: {item["message"]}')
@@ -1293,7 +1522,8 @@ def main():
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     url = f'http://127.0.0.1:{server.server_port}/'
     print(f'Rocsy installer: {url}', flush=True)
-    threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+    opener = windowshost.open_url if windowshost.is_wsl() else webbrowser.open
+    threading.Timer(0.4, lambda: opener(url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

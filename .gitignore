@@ -41,6 +41,7 @@ node_modules/
 # per-install runtime state (sessions, configs, caches, thumbnails, jobs)
 /BunnyBytes/*/data/
 /BunnyBytes/hostctl/state.json
+/BunnyBytes/hostctl/storage.json
 /BunnyBytes/hermes-desktop/
 # downloaded LoRA preview galleries (third-party images; tools/fetch_lora_gallery.py rebuilds them)
 /H3Machine/static/lora-gallery/
@@ -134,3 +135,6 @@ catalog_local.py
 **/checkpoints/
 **/hf-cache/
 **/whisper-models/
+
+# Personal host helper (LightDM crash-only autologin): never published
+/BunnyBytes/crash-relogin/

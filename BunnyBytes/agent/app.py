@@ -40,6 +40,7 @@ from pydantic import BaseModel, Field
 import studios
 import media_import
 import guide_rag
+import video_edit
 from brief import DEFAULT_BRIEF, REQUIRED, SCRIPT
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -1096,6 +1097,9 @@ async def check_model_choice(choice: "ModelChoice | None") -> dict[str, str] | N
         raise HTTPException(422, f"Unknown thinking level {choice.reasoning}")
     if not choice.model:
         return {"reasoning": choice.reasoning} if choice.reasoning else {}
+    if choice.provider.startswith("cli:"):
+        # An external coding CLI on the host (Settings → Sub-agents); hostctl checks the CLI and model name.
+        return {"model": choice.model, "provider": choice.provider, "reasoning": choice.reasoning}
     try:
         inventory = await hermes_models()
     except Exception:
@@ -1444,6 +1448,9 @@ async def drive(s: dict[str, Any], request: str) -> None:
     """One Hermes run for this session; returns when the run ends."""
     cfg = config.load()
     browser = await browser_state()
+    cli_model, cli_provider, cli_reasoning = run_model(s, cfg)
+    if cli_provider.startswith("cli:"):
+        return await drive_cli(s, request, browser, cli_model, cli_provider[4:], cli_reasoning)
     if cfg["continuity"]:
         # One Hermes session per Agent session: Hermes keeps every earlier tool call and result
         # (and compresses them itself) instead of a summary in the brief.
@@ -1660,6 +1667,82 @@ async def drive(s: dict[str, Any], request: str) -> None:
             s["turns"].append({"role": "agent", "text": final[:6000], "t": now()})
             s["summary"] = final[:6000]
             sessions.save(s["id"])
+
+
+async def drive_cli(s: dict[str, Any], request: str, browser: Any, model: str, cli: str, reasoning: str) -> None:
+    """One turn through an external coding CLI on the host (Settings → Sub-agents): bunny-hostctl runs
+    it in the Hermes workspace with the whole brief (the CLI keeps no conversation of its own) and
+    streams its replies, thoughts and commands back as this session's events."""
+    if s.get("stop"):
+        return
+    if not HOSTCTL_SECRET:
+        raise RuntimeError("the host helper isn't configured for the Agent service (HOSTCTL_SECRET)")
+    body = {"cli": cli, "model": "" if model == "default" else model, "effort": "" if reasoning == "default" else reasoning,
+            "access": "agent", "cwd": HERMES_WORKSPACE, "hermes_paths": True, "prompt": build_input(s, request, browser)}
+    set_state(s, "thinking", "Starting the Master Agent")
+    say: list[str] = []
+    commands: dict[str, str] = {}
+    final = ""
+
+    def flush() -> None:
+        text = re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", "".join(say)).strip()
+        say.clear()
+        live_streams.get(s["id"], {})["assistant"] = ""
+        if text:
+            ev(s, "assistant", text[:MAX_EVENT_TEXT])
+
+    live = live_streams[s["id"]] = {"assistant": "", "reasoning": "", "rate": None}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=None)) as client:
+            async with client.stream("POST", HOSTCTL_URL + "/clis/run", json=body, headers={"X-Hostctl-Secret": HOSTCTL_SECRET}) as stream:
+                if stream.status_code >= 300:
+                    detail = (await stream.aread()).decode(errors="replace")
+                    with suppress(ValueError):
+                        detail = json.loads(detail).get("error") or detail
+                    raise RuntimeError(f"Could not start the CLI: {str(detail)[:300]}")
+                async for line in stream.aiter_lines():
+                    if not line.strip():
+                        continue
+                    with suppress(ValueError):
+                        e = json.loads(line)
+                        kind = e.get("type")
+                        if kind == "started":
+                            s["cli_run"] = e.get("run")
+                            ev(s, "system", f"Master Agent run started · {model or 'default'} ({cli} CLI) · thinking {reasoning}"
+                               + (" · chosen for this session" if s.get("model_override") else ""))
+                            set_state(s, "thinking", "Thinking")
+                        elif kind == "text":
+                            say.append(e.get("delta") or "")
+                            live["assistant"] = "".join(say)[:MAX_EVENT_TEXT]
+                            changed(s["id"])
+                        elif kind == "thinking":
+                            flush()
+                            ev(s, "think", str(e.get("delta") or "")[:MAX_EVENT_TEXT])
+                        elif kind == "tool":
+                            flush()
+                            ev(s, "tool", f"{e.get('name')}  {str(e.get('detail') or '')[:400]}")
+                        elif kind == "terminal_start":
+                            flush()
+                            commands[str(e.get("id"))] = str(e.get("command") or "")
+                            ev(s, "terminal", "", tool_id=e.get("id"), command=commands[str(e.get("id"))], status="running")
+                        elif kind == "tool_result" and str(e.get("id")) in commands:
+                            ev(s, "terminal", e.get("output") or "", tool_id=e.get("id"), command=commands[str(e.get("id"))],
+                               status="complete", exit_code=e.get("exit_code"), error="error" if e.get("error") else "")
+                        elif kind == "warn":
+                            ev(s, "warn", str(e.get("message") or ""))
+                        elif kind == "done":
+                            final = str(e.get("text") or "").strip()
+                            say[:] = [final] if final else say
+                        elif kind == "error":
+                            if not s.get("stop"):
+                                raise RunFailed(str(e.get("message") or "The CLI failed"))
+    finally:
+        s.pop("cli_run", None)
+    flush()
+    if final:
+        s["turns"].append({"role": "agent", "text": final[:6000], "t": now()})
+        s["summary"] = final[:6000]
+        sessions.save(s["id"])
 
 
 async def conversation(sid: str, request: str) -> None:
@@ -3163,6 +3246,10 @@ async def get_options() -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         out["hermes"] = {"providers": [], "default": {}, "error": f"Hermes is not reachable ({type(exc).__name__})"}
     try:
+        out["clis"] = (await hostctl("GET", "/clis"))["clis"]
+    except Exception:  # noqa: BLE001 - no host helper: no CLIs to offer
+        out["clis"] = []
+    try:
         out["vid_presets"] = sorted(await studios.vid_presets())
     except studios.StudioError:
         out["vid_presets"] = []
@@ -3788,6 +3875,9 @@ async def stop(sid: str) -> dict[str, Any]:
     if not s:
         raise HTTPException(404, "No such session")
     s.update(stop=True, stop_t=now())
+    if s.get("cli_run"):
+        with suppress(Exception):
+            await hostctl("POST", "/clis/stop", {"run": s["cli_run"]})
     if s.get("run_id"):
         with suppress(Exception):
             async with httpx.AsyncClient(timeout=20) as client:
@@ -4022,12 +4112,13 @@ REVIEW_FIELDS = {
     "postedit": [("voiceover", "Voice-over (JSON)"), ("text", "Text overlays (JSON)"), ("settings", "Settings (JSON)")],
     "captions": [],
     "montage": [],
+    "edit": [],
     "train": [],
     "motion": [("props", "Props (JSON)")],
 }
 REVIEW_JSON = {"voiceover", "text", "settings", "props"}
 REVIEW_TITLES = {"plan": "Plan", "video": "Video", "agentic": "Video (H3 Agentic)", "image": "Image", "music": "Music",
-                 "voice": "Voice", "postedit": "Post-Edit", "captions": "Captions", "montage": "Montage", "train": "LoRA training",
+                 "voice": "Voice", "postedit": "Post-Edit", "captions": "Captions", "montage": "Montage", "edit": "Frame edit", "train": "LoRA training",
                  "motion": "Motion render"}
 
 
@@ -4038,7 +4129,7 @@ def review_kinds(name: str, args: dict[str, Any]) -> set[str]:
         return {name}
     if name in ("postedit", "captions"):
         return {"edit", "voice"} if args.get("voiceover") else {"edit"}
-    if name == "montage":
+    if name in ("montage", "edit"):
         return {"edit"}
     if name == "motion" and args.get("action") == "render":
         return {"motion"}
@@ -4187,7 +4278,7 @@ def review_deliver(s: dict[str, Any]) -> None:
 
 def ask_service(name: str, args: dict[str, Any]) -> str:
     """The service a tool call uses, for Ask first ("" = needs no OK: looking, planning, helpers)."""
-    if name in ("video", "agentic", "montage", "postedit", "captions"):
+    if name in ("video", "agentic", "montage", "postedit", "captions", "edit"):
         return "Vid"
     if name == "motion":
         return "Motion" if args.get("action") == "render" else ""
@@ -4406,6 +4497,148 @@ async def postedit_tool(s: dict[str, Any], name: str, args: dict[str, Any], num)
     postedit_board(s, ref, settings)
     return (text.split(" (")[0] + f": {label}." + (" Whisper (GPU) transcribes the audio first." if whisper else "")
             + " It starts when your turn ends: run wait, then end your turn. The result is a new video job.")
+
+
+async def edit_source(s: dict[str, Any], ref: str) -> Path:
+    """A local file for `edit`: an attachment (video or audio), a workspace path or a finished job's output."""
+    ref = ref.strip()
+    a = next((a for a in s.get("attachments") or [] if a["ref"] == ref.lower()), None)
+    if a:
+        if a["kind"] not in ("video", "audio"):
+            raise ValueError(f"{a['ref']} is {a['kind']}, not a video or audio")
+        return pinned_path(a)
+    if "/" in ref or "." in ref:
+        return (await board_source(s, ref))[0]
+    j = finished_job(s, ref)
+    o = next((o for o in j["outputs"] if o.get("kind") in ("video", "audio") and o.get("url")), None)
+    if not o:
+        raise ValueError(f"{ref} has no video or audio output")
+    local = WORKSPACE_DIR / s["id"] / "frames" / "_sources" / f"{j['ref']}.{'mp4' if o['kind'] == 'video' else 'audio'}"
+    if not local.is_file():
+        local.parent.mkdir(parents=True, exist_ok=True)
+        await studios.fetch_output(o["url"], str(local))
+    return local
+
+
+async def edit_tool(s: dict[str, Any], args: dict[str, Any], cfg: dict[str, Any], num) -> str:
+    """Frame-exact edits on the GPU's media engine, run right away: trim by frame, keep every Nth frame,
+    speed, crop, fit to another video, loop to a count or another video's length, any clip's soundtrack.
+    The result is imported into Vid as a finished video job (plus a muted twin with --muted both)."""
+    if "Vid" not in allowed():
+        return "error: Vid is switched off for the Master Agent in Settings → Agentic."
+    if perm(cfg, "files") == "none":
+        return "error: the Files permission is off (Settings → Agentic)"
+    ref = str(args.get("ref") or "").strip()
+    if not ref:
+        return "error: give the video to edit, e.g. edit vid3 --every 3 --fit att1 --length att1 --audio att1"
+    try:
+        src = await edit_source(s, ref)
+        info = await video_edit.probe(src)
+        if not info["width"]:
+            return f"error: {ref} is not a video"
+        frames = times = size = crop = length = None
+        fps, notes = num("fps"), []
+        if span := str(args.get("frames") or "").replace(" ", ""):
+            a, _, b = span.partition("-")
+            frames = (int(a), int(b) if b else info["frames"])
+            notes.append(f"frames {frames[0]}-{frames[1]}")
+        elif args.get("start") or args.get("end"):
+            times = (parse_time(args.get("start") or "0"), parse_time(args["end"]) if args.get("end") else None)
+            notes.append(f"{times[0]:g}-{times[1] if times[1] is not None else 'end'} s")
+        every = max(1, int(num("every", int) or 1))
+        speed = num("speed") or 1.0
+        if not 0.1 <= speed <= 10:
+            return "error: --speed is 0.1-10"
+        if every > 1:
+            notes.append(f"every {every}{ {2: 'nd', 3: 'rd'}.get(every, 'th') } frame")
+        if speed != 1:
+            notes.append(f"{speed:g}x speed")
+        if box := str(args.get("crop") or ""):
+            crop = tuple(int(float(x)) for x in box.split(":"))
+            if len(crop) != 4:
+                return "error: --crop is x:y:w:h in pixels"
+            notes.append(f"crop {box}")
+        if fit := str(args.get("fit") or "").strip():
+            if m := re.fullmatch(r"(\d+)x(\d+)", fit):
+                size = (int(m.group(1)), int(m.group(2)))
+            else:
+                target = await video_edit.probe(await edit_source(s, fit))
+                size, fps = (target["width"], target["height"]), fps or target["fps"]
+            if not all(64 <= x <= 4096 for x in size):
+                return "error: --fit is WxH (64-4096) or a video ref"
+            notes.append(f"fit {size[0]}x{size[1]}")
+        if fps and not 1 <= fps <= 120:
+            return "error: --fps is 1-120"
+        out_fps = fps or info["fps"]
+        if span := str(args.get("length") or "").strip():
+            if re.fullmatch(r"[\d.]+f", span):
+                length = int(span[:-1]) / out_fps
+            elif re.fullmatch(r"[\d.:]+", span):
+                length = parse_time(span)
+            else:
+                target = await video_edit.probe(await edit_source(s, span))
+                length = target["frames"] / (target["fps"] or out_fps) if target["width"] else target["duration"]
+            notes.append(f"length {length:g} s")
+        loop = max(1, min(500, int(num("loop", int) or 1)))
+        if loop > 1 and not length:
+            notes.append(f"looped {loop}x")
+        sound = str(args.get("audio") or "").strip()
+        timed = every > 1 or speed != 1 or loop > 1 or length
+        sound = sound or ("none" if timed else "keep")
+        audio = None
+        if sound.lower() != "none":
+            audio = src if sound.lower() == "keep" else await edit_source(s, sound)
+            if not (await video_edit.probe(audio))["audio"]:
+                if sound.lower() == "keep":
+                    audio = None
+                else:
+                    return f"error: {sound} has no sound"
+        audio_start = parse_time(args.get("audio_start") or "0")
+        if sound.lower() == "keep" and audio and not args.get("audio_start"):
+            audio_start = frames[0] / info["fps"] if frames else (times[0] if times else 0.0)
+        if audio is not None:
+            notes.append("sound of " + (ref if sound.lower() == "keep" else sound)
+                         + (f" from {audio_start:g} s" if audio_start else ""))
+        muted = str(args.get("muted") or "").lower()
+        if muted not in ("", "both", "only"):
+            return "error: --muted is both or only"
+        if muted == "only":
+            audio = None
+    except (studios.StudioError, ValueError, video_edit.EditError) as exc:
+        return f"error: {exc}"
+    label = f"Edit of {ref}: " + (", ".join(notes) or "re-encode")
+    work = DATA / "tmp" / f"edit-{uuid.uuid4().hex[:12]}"
+    work.mkdir(parents=True, exist_ok=True)
+    out = work / "edit.mp4"
+    try:
+        result = await video_edit.render(src, out, work, frames=frames, times=times, every=every, speed=speed, fps=fps,
+                                         crop=crop, size=size, loop=loop, length=length, audio=audio, audio_start=audio_start)
+        files = [(out, label + (" (muted)" if muted == "only" or audio is None else ""))]
+        if muted == "both" and audio is not None:
+            await video_edit.muted_copy(out, work / "muted.mp4")
+            files.append((work / "muted.mp4", label + " (muted)"))
+        lines = []
+        for path, name_ in files:
+            vid = await studios.vid_import(str(path), name_)
+            text = await submit(s, "Vid", name_, lambda: asyncio.sleep(0, {"id": vid.get("id"), "state": "complete"}))
+            if not text.startswith("started"):
+                return text
+            j = s["jobs"][-1]
+            j.update(kind="edit", outputs=studios.outputs("Vid", vid), stage="",
+                     meta={k: result[k] for k in ("duration", "width", "height", "fps", "frames")})
+            ev(s, "job", f"{j['ref']} finished", job=j["ref"])
+            lines.append(f"{j['ref']}: {name_}")
+        sessions.save(s["id"])
+    except (studios.StudioError, video_edit.EditError) as exc:
+        return f"error: {exc}"
+    finally:
+        for f in work.iterdir():
+            f.unlink(missing_ok=True)
+        work.rmdir()
+    return ("\n".join(lines) + f"\nDone on the GPU: {result['width']}x{result['height']}, {result['fps']:g} fps, {result['frames']} frames "
+            f"({result['duration']:g} s); one cycle is {result['cycle_frames']} frames, played {result['loops']:g}x, "
+            f"{'with' if result['audio'] else 'no'} sound. They are finished video jobs in the chat: fetch one to check it, "
+            "or postedit / captions / montage it.")
 
 
 async def motion_tool(s: dict[str, Any], args: dict[str, Any], cfg: dict[str, Any]) -> str:
@@ -5769,6 +6002,8 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
         return {"text": await motion_tool(s, args, cfg)}
     if name in ("captions", "postedit"):
         return {"text": await postedit_tool(s, name, args, num)}
+    if name == "edit":
+        return {"text": await edit_tool(s, args, cfg, num)}
     if name == "ask":
         question = str(args.get("question") or "").strip()[:1500]
         if not question:

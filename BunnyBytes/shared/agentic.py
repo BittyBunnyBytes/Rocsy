@@ -18,7 +18,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -35,6 +35,10 @@ BASE = {name: os.getenv(env, default).rstrip("/") + prefix for name, (env, defau
 LLAMA = os.getenv("LLAMA_URL", "http://127.0.0.1:8400").rstrip("/")
 MODEL = os.getenv("FRAMEWORK_AGENTIC_MODEL", "qwen3.8-flash-next-uncensored")
 KEY = os.getenv("LLAMA_API_KEY", "")
+# Models named "cli:<cli>/<model>" are external coding CLIs on the host (Settings → Sub-agents),
+# answered by bunny-hostctl's chat-completions bridge instead of llama.
+HOSTCTL = os.getenv("HOSTCTL_URL", "http://127.0.0.1:8899").rstrip("/")
+HOSTCTL_SECRET = os.getenv("HOSTCTL_SECRET", "")
 QUEUE = os.getenv("LOCK_UPSTREAM", "http://127.0.0.1:8600").rstrip("/")
 QUEUE_SECRET = os.getenv("QUEUE_INTERNAL_SECRET", "")
 DATA = Path(os.getenv("FRAMEWORK_DATA_DIR", "/data"))
@@ -55,7 +59,7 @@ _last_save = 0.0
 MODEL_LABELS = {
     "image": {"krea2": "Krea 2", "qwen_image_21": "Qwen Image 2.1", "anima": "Anima"},  # Lustify = a Krea 2 checkpoint
     "music": {"yue2": "YuE2", "minimax_music3": "MiniMax Music 3"},
-    "voice": {"qwen3": "Qwen3-TTS 1.7B", "indextts2": "IndexTTS2", "fish_s2": "Fish Audio S2 Pro", "fish_v1": "Fish Audio 1.5"},
+    "voice": {"qwen3": "Qwen3-TTS 1.7B", "indextts2": "IndexTTS2", "fish_s2": "Fish Audio S2 Pro", "fish_drama3": "Fish Audio Drama 3"},
 }
 MODEL_FIELD = {"image": "model", "music": "model", "voice": "engine"}
 DEFAULT_MODEL = {"image": "krea2", "music": "yue2", "voice": "qwen3"}
@@ -397,19 +401,21 @@ async def hermes(system: str, user: str, image_url: str = "", model: str = "", r
     hs = (row or {}).get("hermes") or default_settings((row or {}).get("studio") or "image")
     model = model or hs.get("model") or MODEL
     payload = chat_payload(hs, [{"role": "system", "content": system}, {"role": "user", "content": content}], model)
-    headers = {"Authorization": f"Bearer {KEY}"} if KEY else {}
+    cli = model.startswith("cli:")
+    url, headers = ((f"{HOSTCTL}/clis/chat", {"X-Hostctl-Secret": HOSTCTL_SECRET}) if cli
+                    else (f"{LLAMA}/v1/chat/completions", {"Authorization": f"Bearer {KEY}"} if KEY else {}))
     if row is not None:
-        log(row, "tool", f"Hermes · {purpose} · {model} · waiting for the GPU queue")
+        log(row, "tool", f"Hermes · {purpose} · {model} · " + ("external CLI on the host" if cli else "waiting for the GPU queue"))
     parts: list[str] = []
     thinking = stream = None
     finish = None
     started = time.monotonic()
-    async with hermes_turn(f"Agentic Hermes {purpose}"):
+    async with nullcontext() if cli else hermes_turn(f"Agentic Hermes {purpose}"):   # a CLI doesn't use the GPU
         async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10)) as client:
-            async with client.stream("POST", f"{LLAMA}/v1/chat/completions", json=payload, headers=headers) as response:
+            async with client.stream("POST", url, json=payload, headers=headers) as response:
                 if response.status_code >= 400:
                     detail = (await response.aread()).decode(errors="replace")
-                    raise ValueError(f"Llama service HTTP {response.status_code}: {detail[:300]}")
+                    raise ValueError(f"{'CLI bridge' if cli else 'Llama service'} HTTP {response.status_code}: {detail[:300]}")
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue

@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 import hardware
 import integrations
+import locations
 import sources
 import support
 import comfysetup
@@ -117,7 +118,8 @@ def retire_verified_update(job: dict) -> bool:
         rel = swapped or original
         path = ROOT / rel
         resolved = path.resolve()
-        if (not str(resolved).startswith(str(ROOT.resolve()) + os.sep) or path.is_symlink()
+        moved = locations.moved_target(path)   # moved to a storage location: the link + its file go
+        if ((not str(resolved).startswith(str(ROOT.resolve()) + os.sep) and not moved) or (path.is_symlink() and not moved)
                 or rel in outputs or not _same_identity(path, record["identity"])):
             retain(f"{original} changed or is no longer safe to remove")
             return False
@@ -125,7 +127,7 @@ def retire_verified_update(job: dict) -> bool:
     try:
         for record, path in targets:
             original = record["path"]
-            path.unlink()
+            locations.remove(path)
             if original not in outputs:
                 sidecar = (ROOT / original).with_name(Path(original).name + ".sha256")
                 if record.get("sidecar_identity") and _same_identity(sidecar, record["sidecar_identity"]):
@@ -201,6 +203,7 @@ def scan_hardware() -> dict:
 async def startup() -> None:
     global downloads
     downloads = Downloads(DATA, ROOT, tokens, download_done)
+    downloads.store_for = download_store
     downloads.concurrency = int(load_settings()["concurrency"])
     scan_hardware()
     asyncio.create_task(downloads.run())
@@ -211,6 +214,17 @@ async def startup() -> None:
     asyncio.create_task(core_watch())
     asyncio.create_task(comfy_nodes_watch())
     asyncio.create_task(warm_searches())
+    asyncio.create_task(locations.loop())
+
+
+def download_store(dest: str, link: Path) -> str:
+    """Settings -> Storage: an update of a moved file stays on its drive; new files go to the default."""
+    moved = locations.moved_target(link)
+    if moved is not None:
+        loc = locations.location_of(moved)
+        if loc and os.path.isdir(loc["path"]) and os.access(loc["path"], os.W_OK):
+            return loc["path"]
+    return locations.store_for(dest)
 
 
 async def daily_check() -> None:
@@ -816,7 +830,9 @@ async def queue_download(body: DownloadBody, *, supersede: str = ""):
     if supersede:
         old_path = ROOT / supersede
         old = old_path.resolve()
-        if not str(old).startswith(str(ROOT.resolve()) + os.sep) or not old.is_file() or old_path.is_symlink():
+        moved = locations.moved_target(old_path)
+        if ((not str(old).startswith(str(ROOT.resolve()) + os.sep) and not moved) or not old.is_file()
+                or (old_path.is_symlink() and not moved)):
             raise HTTPException(404, "The installed file to update is missing")
         old_parts = [old_path]
         shard = re.search(r"-00001-of-(\d{5})\.(gguf|safetensors)$", old_path.name)
@@ -826,7 +842,7 @@ async def queue_download(body: DownloadBody, *, supersede: str = ""):
             old_parts += [old_path.with_name(old_path.name.replace("-00001-of-", f"-{n:05d}-of-"))
                           for n in range(2, int(shard.group(1)) + 1)]
         for old_part in old_parts:
-            if not old_part.is_file() or old_part.is_symlink():
+            if not old_part.is_file() or (old_part.is_symlink() and not locations.moved_target(old_part)):
                 continue
             stat = old_part.stat()
             record = {"path": str(old_part.relative_to(ROOT)),
@@ -840,9 +856,10 @@ async def queue_download(body: DownloadBody, *, supersede: str = ""):
             supersede_files.append(record)
     if body.replace:
         old = (ROOT / body.replace).resolve()
-        if not str(old).startswith(str(ROOT.resolve()) + os.sep) or not old.is_file():
+        if ((not str(old).startswith(str(ROOT.resolve()) + os.sep) and not locations.moved_target(ROOT / body.replace))
+                or not old.is_file()):
             raise HTTPException(404, "The installed file to update is missing")
-        replace_name = old.name
+        replace_name = Path(body.replace).name
     target = None if body.replace else integration_target(detail, version, variant)
     if target and body.dest and _clean_dest(body.dest) != target["dest"]:
         target = None  # the user chose another folder: plain download
@@ -1079,14 +1096,14 @@ async def core_voice_view():
 
 @app.get(f"{PREFIX}/api/core/voice/{{engine}}/log")
 async def core_voice_log(engine: str):
-    if engine not in {"qwen3", "indextts2", "fish_s2", "fish_v1"}:
+    if engine not in {"qwen3", "qwen3_design", "indextts2", "fish_s2", "fish_drama3"}:
         raise HTTPException(404, "Unknown voice engine")
     return await hostctl_core("GET", f"/{engine}/log", base="/core/voice")
 
 
 @app.post(f"{PREFIX}/api/core/voice/{{engine}}/install")
 async def core_voice_install(engine: str):
-    if engine not in {"qwen3", "indextts2", "fish_s2", "fish_v1"}:
+    if engine not in {"qwen3", "qwen3_design", "indextts2", "fish_s2", "fish_drama3"}:
         raise HTTPException(404, "Unknown voice engine")
     return await hostctl_core("POST", f"/{engine}/install", {}, base="/core/voice")
 
@@ -1101,6 +1118,16 @@ async def core_voice_deepspeed_install():
     return await hostctl_core("POST", "/indextts2/deepspeed", {}, base="/core/voice")
 
 
+@app.get(f"{PREFIX}/api/core/voice/qwen3/flash/log")
+async def core_voice_flash_log():
+    return await hostctl_core("GET", "/qwen3/flash/log", base="/core/voice")
+
+
+@app.post(f"{PREFIX}/api/core/voice/qwen3/flash")
+async def core_voice_flash_install():
+    return await hostctl_core("POST", "/qwen3/flash", {}, base="/core/voice")
+
+
 @app.get(f"{PREFIX}/api/core/engines")
 async def core_engines_view():
     return await hostctl_core("GET", "", base="/core/engines")
@@ -1113,7 +1140,8 @@ async def core_engines_log():
 
 @app.post(f"{PREFIX}/api/core/engines/{{action}}")
 async def core_engines_action(action: str, body: dict):
-    if action not in {"strata-source", "strata-install", "strata-start", "strata-stop", "rocmfpx-build", "rocmfpx-cancel", "hipblaslt-tune"}:
+    if action not in {"strata-source", "strata-install", "strata-start", "strata-stop", "rocmfpx-build", "rocmfpx-cancel", "hipblaslt-tune",
+                      "strata-ngram", "strata-ngram-cancel"}:
         raise HTTPException(404, "Unknown action")
     return await hostctl_core("POST", f"/{action}", body, base="/core/engines")
 
@@ -1595,7 +1623,11 @@ async def library_update(body: UpdateBody):
 @app.delete(f"{PREFIX}/api/library/old")
 async def library_remove_old(path: str):
     """Delete the previous version an in-place update kept as <name>.old."""
-    old = (ROOT / path).resolve()
+    link = ROOT / path
+    old = link.resolve()
+    if path.endswith(".old") and ".." not in Path(path).parts and locations.moved_target(link):
+        locations.remove(link)                   # a moved file's backup: the link and its file
+        return {"deleted": path}
     if not path.endswith(".old") or not str(old).startswith(str(ROOT.resolve()) + os.sep) or not old.is_file():
         raise HTTPException(404, "No previous version there")
     old.unlink()
@@ -1630,6 +1662,7 @@ def _base_of(item: dict) -> str:
 
 @app.get(f"{PREFIX}/api/installed")
 async def installed(unused_days: int = 7):
+    await locations.refresh()
     lora_uses = await integrations.lora_usage()
     now, window = time.time(), max(1, min(365, unused_days)) * 86400
     llama = integrations.llama_models()
@@ -1662,7 +1695,8 @@ async def installed(unused_days: int = 7):
         rows.append({"path": item["path"], "name": item["name"], "size": item["size"], "group": group, "sub": sub,
                      "base": base, "base_manual": link.get("base_manual", ""),
                      "uses": uses, "status": item["status"], "source": link.get("source", ""),
-                     "added": item["mtime"], **seen,
+                     "added": item["mtime"], **seen, "stored": locations.describe(item["path"]),
+                     "offline": bool(item.get("offline")),
                      # Unused for UNUSED_DAYS: not used in that window, not newly added, and tracked long enough to know.
                      "unused": (now - seen["last_used"] > window and now - item["mtime"] > window
                                 and bool(seen["tracked_since"]) and now - seen["tracked_since"] >= window)})
@@ -1691,6 +1725,38 @@ async def installed(unused_days: int = 7):
             "tracking": {"comfy": usage.since.get("comfy", 0), "llama": usage.since.get("llama", 0), "scanning": usage.busy}}
 
 
+# ---- storage locations (Settings -> Storage; moves run on the host: hostctl/storage.py) ----
+
+class MoveBody(BaseModel):
+    path: str
+    to: str
+
+
+@app.get(f"{PREFIX}/api/storage")
+async def storage_view():
+    data = await hostctl_core("GET", "", base="/storage")
+    locations.snapshot["jobs"] = data.get("jobs", [])
+    return data
+
+
+@app.post(f"{PREFIX}/api/storage/move")
+async def storage_move(body: MoveBody):
+    """Move an installed file (and its shards) to another storage location; models/ keeps a link to it."""
+    item = next((i for i in library.items if i["path"] == body.path), None)
+    if not item:
+        raise HTTPException(404, "Not an installed file")
+    if any(job["state"] in ("queued", "downloading", "verifying") and job.get("path") == body.path for job in downloads.jobs.values()):
+        raise HTTPException(409, "It is still downloading")
+    job = await hostctl_core("POST", "/move", {"path": body.path, "to": body.to}, base="/storage")
+    asyncio.create_task(locations.refresh())
+    return job
+
+
+@app.post(f"{PREFIX}/api/storage/move/{{job_id}}/cancel")
+async def storage_move_cancel(job_id: str):
+    return await hostctl_core("POST", "/move/cancel", {"id": job_id}, base="/storage")
+
+
 class UninstallBody(BaseModel):
     path: str
     force: bool = False
@@ -1710,6 +1776,7 @@ async def uninstall(body: UninstallBody):
     path = ROOT / item["path"]
     notes, removed = [], []
     freed = 0
+    moved = locations.moved_target(path)
     if item["folder"] == "loras":
         uses = (await integrations.lora_usage()).get(item["path"], [])
         built_in = [u["label"] for u in uses if not u.get("custom_id")]
@@ -1722,6 +1789,8 @@ async def uninstall(body: UninstallBody):
                 notes.append(f"removed from the {use['label']}")
                 if not path.exists() and not freed:
                     freed, _ = item["size"], removed.append(item["path"])
+                if moved is not None and not path.is_symlink() and moved.is_file():
+                    moved.unlink()               # the studio removed the link; its file in the location goes too
     if item["folder"] == "llm":
         host = integrations.host_path(item["path"])
         refs = [m for m in integrations.llama_models() if host in (m["model"], m["mmproj"])]
@@ -1748,9 +1817,10 @@ async def uninstall(body: UninstallBody):
         targets += [target.with_name(target.stem + suffix) for suffix in STEM_SIDECARS]
     for target in targets:
         with contextlib.suppress(OSError):
-            if target.is_file():
-                freed += target.stat().st_size
-                target.unlink()
+            if target.is_file() or target.is_symlink():
+                if target.is_symlink() and not target.exists():
+                    notes.append(f"{target.name}'s drive is offline: its file there stays")
+                freed += locations.remove(target)
                 removed.append(str(target.relative_to(ROOT)))
     # An LLM folder left with only its vision projector goes too.
     if item["folder"] == "llm" and path.parent != ROOT / "llm":

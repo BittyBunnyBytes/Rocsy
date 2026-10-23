@@ -45,23 +45,16 @@ DEFAULT_CONFIG = {
         "indextts2": {
             "emotion": "", "emotion_weight": 1.0, "fp16": True,
             "deepspeed": False, "cuda_kernel": False, "accel": False,
-            "torch_compile": False, "verbose": False,
+            "torch_compile": False, "verbose": False, "attention": "sdpa",
         },
         "fish_s2": {
             "temperature": 1.0, "top_p": 0.9, "top_k": 30, "seed": 42,
             "max_new_tokens": 0, "compile": False, "half": False,
-            "iterative_prompt": True, "chunk_length": 300,
+            "iterative_prompt": True, "chunk_length": 300, "attention": "sdpa",
         },
-        "fish_v1": {
-            "temperature": 0.7,
-            "top_p": 0.7,
-            "repetition_penalty": 1.2,
-            "seed": 42,
-            "half": False,
-            "compile": False,
-            "max_new_tokens": 0,
-            "iterative_prompt": True,
-            "chunk_length": 100,
+        "fish_drama3": {
+            "temperature": 1.0, "top_p": 0.9, "seed": 42,
+            "max_new_tokens": 0, "context_length": 4096,
         },
     },
     "editor": {"font_size": 17, "autosave_draft": True, "wrap": True},

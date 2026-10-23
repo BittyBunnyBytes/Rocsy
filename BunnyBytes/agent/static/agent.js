@@ -1184,7 +1184,7 @@
   /* ------------------------------------------------ review mode (/review) -- */
   // Proposals wait here with their full prompt: edit, then approve, or veto. Items already on
   // screen are kept (not rebuilt) so an edit in progress survives live updates.
-  const REVIEW_ICON = { service: "⚙", reamod: "🧩", plan: "🗺", video: "🎬", agentic: "🎬", image: "🖼", music: "♪", voice: "🗣", postedit: "✂", captions: "💬", montage: "🎞", train: "🧪", motion: "✦" };
+  const REVIEW_ICON = { service: "⚙", reamod: "🧩", plan: "🗺", video: "🎬", agentic: "🎬", image: "🖼", music: "♪", voice: "🗣", postedit: "✂", captions: "💬", montage: "🎞", edit: "✂", train: "🧪", motion: "✦" };
   // Ask first: a service's first use in a session asks for an OK; allowing clears the service.
   function clearItem(x) {
     const item = el("div", "a-review-item a-review-clear"); item.dataset.id = x.id; item.dataset.tool = x.tool; item.dataset.service = x.clear || "";

@@ -9,6 +9,8 @@ from typing import Any
 
 
 UNFINISHED_JOB_STATES = ("waiting_for_gpu", "preparing", "queued", "rendering", "cancelling", "finalizing")
+# Presets a new install starts with (no checkpoint or LoRAs: picking one keeps the current ones).
+RECOMMENDED_PRESETS = Path(__file__).with_name("recommended_presets.json")
 
 
 def utc_now() -> str:
@@ -19,6 +21,7 @@ class Store:
     def __init__(self, path: Path):
         self.path = path
         self._lock = threading.RLock()
+        fresh = not path.exists() or path.stat().st_size == 0
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         with self._conn:
@@ -94,6 +97,8 @@ class Store:
                 self._conn.execute("ALTER TABLE jobs ADD COLUMN timings TEXT")
             # job_by_prompt runs on every ComfyUI websocket event; without this it scans every job's request_json.
             self._conn.execute("CREATE INDEX IF NOT EXISTS jobs_by_prompt ON jobs (prompt_id)")
+            if fresh:
+                self._seed_presets()
             if "reasons" not in {row[1] for row in self._conn.execute("PRAGMA table_info(ratings)").fetchall()}:
                 self._conn.execute("ALTER TABLE ratings ADD COLUMN reasons TEXT")
             reference_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(h3_references)").fetchall()}
@@ -314,6 +319,18 @@ class Store:
         with self._lock:
             rows = self._conn.execute("SELECT subscription_json FROM push_subscriptions").fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def _seed_presets(self) -> None:
+        """New database only, so presets the user deleted never come back."""
+        try:
+            recommended = json.loads(RECOMMENDED_PRESETS.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        now = utc_now()
+        self._conn.executemany(
+            "INSERT OR IGNORE INTO presets (model, name, settings_json, updated_at) VALUES (?, ?, ?, ?)",
+            [(model, name, json.dumps(settings), now) for model, presets in recommended.items() for name, settings in presets.items()],
+        )
 
     def presets(self) -> dict[str, dict[str, Any]]:
         """{model: {name: settings}}"""

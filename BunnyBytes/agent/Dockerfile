@@ -13,7 +13,7 @@ RUN sed -i 's|http://deb.debian.org/debian$|https://ftp.debian.org/debian|' /etc
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt \
     && useradd --uid 1000 --create-home --shell /usr/sbin/nologin agent
-COPY app.py studios.py brief.py media_import.py guide_rag.py ./
+COPY app.py studios.py brief.py media_import.py guide_rag.py video_edit.py ./
 COPY guides/ ./guides/
 COPY static/ ./static/
 USER agent

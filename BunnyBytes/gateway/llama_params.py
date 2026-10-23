@@ -73,9 +73,10 @@ _BY_FLAG = {param[0]: param for param in PARAMS}
 STRATA_BRIDGE = "strata-swap-bridge"
 STRATA_PARAMS = [
     ("--vision", "Vision", "Strata", "choice", ["on", "off"], "Read pictures (image_url) with the GPU image encoder. Off frees its ~1.5 GB of VRAM for the expert cache; text only."),
+    ("--ngram", "N-gram table", "Strata", "choice", ["default", "bf16"], "BF16 uses the checkpoint's own n-gram table at full precision instead of the model's 4-bit copy (about 8% off per row). It is read from the SSD a few rows a token, so it costs 102 GB of disk, not RAM or VRAM. Download it once in Models -> Core Backend -> Strata; until then the model's own table is used."),
 ]
 _STRATA_BY_FLAG = {param[0]: param for param in STRATA_PARAMS}
-STRATA_DEFAULTS = {"--vision": "on"}
+STRATA_DEFAULTS = {"--vision": "on", "--ngram": "default"}
 _MODEL_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
@@ -87,6 +88,7 @@ CHOICE_LABELS = {
     "--flash-attn": {"on": "Flash attention", "off": "Standard attention", "auto": "Auto (llama.cpp decides)"},
     "--backend": {"rocm": "ROCm (HIP)", "vulkan": "Vulkan"},
     "--vision": {"on": "On (GPU image encoder)", "off": "Off (text only)"},
+    "--ngram": {"default": "The model's own (4-bit, in its shard 2)", "bf16": "BF16, full precision (on disk)"},
 }
 
 

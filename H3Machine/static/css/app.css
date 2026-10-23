@@ -2165,6 +2165,26 @@ body.is-comparing { overflow: hidden; }
 .pe-overlay-text.has-box span { background: rgba(0, 0, 0, 0.55); padding: 0.1em 0.25em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .pe-overlay-caption { text-align: center; font-family: "DejaVu Sans", Verdana, sans-serif; font-weight: 700; text-shadow: 0 0 3px #000, 0 0 3px #000, 1px 1px 2px #000; }
 .pe-fade { position: absolute; inset: 0; pointer-events: none; opacity: 0; background: #000; }
+.pe-letterbox { position: absolute; pointer-events: none; }
+.pe-letterbox i { position: absolute; left: 0; right: 0; height: var(--bar, 0); background: #000; }
+.pe-letterbox i:first-child { top: 0; }
+.pe-letterbox i:last-child { bottom: 0; }
+
+/* Post-Edit section tabs: one group of cards at a time; a dot marks a tab with changes. */
+.pe-tabs { position: sticky; top: calc(var(--topbar-height) + 8px); z-index: 5; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); }
+.pe-tab { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 50px; padding: 7px 4px 6px; border: 0; border-radius: 9px; background: none; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.pe-tab svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pe-tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+.pe-tab:focus-visible { outline: none; box-shadow: var(--focus); }
+.pe-tab.is-active { color: var(--text); background: var(--raised); box-shadow: inset 0 -2px 0 var(--amber); }
+.pe-tab.is-active svg { color: var(--amber); }
+.pe-tab-dot { position: absolute; top: 6px; right: calc(50% - 17px); width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 2px var(--panel); opacity: 0; transform: scale(0.4); transition: opacity 0.15s, transform 0.15s; }
+.pe-tab.is-changed .pe-tab-dot { opacity: 1; transform: none; }
+.pe-controls > .card[hidden] { display: none; }
+.pe-controls > .card { animation: pe-card-in 0.18s ease-out; }
+@keyframes pe-card-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .pe-controls > .card { animation: none; } }
 
 .pe-transport { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .pe-time { font-variant-numeric: tabular-nums; color: var(--text); font-size: 13px; min-width: 130px; }
@@ -2193,8 +2213,25 @@ body.is-comparing { overflow: hidden; }
 .pe-ruler span { position: absolute; transform: translateX(-50%); }
 .pe-playhead { position: absolute; top: 44px; width: 2px; z-index: 2; margin-left: -1px; background: var(--amber); pointer-events: none; }
 
-.pe-look-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
-.pe-look-presets .button { min-height: 30px; padding: 4px 10px; font-size: 12px; }
+/* Look presets: small tiles, each with a swatch of its grade. */
+.pe-look-presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; margin-bottom: 14px; }
+.pe-look-presets .button { display: flex; align-items: center; gap: 8px; justify-content: flex-start; min-height: 34px; padding: 4px 9px 4px 5px; font-size: 12px; text-align: left; border-color: var(--border); }
+.pe-look-presets .button::before { content: ""; flex: none; width: 22px; height: 22px; border-radius: 6px; background: var(--sw, linear-gradient(135deg, #8a8f94, #3a3f44)); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); }
+.pe-look-presets .button.is-active { border-color: var(--amber); color: var(--text); background: color-mix(in srgb, var(--amber) 10%, transparent); }
+.pe-look-presets [data-look="none"] { --sw: linear-gradient(135deg, #c9ccd0, #55595e); }
+.pe-look-presets [data-look="cinematic"] { --sw: radial-gradient(circle at 40% 40%, #d9b48a, #3b3a44 75%); }
+.pe-look-presets [data-look="warm"] { --sw: linear-gradient(135deg, #ffd08a, #c4622d); }
+.pe-look-presets [data-look="cool"] { --sw: linear-gradient(135deg, #a9d8ff, #2d5f9a); }
+.pe-look-presets [data-look="vivid"] { --sw: conic-gradient(#ff4d6d, #ffd23f, #3ddc97, #2fa3ff, #b14dff, #ff4d6d); }
+.pe-look-presets [data-look="faded"] { --sw: linear-gradient(135deg, #e8e0d4, #9aa4a6); }
+.pe-look-presets [data-look="noir"] { --sw: linear-gradient(135deg, #f2f2f2, #101010); }
+.pe-look-presets [data-look="vhs"] { --sw: repeating-linear-gradient(0deg, #ff5fa2 0 3px, #39d0ff 3px 6px, #2a2140 6px 8px); }
+.pe-look-presets [data-look="teal"] { --sw: linear-gradient(135deg, #ffad5c 0 45%, #1f8a8a 55%); }
+.pe-look-presets [data-look="dreamy"] { --sw: radial-gradient(circle at 35% 35%, #fff 0, #f3d1ff 35%, #9fb6ff 100%); }
+.pe-look-presets [data-look="retro"] { --sw: linear-gradient(135deg, #f3d9a4, #9a6b3f); }
+.pe-look-presets [data-look="bleach"] { --sw: linear-gradient(135deg, #d8dcd6, #4b524c); }
+.pe-look-presets [data-look="glitch"] { --sw: linear-gradient(90deg, #ff2b6a 0 33%, #1cf2c2 33% 66%, #4f5bff 66%); }
+.pe-look-presets [data-look="matte"] { --sw: linear-gradient(135deg, #b7b2aa, #5e6466); }
 .pe-sliders { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 14px; }
 .pe-sliders .field-row { margin-bottom: 8px; }
 .pe-slider-label { display: flex; justify-content: space-between; align-items: baseline; }
@@ -2225,6 +2262,10 @@ body.is-comparing { overflow: hidden; }
 @media (max-width: 1100px) {
   .pe-layout { grid-template-columns: minmax(0, 1fr); }
   .pe-preview-col { position: static; }
+}
+@media (max-width: 600px) {
+  .pe-tab { min-height: 44px; font-size: 11px; padding: 6px 2px 5px; }
+  .pe-look-presets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 600px) {
   .postedit-view { padding: 12px; }

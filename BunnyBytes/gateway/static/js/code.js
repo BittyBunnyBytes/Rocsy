@@ -7,7 +7,7 @@
 // versions of the files around agent turns and restores them (code_history.py).
 const $ = id => document.getElementById(id);
 let projects = [], selected = null, folder = '', showPreview = false, activeFile = '', activeMeta = '';
-let tab = 'files', agent = null, agentTimer = 0, wasBusy = false, goalSplit = 'agent', models = null;
+let tab = 'files', agent = null, agentTimer = 0, wasBusy = false, goalSplit = 'agent', models = null, codeReasoning = '';
 let target = null, sessionsData = null;   // target = a session picked in the Sessions tab for the next message
 let historyData = null;
 let sourceFilter = '', sortBy = 'updated';
@@ -345,7 +345,8 @@ async function openFile(path, size) {
 /* ── Master Agent ──────────────────────────────────────────────────────────────────────────── */
 async function loadModels() {
   try {
-    const hermes = (await json('/Agent/api/options')).hermes;
+    const options = await json('/Agent/api/options');
+    const hermes = options.hermes;
     models = hermes?.providers || [];
     const pick = $('ask-model');
     const def = hermes?.default?.model ? ` (${hermes.default.model})` : '';
@@ -356,9 +357,19 @@ async function loadModels() {
       for (const m of pr.models) group.append(new Option(m, JSON.stringify([pr.slug, m])));
       pick.append(group);
     }
-    let saved = '';
-    try { saved = localStorage.getItem('code.model') || ''; } catch { /* storage blocked */ }
-    if ([...pick.options].some(o => o.value === saved)) pick.value = saved;
+    for (const c of options.clis || []) {   // coding CLIs installed on this machine (Claude Code, Codex …), last
+      const group = document.createElement('optgroup');
+      group.label = `${c.name} · coding CLI`;
+      group.append(new Option(`${c.name} default${c.default ? ` (${c.default})` : ''}`, JSON.stringify([`cli:${c.id}`, 'default'])));
+      for (const m of c.models) group.append(new Option(m.label === m.id ? m.id : `${m.label} (${m.id})`, JSON.stringify([`cli:${c.id}`, m.id])));
+      pick.append(group);
+    }
+    // The default lives on the server (Settings → Sub-agents uses the same one).
+    const saved = (await json('/Code/api/settings').catch(() => ({}))).model || {};
+    const value = saved.model ? JSON.stringify([saved.provider, saved.model]) : '';
+    if (value && ![...pick.options].some(o => o.value === value)) pick.append(new Option(`${saved.model} (${saved.provider || '?'})`, value));
+    pick.value = value;
+    codeReasoning = saved.reasoning || '';
   } catch { /* Agent service down: the default model is still offered */ }
 }
 function modelChoice() {
@@ -444,7 +455,10 @@ $('ask-form').addEventListener('submit', async e => {
 });
 $('ask-text').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('ask-form').requestSubmit(); });
 $('ask-fresh').addEventListener('change', renderAgent);
-$('ask-model').addEventListener('change', () => { try { localStorage.setItem('code.model', $('ask-model').value); } catch { /* storage blocked */ } });
+$('ask-model').addEventListener('change', () => {
+  const value = $('ask-model').value, [provider, model] = value ? JSON.parse(value) : ['', ''];
+  json('/Code/api/settings', { model: { model, provider, reasoning: codeReasoning } }, 'PUT').catch(() => {});
+});
 $('ask-goal').addEventListener('click', () => {
   if ($('ask-text').value.trim()) $('goal-text').value = $('ask-text').value.trim();
   setTab('goals');

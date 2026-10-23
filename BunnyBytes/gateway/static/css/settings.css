@@ -823,3 +823,82 @@ button.bb-conn-stat:focus-visible { outline: 2px solid var(--bb-blue); outline-o
 .gt-log time { color: var(--bb-muted); font-variant-numeric: tabular-nums; margin-right: 4px; }
 .gt-log-reset, .gt-log-error, .gt-log-safety { color: var(--bb-red); }
 @media (max-width: 640px) { .gt-profile-head { flex-direction: column; } .gt-chip { flex: 1 1 calc(50% - 8px); } }
+
+/* ---------- Sub-agents ---------- */
+.sa-all-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; gap: 12px; align-items: end; }
+.sa-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 430px), 1fr)); gap: 14px; margin-top: 14px; align-items: start; }
+.sa-card { border: 1px solid var(--bb-border); border-radius: 14px; background: color-mix(in srgb, var(--bb-panel) 92%, transparent); overflow: hidden; transition: border-color .15s; }
+.sa-card:hover { border-color: color-mix(in srgb, var(--sa-tint, var(--bb-blue)) 45%, var(--bb-border)); }
+.sa-card[data-state="down"] { opacity: .72; }
+.sa-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid color-mix(in srgb, var(--bb-border) 60%, transparent);
+  background: linear-gradient(100deg, color-mix(in srgb, var(--sa-tint, var(--bb-blue)) 12%, transparent), transparent 60%); }
+.sa-icon { flex: none; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; color: var(--sa-tint, var(--bb-blue)); background: color-mix(in srgb, var(--sa-tint, var(--bb-blue)) 14%, transparent); }
+.sa-icon svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.sa-title { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.sa-title strong { font-size: 1rem; }
+.sa-title span { color: var(--bb-muted); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sa-open { flex: none; font-size: .8rem; color: var(--bb-blue); text-decoration: none; white-space: nowrap; }
+.sa-open:hover { text-decoration: underline; }
+.sa-body { display: grid; gap: 12px; padding: 14px 16px 16px; }
+.sa-body .bb-form-grid { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.sa-body .bb-switch-row { padding: 8px 0; font-size: .88rem; }
+.sa-more { border-top: 1px solid color-mix(in srgb, var(--bb-border) 60%, transparent); padding-top: 10px; }
+.sa-more > summary { cursor: pointer; font-size: .85rem; font-weight: 600; color: var(--bb-muted); list-style: none; display: flex; align-items: center; gap: 8px; }
+.sa-more > summary::-webkit-details-marker { display: none; }
+.sa-more > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform .15s; }
+.sa-more[open] > summary::before { transform: rotate(45deg); }
+.sa-more[open] > summary { margin-bottom: 10px; }
+.sa-more > summary .sa-count { margin-left: auto; font-weight: 500; font-size: .78rem; }
+.sa-foot { display: flex; align-items: center; gap: 10px; min-height: 18px; }
+.sa-foot .bb-status { margin-left: auto; }
+.sa-note { margin: 0; color: var(--bb-muted); font-size: .8rem; }
+/* Settings the chosen coding CLI doesn't use (Sub-agents cards, Agentic tab). Still readable, never clickable. */
+.sa-na { opacity: .45; cursor: not-allowed; }
+.sa-na :is(input, select, textarea, summary) { cursor: not-allowed; }
+.sa-na .bb-switch:disabled { pointer-events: none; }
+.sa-down { margin: 0; padding: 10px 12px; border-radius: 10px; color: var(--bb-amber); background: color-mix(in srgb, var(--bb-amber) 10%, transparent); font-size: .85rem; }
+@media (max-width: 640px) {
+  .sa-all-row { grid-template-columns: minmax(0, 1fr); }
+  .sa-all-row .bb-button { justify-self: start; }
+}
+
+/* Settings -> Storage: storage locations, folder picker, download defaults (storage-locations.js). */
+.bb-loc-list { display: grid; gap: 10px; }
+.bb-loc-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; padding: 13px 14px; border: 1px solid var(--bb-border); border-radius: 10px; background: var(--bb-panel-alt); }
+.bb-loc-card.is-offline { border-style: dashed; }
+.bb-loc-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+.bb-loc-title strong { font-size: 0.98rem; }
+.bb-loc-path { color: var(--bb-muted); font-size: 0.82rem; overflow-wrap: anywhere; }
+.bb-loc-pill { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 999px; font-size: 0.74rem; font-weight: 600; background: color-mix(in srgb, var(--bb-muted) 16%, transparent); color: var(--bb-muted); }
+.bb-loc-pill[data-kind="ok"] { background: color-mix(in srgb, var(--bb-green) 15%, transparent); color: var(--bb-green); }
+.bb-loc-pill[data-kind="warn"] { background: color-mix(in srgb, var(--bb-amber) 16%, transparent); color: var(--bb-amber); }
+.bb-loc-pill[data-kind="error"] { background: color-mix(in srgb, var(--bb-red) 15%, transparent); color: var(--bb-red); }
+.bb-loc-actions { display: flex; align-items: start; gap: 8px; }
+.bb-loc-meter { grid-column: 1 / -1; display: grid; gap: 5px; }
+.bb-loc-bar { position: relative; height: 7px; border-radius: 999px; background: color-mix(in srgb, var(--bb-text) 8%, transparent); overflow: hidden; }
+.bb-loc-bar span { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--bb-blue); }
+.bb-loc-bar span.is-models { background: var(--bb-green); }
+.bb-loc-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--bb-muted); font-size: 0.8rem; }
+.bb-loc-apply { margin-top: 12px; padding: 11px 13px; border: 1px solid color-mix(in srgb, var(--bb-amber) 45%, var(--bb-border)); border-radius: 10px; background: color-mix(in srgb, var(--bb-amber) 7%, transparent); font-size: 0.86rem; }
+.bb-loc-apply ul { margin: 6px 0 0; padding-left: 18px; color: var(--bb-muted); }
+.bb-loc-apply .bb-button { margin-top: 8px; }
+.bb-loc-picker { display: grid; gap: 10px; margin-top: 14px; padding: 14px; border: 1px solid var(--bb-border); border-radius: 12px; background: var(--bb-panel-alt); }
+.bb-loc-drives { display: flex; flex-wrap: wrap; gap: 8px; }
+.bb-loc-drive { display: grid; gap: 1px; min-width: 130px; padding: 7px 11px; border: 1px solid var(--bb-border); border-radius: 9px; background: var(--bb-panel); color: var(--bb-text); text-align: left; cursor: pointer; font: inherit; }
+.bb-loc-drive:hover { border-color: color-mix(in srgb, var(--bb-blue) 50%, var(--bb-border)); }
+.bb-loc-drive.is-current { border-color: var(--bb-blue); box-shadow: 0 0 0 1px var(--bb-blue); }
+.bb-loc-drive strong { font-size: 0.86rem; }
+.bb-loc-drive span { color: var(--bb-muted); font-size: 0.75rem; }
+.bb-loc-pathbar { display: flex; gap: 8px; }
+.bb-loc-pathbar input { flex: 1 1 auto; min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid var(--bb-border); border-radius: 8px; background: var(--bb-panel); color: var(--bb-text); font: inherit; font-size: 0.86rem; }
+.bb-loc-pathbar input:focus { outline: none; border-color: var(--bb-blue); }
+.bb-loc-dirs { display: grid; max-height: 280px; overflow: auto; border: 1px solid var(--bb-border); border-radius: 9px; background: var(--bb-panel); }
+.bb-loc-dir { display: block; width: 100%; padding: 8px 12px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--bb-border) 60%, transparent); background: none; color: var(--bb-text); text-align: left; cursor: pointer; font: inherit; font-size: 0.88rem; overflow-wrap: anywhere; }
+.bb-loc-dir:last-child { border-bottom: 0; }
+.bb-loc-dir:hover, .bb-loc-dir:focus-visible { background: color-mix(in srgb, var(--bb-blue) 10%, transparent); outline: none; }
+.bb-loc-dir::after { content: "/"; color: var(--bb-muted); }
+.bb-loc-form { display: grid; gap: 10px; }
+.bb-loc-defaults { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+@media (max-width: 640px) { .bb-loc-card { grid-template-columns: 1fr; } .bb-loc-actions { flex-wrap: wrap; } .bb-loc-drive { flex: 1 1 140px; } }
+.bb-loc-defaults .bb-section-note { margin: 0; font-weight: 400; font-size: 0.78rem; }
+.bb-loc-picker { grid-template-columns: minmax(0, 1fr); } .bb-loc-picker > * { min-width: 0; }

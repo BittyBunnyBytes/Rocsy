@@ -23,6 +23,10 @@ LLAMA_URL = os.getenv("H3_LLAMA_URL", "http://127.0.0.1:8400").rstrip("/")
 LLAMA_KEY = os.getenv("H3_LLAMA_API_KEY", "")
 # llama-swap reads <model id>.ctx here when it starts a model (see ~/AI/Llama/llama-launch).
 LLAMA_OVERRIDE_DIR = Path(os.getenv("H3_LLAMA_OVERRIDE_DIR", "/llama-overrides"))
+# Models named "cli:<cli>/<model>" are external coding CLIs on the host (Settings → Sub-agents),
+# answered by bunny-hostctl's chat-completions bridge instead of llama.
+HOSTCTL_URL = os.getenv("HOSTCTL_URL", "http://127.0.0.1:8899").rstrip("/")
+HOSTCTL_SECRET = os.getenv("HOSTCTL_SECRET", "")
 CONTEXT_LIMITS = (8192, 262144)
 DEFAULT_INSTRUCTIONS = (
     "You are the Hermes agent refining the user's MiniMax H3 video prompt. Treat the user's prompt as the task. "
@@ -287,8 +291,10 @@ async def chat(settings: dict[str, Any], messages: list[dict[str, Any]],
     last_progress = 0.0
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=15)) as client:
-            async with client.stream("POST", LLAMA_URL + "/v1/chat/completions", json=payload,
-                                     headers=_headers()) as response:
+            cli = model.startswith("cli:")
+            url, headers = ((HOSTCTL_URL + "/clis/chat", {"X-Hostctl-Secret": HOSTCTL_SECRET}) if cli
+                            else (LLAMA_URL + "/v1/chat/completions", _headers()))
+            async with client.stream("POST", url, json=payload, headers=headers) as response:
                 if response.status_code >= 400:
                     detail = (await response.aread()).decode(errors="replace")
                     raise ServiceError(f"Llama service HTTP {response.status_code}: {detail[:300]}")

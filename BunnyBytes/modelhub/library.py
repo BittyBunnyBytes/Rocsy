@@ -50,6 +50,7 @@ class Library:
     # ---- inventory -------------------------------------------------------
     def scan(self) -> list[dict]:
         items = []
+        previous = {item["path"]: item for item in self.items}
         for folder, kind in FOLDERS.items():
             base = self.root / folder
             if not base.is_dir():
@@ -63,6 +64,14 @@ class Library:
                     try:
                         stat = path.stat()
                     except OSError:
+                        if path.is_symlink():  # moved to a drive that's unplugged: keep it listed (and its link info)
+                            rel = str(path.relative_to(self.root))
+                            last = previous.get(rel) or {}
+                            cached = self.hashes.get(rel) or {}
+                            items.append({"path": rel, "folder": folder, "name": name, "kind": kind,
+                                          "size": last.get("size") or cached.get("size", 0),
+                                          "mtime": last.get("mtime") or cached.get("mtime", 0),
+                                          "sha256": last.get("sha256") or cached.get("sha256", ""), "offline": True})
                         continue
                     if stat.st_size < MIN_SIZE:
                         continue

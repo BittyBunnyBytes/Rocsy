@@ -5,6 +5,7 @@ All model paths are local. A missing checkpoint is reported, never downloaded.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import re
@@ -29,6 +30,7 @@ import settings as voice_settings
 PREFIX = "/Voice"
 DATA = Path(os.getenv("VOICE_DATA_DIR", "/data"))
 MODEL = Path(os.getenv("QWEN_TTS_MODEL_DIR", "/models/qwen/Qwen3-TTS-12Hz-1.7B-Base"))
+DESIGN_MODEL = Path(os.getenv("QWEN_TTS_DESIGN_DIR", str(MODEL.parent / "Qwen3-TTS-12Hz-1.7B-VoiceDesign")))
 VOICES = Path(os.getenv("VOICE_VOICES_DIR", "/data/voices"))
 WORKER = os.getenv("VOICE_WORKER_URL", "http://127.0.0.1:7860").rstrip("/")
 WORKER_SECRET = os.getenv("VOICE_WORKER_SECRET") or os.getenv("QUEUE_INTERNAL_SECRET") or ""
@@ -59,8 +61,35 @@ class Generate(BaseModel):
     settings: dict = Field(default_factory=dict)
 
 
-def _qwen_installed() -> bool:
-    return (MODEL / "config.json").is_file() and (MODEL / "model.safetensors").is_file()
+def _qwen_installed(model: Path = MODEL) -> bool:
+    return (model / "config.json").is_file() and (model / "model.safetensors").is_file()
+
+
+FLASH_SITE = Path(os.getenv("VOICE_FLASH_ATTN_DIR", "/opt/voice-flash-attn/site"))
+
+
+def _flash_attn_installed() -> bool:
+    """The Core Backend build for this image (mounted on PYTHONPATH). transformers only
+    notices it at service start, which the installer handles by restarting Voice."""
+    return any(FLASH_SITE.glob("flash_attn_2_cuda*.so"))
+
+
+def _qwen_attention(settings: dict):
+    """Voice → Settings → Qwen3-TTS → Attention: (attn_implementation, SDPA kernel context)."""
+    import contextlib
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+
+    choice = settings.get("attention", "sdpa")
+    if choice == "flash_attention_2":
+        if not _flash_attn_installed():
+            raise RuntimeError("FlashAttention 2 is not built yet: Models → Manager → Core Backend → Voice engines")
+        return "flash_attention_2", contextlib.nullcontext()
+    if choice == "eager":
+        return "eager", contextlib.nullcontext()
+    forced = {"sdpa_flash": SDPBackend.FLASH_ATTENTION, "sdpa_efficient": SDPBackend.EFFICIENT_ATTENTION,
+              "sdpa_math": SDPBackend.MATH}.get(choice)
+    # Math stays allowed as the fallback for calls the forced kernel can't take.
+    return "sdpa", sdpa_kernel([forced, SDPBackend.MATH]) if forced else contextlib.nullcontext()
 
 
 def _voice_profiles() -> list[dict]:
@@ -145,7 +174,11 @@ async def state():
            "detail": "Local Rocsy engine" if worker_engines.get(key, {}).get("ready")
            else ("Model files are missing" if worker else "Voice engine worker is offline")}
           for key, name in (("indextts2", "IndexTTS2"), ("fish_s2", "Fish Audio S2 Pro"),
-                            ("fish_v1", "Fish Audio 1.5"))]],
+                            ("fish_drama3", "Fish Audio Drama 3"))]],
+        # Engines that can create a brand-new voice from a description (Add character).
+        "creators": [{"id": "qwen3_design", "name": "Qwen3-TTS VoiceDesign", "ready": _qwen_installed(DESIGN_MODEL),
+                      "detail": "Describe a voice in words" if _qwen_installed(DESIGN_MODEL)
+                      else "Install it in Models → Manager → Core Backend → Voice engines"}],
         "voices": _voice_profiles(), "jobs": list(jobs.values())[-30:],
         "outputs": [{"id": path.stem, "audio": f"{PREFIX}/api/audio/{path.stem}",
                      "created": path.stat().st_mtime, **_output_meta(path)}
@@ -156,7 +189,14 @@ async def state():
 
 @app.get(f"{PREFIX}/api/settings")
 async def get_settings():
-    return voice_settings.response()
+    response = copy.deepcopy(voice_settings.response())  # the schema dicts are shared
+    if not _flash_attn_installed():
+        for section in response["engines"]:
+            for field in section["fields"]:
+                for option in field.get("options", []):
+                    if option["value"] == "flash_attention_2":
+                        option.update(disabled=True, label=option["label"] + " · not built")
+    return response
 
 
 @app.put(f"{PREFIX}/api/settings/{{engine}}")
@@ -258,13 +298,14 @@ def _run_qwen(job_id: str, payload: Generate):
             raise ValueError("Saved voice reference is missing")
         profile = json.loads((profile_dir / "profile.json").read_text())
         ref_text = str(profile.get("transcript") or profile.get("reference_text") or "").strip()
-        with model_lock:
+        attention, kernels = _qwen_attention(payload.settings)
+        with model_lock, kernels:
             if qwen_model is None:
                 if not _qwen_installed():
                     raise RuntimeError("Qwen3-TTS weights are not installed")
                 kwargs = {"device_map": "cuda:0" if torch.cuda.is_available() else "cpu",
                           "dtype": torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-                          "attn_implementation": "sdpa"}
+                          "attn_implementation": attention}
                 qwen_model = Qwen3TTSModel.from_pretrained(str(MODEL), **kwargs)
             chunks = _split_text(payload.text, max_chars=payload.settings.get("chunk_chars", QWEN_CHUNK_CHARS))
             _set_job(job_id, state="running", chunk=0, chunks=len(chunks))
@@ -647,6 +688,68 @@ async def reference_transcribe(clip_id: str):
     return jobs[job_id]
 
 
+class DesignRequest(BaseModel):
+    engine: str = "qwen3_design"
+    description: str = Field(min_length=1, max_length=1000)
+    text: str = Field(min_length=1, max_length=400)  # becomes the character's reference clip + transcript
+    language: str = "English"
+
+
+def _design_clip(job_id: str, body: DesignRequest) -> float:
+    """Speak the sample line in a voice built from the description (Qwen3-TTS VoiceDesign).
+    Loaded per preview and dropped right after: it never stays resident next to the desktop."""
+    import numpy as np
+    import soundfile as sf
+    import torch
+    from qwen_tts import Qwen3TTSModel
+
+    model = None
+    attention, kernels = _qwen_attention(voice_settings.get_engine("qwen3"))
+    with model_lock, kernels:
+        try:
+            model = Qwen3TTSModel.from_pretrained(
+                str(DESIGN_MODEL), device_map="cuda:0" if torch.cuda.is_available() else "cpu",
+                dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32, attn_implementation=attention)
+            _set_job(job_id, stage="Speaking the sample line…")
+            waveforms, sample_rate = model.generate_voice_design(
+                text=body.text.strip(), instruct=body.description.strip(), language=body.language)
+            audio = np.asarray(waveforms[0]).reshape(-1)
+            sf.write(_ref_path(job_id, ".wav"), audio, sample_rate)
+            return len(audio) / sample_rate
+        finally:
+            del model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+
+async def _run_design(job_id: str, body: DesignRequest):
+    try:
+        _set_job(job_id, state="queued", stage="Waiting for the GPU…")
+        async with GpuSlot(job_id, "Voice: create a voice"):
+            _set_job(job_id, state="running", stage="Loading VoiceDesign…")
+            duration = await asyncio.to_thread(_design_clip, job_id, body)
+        _set_job(job_id, state="complete", stage="Ready", duration=round(duration, 3), text=body.text.strip(),
+                 description=body.description.strip(), audio=f"{PREFIX}/api/reference/{job_id}/audio")
+    except Exception as exc:  # noqa: BLE001 - reported on the job
+        _set_job(job_id, state="failed", stage="Failed", error=str(exc)[:500] or "Voice creation failed")
+
+
+@app.post(f"{PREFIX}/api/reference/design")
+async def reference_design(body: DesignRequest):
+    """Preview a new voice; the clip id works with transcribe/save like a cleaned recording."""
+    if body.engine != "qwen3_design":
+        raise HTTPException(422, "That engine cannot create voices")
+    if not _qwen_installed(DESIGN_MODEL):
+        raise HTTPException(503, "Qwen3-TTS VoiceDesign is not installed (Models → Manager → Core Backend)")
+    reference.prune(REFS)
+    job_id = uuid.uuid4().hex
+    with jobs_lock:
+        jobs[job_id] = {"id": job_id, "engine": body.engine, "kind": "design", "state": "queued",
+                        "stage": "Starting…", "created": time.time()}
+    asyncio.create_task(_run_design(job_id, body))
+    return jobs[job_id]
+
+
 @app.get(f"{PREFIX}/api/reference/{{clip_id}}/audio")
 async def reference_audio(clip_id: str):
     clip = _ref_path(clip_id, ".wav")
@@ -753,7 +856,7 @@ async def remove_voice(voice_id: str):
 
 @app.post(f"{PREFIX}/api/generate")
 async def generate(payload: Generate):
-    if payload.engine not in {"qwen3", "indextts2", "fish_s2", "fish_v1"}:
+    if payload.engine not in {"qwen3", "indextts2", "fish_s2", "fish_drama3"}:
         raise HTTPException(422, "Unknown engine")
     if payload.voice_id not in {voice["id"] for voice in _voice_profiles()}:
         raise HTTPException(422, "Choose a saved voice with reference audio")
@@ -849,7 +952,12 @@ async def slash():
 
 @app.get(f"{PREFIX}/", response_class=HTMLResponse)
 async def page():
-    return HTMLResponse((Path(__file__).parent / "index.html").read_text())
+    # Asset links carry the file's mtime, so a browser never keeps an older voice.js/voice.css.
+    static = Path(__file__).parent / "static"
+    html = re.sub(r"/Voice/static/(voice\.(?:js|css))\?v=\d+",
+                  lambda match: f"/Voice/static/{match[1]}?v={int((static / match[1]).stat().st_mtime)}",
+                  (Path(__file__).parent / "index.html").read_text())
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 # Agentic sessions, Hermes settings, model guides and the Hermes terminal live in the
 # internal framework (BunnyBytes/shared). The browser goes through this studio so the

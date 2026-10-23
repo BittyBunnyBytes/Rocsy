@@ -125,8 +125,20 @@ def cmd_logs(args) -> int:
     return docker(["logs", "-f", "--tail", "100", *([args.service] if args.service else [])]).returncode
 
 
+def windows_host():
+    """windowshost when this runs inside WSL (Windows support is untested), else None."""
+    sys.path.insert(0, str(COMPOSE_DIR / "hostctl"))
+    try:
+        import windowshost
+    except ImportError:
+        return None
+    return windowshost if windowshost.is_wsl() else None
+
+
 def cmd_open(args) -> int:
     url = GATEWAY + "/" + (args.page or "").lstrip("/")
+    if (windows := windows_host()) and windows.open_url(url):
+        return 0
     opener = shutil.which("xdg-open")
     if not opener:
         print(url)
@@ -149,6 +161,13 @@ def cmd_desktop(args) -> int:
         if docker(["up", "-d"], capture=True).returncode or not wait_for(GATEWAY + "/health", 90):
             notify("Rocsy didn't start. Run `rocsy up` in a terminal to see why.")
             return 1
+    if windows := windows_host():
+        # On Windows the app window is Edge's (--app); WSL has no browser of its own.
+        try:
+            windows.powershell(f"Start-Process msedge -ArgumentList {windows.quote_ps('--app=' + url)}", timeout=20)
+            return 0
+        except (OSError, RuntimeError, subprocess.TimeoutExpired):
+            return cmd_open(args)
     browser = os.getenv("ROCSY_DESKTOP_BROWSER") or next(filter(None, map(shutil.which, APP_BROWSERS)), None)
     if not browser:
         notify("No Chromium-based browser found for the Rocsy Desktop window; opening your default browser.")
