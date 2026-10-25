@@ -53,6 +53,8 @@ CATALOG: dict[str, dict[str, Any]] = {
         "complete": ("Training finished", True), "failed": ("Training failed", True)}},
     "Agent": {"label": "Master Agent", "note": "Agentic sessions", "events": {
         "done": ("Session finished", True), "failed": ("Session failed", True),
+        "question": ("Asks you a question or wants your OK", True),
+        "approval": ("Agentic previews need approval", True),
         "loop": ("Loop detected (warning only)", True)}},
     "Models": {"label": "Models", "note": "Model downloads and updates", "events": {
         "downloaded": ("Download finished", True), "updates": ("Updates available", True)}},

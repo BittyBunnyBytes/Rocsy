@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -47,3 +49,65 @@ class TunnelTests(unittest.TestCase):
         errors = create_dns_routes('token','b'*32,TUNNEL_ID,[{'hostname':'example.com','origin':'http://localhost:8000'}])
         self.assertFalse(errors)
         self.assertEqual(call.call_args_list[1].args[3]['content'],TUNNEL_ID+'.cfargotunnel.com')
+
+
+class _Validated:
+    returncode = 0
+    stderr = b""
+
+
+class _Rejected:
+    returncode = 1
+    stderr = b"invalid ingress"
+
+
+class _Running:
+    def poll(self):
+        return None
+
+
+CREDENTIAL = json.dumps({'AccountTag': 'x', 'TunnelID': TUNNEL_ID, 'TunnelSecret': 'x'}).encode()
+ROUTES = [{'hostname': 'demo.example.com', 'origin': 'http://127.0.0.1:8080'}]
+
+
+class TunnelEventLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_add_validates_once_off_the_event_loop(self):
+        calls = []
+
+        def slow_validation(*args, **kwargs):
+            calls.append(args)
+            time.sleep(0.15)
+            return _Validated()
+
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            manager = TunnelManager(root, root / 'absent.yml', root / 'absent.json')
+            beats = []
+
+            async def heartbeat():
+                start = time.monotonic()
+                await asyncio.sleep(0.01)
+                beats.append(time.monotonic() - start)
+
+            with patch('tunnels.subprocess.run', side_effect=slow_validation), \
+                 patch('tunnels.subprocess.Popen', return_value=_Running()):
+                await asyncio.gather(manager.add('demo', ROUTES, CREDENTIAL), heartbeat())
+            self.assertEqual(len(calls), 1)
+            self.assertLess(beats[0], 0.1)
+
+    async def test_rejected_config_does_not_stop_supervision(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            manager = TunnelManager(root, root / 'absent.yml', root / 'absent.json')
+            with patch('tunnels.subprocess.run', return_value=_Validated()), \
+                 patch('tunnels.subprocess.Popen', return_value=_Running()):
+                await manager.add('demo', ROUTES, CREDENTIAL)
+            manager.processes.clear()
+            with patch('tunnels.subprocess.run', return_value=_Rejected()), \
+                 patch('tunnels.asyncio.sleep', side_effect=[None, asyncio.CancelledError()]):
+                with self.assertRaises(asyncio.CancelledError):
+                    await manager.supervise()    # two passes, then cancelled
+            self.assertIn('invalid ingress', manager.start_errors[TUNNEL_ID])
+            with patch('tunnels.read_status', return_value={'connected': False, 'active_connections': 0,
+                                                            'total_requests': 0, 'request_errors': 0, 'error': ''}):
+                self.assertIn('invalid ingress', manager.list_status()[0]['error'])

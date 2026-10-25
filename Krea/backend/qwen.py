@@ -178,6 +178,10 @@ def build_image_workflow(
             workflow[node] = {"class_type": "LoraLoaderModelOnly",
                               "inputs": {"model": model, "lora_name": QWEN_LORA_SLOTS[index], "strength_model": slot.strength}}
             model = [node, 0]
+    if request.test_lora:   # the Trainer's epoch test, after the user's slots
+        workflow["4999"] = {"class_type": "LoraLoaderModelOnly",
+                          "inputs": {"model": model, "lora_name": request.test_lora, "strength_model": request.test_lora_strength}}
+        model = ["4999", 0]
     workflow["4"]["inputs"]["model"] = model
     encoder_inputs: dict[str, Any] = {
         "clip": ["2", 0],

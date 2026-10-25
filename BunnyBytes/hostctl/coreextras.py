@@ -1010,6 +1010,14 @@ def start(job: str, *, auto: bool = False, version: str = "") -> dict:
             archs = gpu_archs()
             if not archs:
                 raise Refused("No ROCm GPU architecture was detected; rescan after the GPU is available")
+            # hipcc, its HIP version vs ComfyUI's torch, supported targets: refuse now, not mid-compile.
+            check = subprocess.run(["bash", str(FLASH_SCRIPT), "--check", str(FLASH_SOURCE)], capture_output=True,
+                                   text=True, timeout=120, env={**os.environ, "GPU_ARCHS": ";".join(archs),
+                                                                "FLASH_ATTN_VENV": str(COMFY / ".venv")})
+            if check.returncode:
+                errors = [line[4:] for line in check.stdout.splitlines() if line.startswith("ERR ")]
+                raise Refused("; ".join(errors) or (check.stderr or check.stdout).strip()[-300:] or "FlashAttention preflight failed")
+            archs = next((line[6:].split(";") for line in check.stdout.splitlines() if line.startswith("ARCHS=")), archs)
             STATE_DIR.mkdir(parents=True, exist_ok=True)
             FLASH_STATE.write_text(json.dumps({"phase": "queued", "archs": archs, "started": time.time()}))
         args = ["systemd-run", "--user", "--collect", "--quiet", f"--unit={JOBS[job]}",
@@ -1229,8 +1237,8 @@ def enable_profile(name: str) -> None:
     env.write_text("\n".join([*kept, "COMPOSE_PROFILES=" + ",".join([*profiles, name])]) + "\n")
 
 
-def run_comfy_setup(output) -> int:
-    """Download ComfyUI (or finish a partial setup), then its supervisor: what the installer does."""
+def comfy_step(output):
+    """run(command, message, network) for comfyinstall: logged, network steps retried."""
     def step(command, message, network):
         output.write(f"\n=== {message} ===\n")
         for attempt in range(1, 4 if network else 2):
@@ -1241,11 +1249,24 @@ def run_comfy_setup(output) -> int:
                     raise
                 output.write(f"Download failed; retrying ({attempt + 1}/3)\n")
                 time.sleep(5 * attempt)
-    comfyinstall.setup(COMFY, step)
+    return step
+
+
+def run_h3_setup(output) -> None:
+    """Video's H3 packs, PDD loader and patches; problems are logged, never fatal."""
+    output.write("\n=== H3 optimizations (node packs, PDD loader, patches) ===\n")
+    problems = comfyinstall.h3_setup(COMFY, ROCSY_ROOT, comfy_step(output))
+    output.write("".join(f"Not done: {p}\n" for p in problems) or "All in place.\n")
+
+
+def run_comfy_setup(output) -> int:
+    """Download ComfyUI (or finish a partial setup), then its supervisor: what the installer does."""
+    comfyinstall.setup(COMFY, comfy_step(output))
     return run_comfy_supervisor(output, after_setup=True)
 
 
 def run_comfy_supervisor(output, after_setup: bool = False) -> int:
+    run_h3_setup(output)
     status = comfyinstall.supervisor_status(ROCSY_ROOT)
     if status["state"] == "other":
         output.write(f"\nThe ComfyUI supervisor is set up for another ComfyUI ({status.get('script') or 'see its unit'}); "
@@ -1709,9 +1730,15 @@ def run(job: str) -> int:
             if job.startswith("hermes-"):
                 return run_hermes(job, output)
             if job == "comfy-update":
-                # Fast-forward only. Git leaves local modifications intact and reports conflicts.
-                command = ["git", "-C", str(COMFY), "pull", "--ff-only", "origin"]
-                env = None
+                # Fast-forward only. The H3 patch on ComfyUI's own files comes off first (a pull
+                # refuses to touch a locally edited file) and goes back on with run_h3_setup.
+                for name in comfyinstall.unpatch_core(COMFY, ROCSY_ROOT):
+                    output.write(f"Took {name} off for the update\n")
+                output.flush()
+                result = subprocess.run(["git", "-C", str(COMFY), "pull", "--ff-only", "origin"],
+                                        stdout=output, stderr=subprocess.STDOUT)
+                run_h3_setup(output)
+                return result.returncode
             else:
                 built = state()
                 archs = built.get("archs", [])

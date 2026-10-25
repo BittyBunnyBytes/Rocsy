@@ -149,8 +149,9 @@ body.h3-studio-ui .settings-field input:focus-visible { outline: 2px solid var(-
 .character { position: relative; display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); overflow: hidden; transition: border-color .15s,box-shadow .15s; box-shadow: 0 8px 20px -18px rgba(0,0,0,.8); }
 .character:hover { border-color: var(--border-strong); box-shadow: 0 14px 30px -18px rgba(0,0,0,.8); }
 .character.is-selected { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; }
-.character-art { position: relative; aspect-ratio: 4 / 3; background: radial-gradient(120% 90% at 30% 10%,rgba(165,140,240,.22),transparent 60%),radial-gradient(100% 90% at 90% 100%,rgba(124,179,220,.18),transparent 60%),var(--field); }
-.character-portrait { display: grid; place-items: center; width: 100%; height: 100%; }
+.character-art { position: relative; flex: none; width: 100%; aspect-ratio: 4 / 3; overflow: hidden; background: radial-gradient(120% 90% at 30% 10%,rgba(165,140,240,.22),transparent 60%),radial-gradient(100% 90% at 90% 100%,rgba(124,179,220,.18),transparent 60%),var(--field); }
+.character-portrait { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; }
+.character-portrait img { width: 100%; height: 100%; object-fit: contain; object-position: center; }
 .character-portrait.is-glyph { font-size: 64px; color: var(--muted); font-weight: 700; }
 .character-tag { position: absolute; top: 10px; left: 10px; padding: 3px 9px; border-radius: 999px; background: rgba(10,15,19,.78); backdrop-filter: blur(6px); color: var(--text); font-size: 11px; font-weight: 700; letter-spacing: .04em; }
 .character-current { position: absolute; top: 10px; right: 10px; padding: 3px 9px; border-radius: 999px; background: var(--accent-gradient); color: #081018; font-size: 11px; font-weight: 700; }
@@ -162,8 +163,9 @@ body.h3-studio-ui .settings-field input:focus-visible { outline: 2px solid var(-
 .character-facts { margin: 0; color: var(--muted); font-size: 11px; }
 .character-summary { margin: 0; font-size: 13px; }
 .character-quote { margin: 2px 0 0; padding-left: 10px; border-left: 2px solid var(--border-strong); color: var(--muted); font-size: 12px; font-style: italic; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.character-actions { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 10px; }
-.character-actions button { min-height: 34px; padding: 6px 10px; font-size: 12px; white-space: nowrap; }
+.character-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 10px; }
+.character-actions button,.character-actions a { min-height: 34px; padding: 6px 10px; font-size: 12px; white-space: nowrap; }
+.character-actions .character-icon-action { flex: none; width: 34px; padding: 0; }
 .play-button .i-stop,.play-button[aria-pressed="true"] .i-play { display: none; }
 .play-button[aria-pressed="true"] .i-stop { display: inline; }
 .use-button { flex: 1; }
@@ -171,6 +173,14 @@ body.h3-studio-ui .use-button { min-height: 34px; padding: 6px 10px; }
 .icon-danger { flex: none; width: 34px; padding: 0 !important; color: var(--muted); }
 .icon-danger:hover:not(:disabled) { color: var(--red); border-color: var(--red) !important; }
 .library-empty { grid-column: 1 / -1; margin: 0; padding: 28px 12px; text-align: center; color: var(--muted); border: 1px dashed var(--border); border-radius: var(--radius); }
+.character-editor { width: min(560px,calc(100vw - 28px)); max-height: min(760px,calc(100dvh - 28px)); overflow: auto; padding: 20px; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--panel); color: var(--text); box-shadow: 0 24px 80px rgba(0,0,0,.7); }
+.character-editor::backdrop { background: rgba(0,0,0,.72); }
+.character-edit-form { display: grid; gap: 15px; }
+.character-editor-head,.character-editor-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.character-editor-head h2 { margin: 0; font-size: 18px; }
+.character-editor .field-row { min-width: 0; }
+.character-editor .field-row input,.character-editor .field-row textarea { width: 100%; box-sizing: border-box; }
+.character-editor-actions .field-hint { flex: 1; }
 @media (prefers-reduced-motion: reduce) { .character.is-playing .character-art::after,.job-progress::after { animation: none; } }
 
 /* Add a character: recording -> clean up -> character */

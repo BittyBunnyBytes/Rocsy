@@ -1,5 +1,5 @@
 diff --git a/comfy/ldm/minimax/vae.py b/comfy/ldm/minimax/vae.py
-index 36d9abb5..99a3c36f 100644
+index 9f17dad5..8aab23ea 100644
 --- a/comfy/ldm/minimax/vae.py
 +++ b/comfy/ldm/minimax/vae.py
 @@ -1,6 +1,7 @@
@@ -10,7 +10,7 @@ index 36d9abb5..99a3c36f 100644
  
  import torch
  import torch.nn as nn
-@@ -440,7 +441,10 @@ class MiniMaxH3VideoVAE(nn.Module):
+@@ -460,7 +461,10 @@ class MiniMaxH3VideoVAE(nn.Module):
          # spatial tiling parameters
          self.tiling = tiling
          self.tile_size = tile_size
@@ -20,5 +20,5 @@ index 36d9abb5..99a3c36f 100644
 +        # H3_VAE_TILE_OVERLAP overrides it.
 +        self.tile_overlap_min = int(os.environ.get("H3_VAE_TILE_OVERLAP", "16"))
  
-         self.encoder = EncoderFCN3D(
-             ch=ch,
+         if encoder:
+             self.encoder = EncoderFCN3D(

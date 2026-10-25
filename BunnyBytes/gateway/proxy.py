@@ -245,10 +245,11 @@ async def proxy_request(
 
     client = shared_client()
 
-    # A bodyless request (most GETs) goes upstream without one; a body keeps its
-    # declared length instead of being re-sent chunked. The adapted-reasoning path
-    # sends bytes, and httpx sets the length of whatever it actually sends.
-    has_body = "content-length" in request.headers or "transfer-encoding" in request.headers
+    # ASGI can deliver a body without either wire-level length header (for
+    # example over HTTP/2). Read body-capable methods even in that case.
+    # Bodyless GET/HEAD requests go upstream without a chunked request body.
+    has_body = (request.method not in ("GET", "HEAD") or "content-length" in request.headers
+                or "transfer-encoding" in request.headers)
     body_stream = _sized_request_stream(request, settings.max_body_bytes) if has_body else None
     adapt = adapt_reasoning and request.method == "POST" and reasoning_adapter.applies(full_path)
     raw_body = sent_body = b""

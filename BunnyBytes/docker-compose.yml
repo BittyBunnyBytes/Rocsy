@@ -352,6 +352,10 @@ services:
       # <id>.args / <id>.ctx overrides that llama-launch applies on the next load.
       - ../Llama/config.yaml:/llama-config.yaml:ro
       - ../Llama/overrides:/llama-overrides
+      # Parameters -> LoRA adapter lists the GGUF LoRAs here (the Trainer's "Use in Llama" writes them).
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/llm/loras:/llama-loras:ro
+      # Parameters -> Draft model lists the GGUFs here (headers only) and stars the ones that fit each model.
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/llm:/llama-llm:ro
       # Settings -> Cache/Storage: only these explicit generated-data roots
       # are writable by the gateway cleanup endpoint.
       - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/output:/storage/comfy-output
@@ -637,7 +641,7 @@ services:
     healthcheck:
       test: ["CMD", "python3", "-c", "import subprocess; raise SystemExit(subprocess.run(['hermes', 'gateway', 'status'], stdout=subprocess.DEVNULL).returncode)"]
       interval: 30s
-      timeout: 10s
+      timeout: 30s  # `hermes gateway status` takes ~11 s (CLI start-up)
       retries: 3
       start_period: 20s
 
@@ -713,6 +717,10 @@ services:
       - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models:/models:ro
       # Publish to Image studio copies finished image LoRAs here (writable; the rest of /models stays read-only).
       - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/loras/KreaCustom:/models/loras/KreaCustom
+      # Full fine-tunes save their checkpoints here, so ComfyUI and the Trainer's own base scan see them at once.
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/diffusion_models/Trainer:/models/diffusion_models/Trainer
+      # "Use in Llama" copies finished LLM LoRAs (.gguf) here; llama-launch loads them with --lora.
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/llm/loras:/models/llm/loras
     healthcheck:
       test: ["CMD", "python3", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.getenv(\"TRAINER_PORT\", \"8500\")}/Trainer/api/health', timeout=5)"]
       interval: 30s

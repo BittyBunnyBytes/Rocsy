@@ -5,6 +5,7 @@ import base64
 import asyncio
 import copy
 import contextlib
+import contextvars
 import gzip
 import hashlib
 import io
@@ -417,6 +418,12 @@ def _save_enhancement_history() -> None:
         log.exception("Could not save prompt-refinement history")
 job_lock_tokens: dict[str, str] = {}
 lock_heartbeat_at: dict[str, float] = {}
+# Renders queued by an agent mode (Vid Agentic clips, Master Agent jobs sent with X-Rocsy-Agent):
+# the chat model is unloaded before they reach ComfyUI and kept unloaded while they render.
+agent_renders: set[str] = set()
+AGENT_RENDER = contextvars.ContextVar("agent_render", default=False)
+AGENT_LLM_WATCH_SECONDS = 10
+agent_llm_checked_at = 0.0
 # Jobs that have been enqueued with bunny-lock but not yet given the go-ahead
 # to submit to ComfyUI - populated in generate()/finalize_job(), consumed (and
 # popped) in the internal proceed endpoint once the coordinator calls back.
@@ -674,6 +681,8 @@ async def submit_job(job_id: str, workflow: dict[str, Any], model: str, profile:
     global last_submitted_model
     try:
         await qwen.stop_for_render()
+        if job_id in agent_renders or job_id in agentic_job_index:
+            await _agent_render_llm_off(job_id)
         # Now that this job holds the GPU lock: switch ComfyUI to the memory
         # profile this model needs (waits while another user keeps it busy).
         await comfy.ensure_profile(profile or COMFY_PROFILE_FOR_MODEL.get(model))
@@ -732,6 +741,29 @@ async def start_managed_service(service: Any, name: str) -> None:
         await service.start()
     except Exception:
         log.exception("Could not start managed %s", name)
+
+
+async def _agent_render_llm_off(job_id: str) -> None:
+    """An agent mode's render now holds the GPU: the chat model must be out of VRAM before ComfyUI starts."""
+    settled, seen = await enhancer.unload_settled()
+    if seen:
+        log.warning("Chat model %s was loaded when agent render %s got the GPU; unloaded it", ", ".join(seen), job_id[:8])
+    if not settled:
+        log.warning("Could not confirm the chat model stayed unloaded before agent render %s", job_id[:8])
+
+
+async def watch_agent_render_llm(unfinished: list[dict[str, Any]]) -> None:
+    """While an agent mode's render holds the GPU, nothing may load the chat model next to it
+    (a Hermes background review, a late steer): unload it again if something did."""
+    global agent_llm_checked_at
+    rendering = [job["id"] for job in unfinished if job["id"] in job_lock_tokens and job.get("prompt_id")
+                 and (job["id"] in agent_renders or job["id"] in agentic_job_index)]
+    if not rendering or time.monotonic() - agent_llm_checked_at < AGENT_LLM_WATCH_SECONDS:
+        return
+    agent_llm_checked_at = time.monotonic()
+    if models := await enhancer.loaded():
+        log.warning("Chat model %s loaded while agent render %s renders; unloading it", ", ".join(models), rendering[0][:8])
+        await enhancer.unload()
 
 
 async def maintain_lock_tokens(unfinished_ids: set[str]) -> None:
@@ -862,6 +894,10 @@ async def monitor_services() -> None:
                 await publish_jobs()
             unfinished_ids = {item["id"] for item in unfinished}
             await maintain_lock_tokens(unfinished_ids)
+            await watch_agent_render_llm(unfinished)
+            for job_id in agent_renders - unfinished_ids:
+                if (store.job(job_id) or {}).get("state") not in UNFINISHED_JOB_STATES:
+                    agent_renders.discard(job_id)  # finished (the check skips jobs created since `unfinished`)
             for job_id in [job_id for job_id in job_estimates if job_id not in unfinished_ids]:
                 job_estimates.pop(job_id, None)  # failed/cancelled jobs never reach record_render_time
         except asyncio.CancelledError:
@@ -1137,8 +1173,8 @@ async def _deliver_push(payload: dict[str, Any], event: str) -> None:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(NOTIFY_HUB_URL, headers={"x-internal-secret": settings.queue_internal_secret}, json={
-                    "service": "Vid", "event": event, "icon": f"{PREFIX}/static/icons/icon-192.png",
-                    "badge": f"{PREFIX}/static/icons/badge-96.png", **payload})
+                    "service": "Vid", "event": event, "icon": f"{PREFIX}/static/icons/video-192.png",
+                    "badge": f"{PREFIX}/static/icons/video-badge-96.png", **payload})
             if response.status_code == 200:
                 return
             log.warning("Notification hub refused %s (%s); pushing directly", event, response.status_code)
@@ -1492,9 +1528,9 @@ async def web_manifest() -> JSONResponse:
         "name": "Video", "short_name": "Video", "id": f"{PREFIX}/", "start_url": f"{PREFIX}/", "scope": f"{PREFIX}/",
         "display": "standalone", "background_color": "#0f1418", "theme_color": "#12191e",
         "icons": [
-            {"src": f"{PREFIX}/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
-            {"src": f"{PREFIX}/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
-            {"src": f"{PREFIX}/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+            {"src": f"{PREFIX}/static/icons/video-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": f"{PREFIX}/static/icons/video-512.png", "sizes": "512x512", "type": "image/png"},
+            {"src": f"{PREFIX}/static/icons/video-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
         ],
     }, media_type="application/manifest+json")
 
@@ -3394,7 +3430,7 @@ async def delete_postedit_voices() -> dict[str, int]:
 
 
 @app.post(p("/api/generate"), status_code=202)
-async def generate(request: GenerationRequest) -> dict[str, Any]:
+async def generate(request: GenerationRequest, http_request: Request = None) -> dict[str, Any]:
     comfy_state = await comfy.ensure_online(profile=comfy_profile_for_request(request), switch=False)
     if not comfy_state["online"]:
         raise APIError(
@@ -3474,6 +3510,8 @@ async def generate(request: GenerationRequest) -> dict[str, Any]:
     if request.model == "seedhunter":
         item["stage"] = "candidates"
     store.create_job(item)
+    if AGENT_RENDER.get() or (http_request is not None and http_request.headers.get("X-Rocsy-Agent")):
+        agent_renders.add(job_id)
     try:
         expires_at = await asyncio.to_thread(
             retry_cache.snapshot, settings.upload_dir, job_id, [*references, *videos, *audios, *frames],
@@ -5313,7 +5351,11 @@ async def _agentic_render_clip(job: dict[str, Any], run: dict[str, Any], session
         render_id = None
         try:
             job["phase"] = f"{phase.title()} clip {clip['id']}: attempt {attempt} of {AGENTIC_MAX_RENDER_RETRIES + 1}"
-            render = await generate(request)
+            agent_token = AGENT_RENDER.set(True)
+            try:
+                render = await generate(request)
+            finally:
+                AGENT_RENDER.reset(agent_token)
             render_id = render["id"]
             _agentic_register_render(job, run, session, render_id, {"phase": phase, "clip": clip["id"], "attempt": attempt})
             job["state"] = run["state"] = session["state"] = "rendering"
@@ -7309,7 +7351,7 @@ async def enhancement_job(job_id: str, http_response: Response) -> dict[str, Any
     job = enhancement_jobs.get(job_id)
     if not job:
         raise APIError(404, "not_found", "Enhancement job not found")
-    return {key: value for key, value in job.items() if key not in {"created", "task"}}
+    return {key: value for key, value in job.items() if key not in {"created", "task", "hermes_hold"}}
 
 
 async def _agentic_apply_steering(job: dict[str, Any], remaining: list[dict[str, Any]]) -> None:

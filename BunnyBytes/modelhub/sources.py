@@ -551,16 +551,40 @@ def _hf_variants(repo: str, siblings: list[dict], category: str, kind: str) -> l
                          "quant_tag": quant_tag(group),
                          "quant": q, "format": "GGUF" if lower.endswith(".gguf") else "SafeTensor", "primary": False,
                          "dest": dest, "companions": [], "role": ROLE_BY_FOLDER.get(dest) or _hf_role(group)})
+        if file_kind == "llm" and variants[-1]["role"] == "Text encoder":
+            variants[-1]["role"] = ""  # a Gemma/Qwen GGUF in an LLM repo is the model, not a diffusion text encoder
+    mains = [v for v in variants if not v.get("whole_repo")]
+    if mains and all(v.get("role") in ("Draft model", "MTP head") for v in mains):
+        for v in mains:  # the repo itself is a draft/MTP build: those files ARE the model
+            v["mtp"] = v["role"] == "MTP head"
+            v["role"] = ""
+    # "...-MTP-Q4_K_M.gguf" can be a whole model with its MTP head built in, or the head alone: a head is a
+    # small fraction of the model (Gemma 4 12B: 0.4 GB vs 7 GB).
+    biggest = max((v["size"] for v in mains if not v.get("role")), default=0)
+    for v in mains:
+        if biggest and v.get("role") == "MTP head" and v["size"] > 0.35 * biggest:
+            v["role"], v["mtp"] = "", True
+    # A repo named "...-MTP-GGUF" whose file names don't say it: its quants carry the MTP head.
+    if MTP_NAME.search(repo.split("/")[-1]) and not any(v.get("mtp") or v.get("role") == "MTP head" for v in mains):
+        for v in mains:
+            if not v.get("role") and v["format"] == "GGUF":
+                v["mtp"] = True
     if mmproj and category == "llm":
         best = sorted(mmproj, key=lambda n: quant_of(n)["rank"])  # smallest precision that still is F16/BF16
         pick = next((n for n in best if quant_of(n)["label"] in ("F16", "BF16")), best[-1])
+        model_dest = next((v["dest"] for v in variants if v["format"] == "GGUF" and not v.get("role")), "")
         for variant in variants:
-            if variant["format"] == "GGUF":
+            if variant["format"] == "GGUF" and not variant.get("role"):
                 variant["companions"] = [file_entry(pick, variant["dest"])]
-    mains = [v for v in variants if not v.get("whole_repo")]
-    if mains and all(v.get("role") == "Draft model" for v in mains):
-        for v in mains:  # the repo itself is a draft/MTP build: those files ARE the model
-            v["role"] = ""
+        # Every vision head is listed too (the model's download already brings the one picked above).
+        for name in sorted(mmproj, key=lambda n: quant_of(n)["rank"]):
+            dest = model_dest or suggest_dest(kind, "llm", "", "", name.split("/")[-1], repo)
+            entry = file_entry(name, dest)
+            q = quant_of(name)
+            variants.append({"key": name, "label": q["label"] or "mmproj", "file_label": name.split("/")[-1], "files": [entry],
+                             "size": entry["size"], "quant_tag": quant_tag(name), "quant": q, "format": "GGUF",
+                             "primary": False, "dest": dest, "companions": [], "role": "Vision head",
+                             "auto": name == pick})
     return variants
 
 
@@ -589,6 +613,10 @@ ROLE_BY_FOLDER = {"loras": "LoRA", "text_encoders": "Text encoder", "vae": "VAE"
                   "model_patches": "Model patch", "latent_upscale_models": "Latent upscaler"}
 
 
+# Multi-token-prediction heads: "mtp-gemma-4-26B…", "gemma-4-12B-it-MTP-Q8_0", Gemma 4 "assistant" drafters.
+MTP_NAME = re.compile(r"(^|[_\-/.])mtp([_\-.]|$)|gemma.?4.*[_\-.]assistant([_\-.]|$)", re.I)
+
+
 def _repo_folder(name: str) -> str:
     for part in name.split("/")[:-1]:
         if part in COMFY_FOLDERS:
@@ -598,7 +626,9 @@ def _repo_folder(name: str) -> str:
 
 def _hf_role(name: str) -> str:
     lower = name.lower()
-    if re.search(r"(^|[_\-/.])(draft|mtp|dflash)([_\-.]|$)", lower):
+    if MTP_NAME.search(lower):
+        return "MTP head"
+    if re.search(r"(^|[_\-/.])(draft|dflash|eagle3?|speculator)([_\-.]|$)", lower):
         return "Draft model"
     if re.search(r"(^|[_\-/.])vae([_\-.]|$)", lower):
         return "VAE"

@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
 import struct
 import time
@@ -26,6 +27,8 @@ CHUNK = 4 * 1024 * 1024
 # (resuming from the .part) after these waits; login walls, missing files and a full disk are not.
 RETRY_WAITS = (15, 45, 120, 300, 600)
 RETRY_STATUS = {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
+_PARTIAL_RANGE = re.compile(r"bytes (\d+)-(\d+)/(\d+)")
+_UNSATISFIED_RANGE = re.compile(r"bytes \*/(\d+)")
 PROGRESS_RESET = 256 * 1024 ** 2  # an attempt that got this far starts the retry count over
 
 
@@ -367,8 +370,15 @@ class Downloads:
                     if response.status_code in (401, 403):
                         raise RuntimeError("Access denied: this file needs an API key/token (Manager -> Settings), "
                                            "or accepting the model's terms on its page")
-                    if response.status_code == 416:  # already complete
-                        have, response_ok = part.stat().st_size, False
+                    if response.status_code == 416:
+                        # A 416 alone does not mean the local partial is complete.
+                        # In particular, setup downloads can have no known size or hash.
+                        match = _UNSATISFIED_RANGE.fullmatch(response.headers.get("content-range", ""))
+                        total = int(match[1]) if match else 0
+                        if not have or not total or have != total or (job["size"] and job["size"] != total):
+                            raise RuntimeError("The server rejected the resume range without confirming the partial file is complete; cancel and retry to start over")
+                        job["size"] = total
+                        response_ok = False
                     elif response.status_code in RETRY_STATUS:
                         raise Transient(f"{'Rate limited' if response.status_code == 429 else 'Server error'} "
                                         f"(HTTP {response.status_code})", _retry_after(response))
@@ -380,7 +390,20 @@ class Downloads:
                     if response_ok and have and response.status_code == 200:
                         have, digest = 0, hashlib.sha256()  # server ignored Range: start over
                     if response_ok:
-                        total = int(response.headers.get("content-length") or 0) + have
+                        if response.status_code == 206:
+                            match = _PARTIAL_RANGE.fullmatch(response.headers.get("content-range", ""))
+                            if not match:
+                                raise RuntimeError("The server returned a partial response without a valid Content-Range")
+                            start, end, total = map(int, match.groups())
+                            if start != have or end < start or end >= total:
+                                raise RuntimeError("The server returned bytes from the wrong resume range")
+                            length = response.headers.get("content-length")
+                            if length is not None and int(length) != end - start + 1:
+                                raise RuntimeError("The server returned an inconsistent partial response length")
+                            if job["size"] and job["size"] != total:
+                                raise RuntimeError("The remote file size changed while resuming; cancel and retry to start over")
+                        else:
+                            total = int(response.headers.get("content-length") or 0) + have
                         if total and not job["size"]:
                             job["size"] = total
                         mode = "ab" if have else "wb"

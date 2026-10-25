@@ -18,4 +18,8 @@ def model_with_loras(graph: dict[str, Any], source: str, request: GenerationRequ
             "inputs": {"model": previous, "lora_name": slots[index], "strength_model": slot.strength},
         }
         previous = [node_id, 0]
+    if request.test_lora:   # the Trainer's epoch test, after the user's slots
+        graph["1999"] = {"class_type": "LoraLoaderModelOnly",
+                         "inputs": {"model": previous, "lora_name": request.test_lora, "strength_model": request.test_lora_strength}}
+        previous = ["1999", 0]
     return previous

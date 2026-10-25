@@ -560,13 +560,17 @@ async def scout_account(account_id: str, x_connections_action: str = Header(defa
               "and follow what it returns. Don't post or change anything on the site.")
     request = urllib.request.Request(f"{AGENT_URL}/Agent/api/sessions", method="POST",
                                      data=json.dumps({"prompt": prompt}).encode(), headers={"Content-Type": "application/json"})
-    try:
+
+    def start_session() -> str:
         with urllib.request.urlopen(request, timeout=20) as response:
-            sid = json.load(response)["id"]
+            return json.load(response)["id"]
+
+    try:
+        sid = await asyncio.to_thread(start_session)    # up to 20 s; don't hold the event loop
     except (urllib.error.URLError, OSError, ValueError, KeyError) as exc:
         raise HTTPException(status_code=502, detail=f"The Master Agent isn't reachable: {exc}") from exc
     write_account(account_id, {**data, "scout": {"session": sid, "t": time.time()}})
-    return public_account(account_id)
+    return await asyncio.to_thread(public_account, account_id)    # may poll the Agent for the scout state
 
 
 def require_action(header: str) -> None:

@@ -48,6 +48,9 @@ TRANSIENT_DOWNLOAD = re.compile(r'failed retrieving file|failed to retrieve some
 # What the installer can set up. Services are Compose profiles (COMPOSE_PROFILES in BunnyBytes/.env,
 # so later rebuilds keep the choice); backends run once, after Rocsy is up, and each may fail alone.
 COMPONENTS = {'motion': True, 'rea': False, 'trainer': False, 'comfyui': True, 'hermes': True, 'ytdlp': True}
+# Bundled starting points that become the user's own once installed (Models → Manager adds the LLMs it
+# downloads to Llama/config.yaml): written on a fresh install, never replaced by Update or Repair.
+USER_SEED_FILES = frozenset({'Llama/config.yaml'})
 SERVICE_PROFILES = ('motion', 'rea', 'trainer')
 ALL_PROFILES = (*SERVICE_PROFILES, 'hermes')
 PROFILE_SERVICES = {'motion': ['motion'], 'rea': ['rea'], 'trainer': ['trainer'], 'hermes': ['hermes-agent', 'hermes-dashboard']}
@@ -796,6 +799,19 @@ def setup_comfyui(comfy, progress):
     comfyinstall.setup(comfy, run, find=comfy_python)
 
 
+def setup_h3(dest, comfy, progress):
+    """Video's H3 node packs, PDD loader and patches (hostctl/comfyinstall.py h3_setup); returns problems."""
+    def run(command, message, network):
+        if network:
+            run_with_retries(command, progress, 95, message, 'Retrying the download')
+        else:
+            run_command(command, progress, 95, message)
+    problems = comfyinstall.h3_setup(comfy, dest, run)
+    for problem in problems:
+        log_line(f'H3 optimizations: {problem}')
+    return problems
+
+
 def setup_supervisor(dest, comfy):
     """The ComfyUI supervisor (port 8083) the studios ask to start ComfyUI on demand."""
     comfyinstall.install_supervisor(dest, comfy)
@@ -823,13 +839,15 @@ def install_backends(dest, comfy, existing_comfy, components, use_group, progres
         def comfyui():
             if not existing_comfy:
                 setup_comfyui(comfy, progress)
+            h3_problems = setup_h3(dest, comfy, progress)
             if not systemd_user_ok():
                 return (f'Installed, but the supervisor needs systemd. Start ComfyUI yourself: '
                         f'{comfy}/.venv/bin/python {comfy}/main.py --listen 127.0.0.1 --port 8188')
             setup_supervisor(dest, comfy)
-            note = ''
+            note = (f' {len(h3_problems)} H3 optimization step(s) didn’t finish (see the install log); '
+                    'Models → Manager → Core Backend → ComfyUI runs them again.' if h3_problems else '')
             if windowshost.is_wsl() and not windowshost.gpu_status()['rocm_wsl']:
-                note = f' ROCm for WSL is missing, so it can\'t use the GPU yet: {windowshost.ROCM_WSL_DOCS}'
+                note += f' ROCm for WSL is missing, so it can\'t use the GPU yet: {windowshost.ROCM_WSL_DOCS}'
             return ('Ready; the studios start it when they need it.' if not existing_comfy else 'Supervisor set up for your ComfyUI folder.') + note
         attempt('ComfyUI', comfyui)
     if components['hermes'] and not hermes_ready(dest):
@@ -993,16 +1011,24 @@ def install(payload, progress=lambda _percent, _message: None):
     sources = ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer')
     total = sum(len(files) for name in sources for _, _, files in os.walk(BUNDLE / name)) or 1
     copied = 0
+    kept = []
     for name in sources:
         progress(30 + int(40 * copied / total), f'Copying {name}…')
         def copy_file(src, target):
             nonlocal copied
-            result = shutil.copy2(src, target)
+            relative = Path(target).relative_to(dest).as_posix()
+            if relative in USER_SEED_FILES and Path(target).exists():
+                kept.append(relative)
+                result = target
+            else:
+                result = shutil.copy2(src, target)
             copied += 1
             with STATE_LOCK:
                 STATE['progress'] = 30 + int(40 * copied / total)
             return result
         shutil.copytree(BUNDLE / name, dest / name, dirs_exist_ok=True, copy_function=copy_file)
+    for relative in kept:
+        log_line(f'Kept your {relative} (the update ships a fresh one only for new installs).')
     progress(72, 'Preparing backend folders…')
     (dest / 'external' / 'ComfyUI').mkdir(parents=True, exist_ok=True)
     # Read-only mounts of REA and the Agent: created here so Docker doesn't make them root-owned.
@@ -1206,12 +1232,14 @@ TERMINAL_HELP = """Install Rocsy from the terminal.
 
 Options:
   --dir PATH     the Rocsy folder (default: %s)
+  --no-password  install without a password (trusted machines only); skips the password question
   --verbose      show every command's output, not only the steps
   --help         this text
 
 The default install: Rocsy in the default folder with Motion, ComfyUI (downloaded, with its
-supervisor), Hermes Agent and yt-dlp; REA and the Trainer are left out. It sets a generated
-password (printed at the end), the rocsy command, Rocsy Desktop and the host services helper.
+supervisor), Hermes Agent and yt-dlp; REA and the Trainer are left out. It asks whether you want
+a password and lets you type it (--defaults generates one and prints it at the end), and sets up
+the rocsy command, Rocsy Desktop and the host services helper.
 On a folder that already has Rocsy, the default is Update, which keeps everything as it is.
 Without a graphical session the installer starts in the terminal by itself.
 On Windows, run "Install Rocsy (Windows).cmd" instead (untested): it runs this inside WSL2."""
@@ -1227,7 +1255,8 @@ class Style:
 
 def parse_terminal_args(argv):
     """argv after the bundle and default folder → options; options['ui'] means the browser installer."""
-    options = {'terminal': False, 'defaults': False, 'verbose': False, 'help': False, 'dir': None, 'windows': False}
+    options = {'terminal': False, 'defaults': False, 'verbose': False, 'help': False, 'dir': None, 'windows': False,
+               'no_password': False}
     items = list(argv)
     while items:
         arg = FLAG_ALIASES.get(items[0], items[0])
@@ -1238,11 +1267,14 @@ def parse_terminal_args(argv):
             options['dir'] = arg.partition('=')[2]
         elif arg in ('--terminal', '--defaults', '--verbose', '--help', '--windows'):
             options[arg[2:]] = True
+        elif arg == '--no-password':
+            options['no_password'] = True
         else:
             raise SystemExit(f'Unknown option {arg!r}. Run with --help to see the options.')
     # --windows: started by “Install Rocsy (Windows).cmd”; the browser UI opens in Windows.
     graphical = os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY') or options['windows']
-    options['ui'] = bool(graphical) and not (options['terminal'] or options['defaults'] or options['help'] or options['verbose'])
+    options['ui'] = bool(graphical) and not (options['terminal'] or options['defaults'] or options['help'] or options['verbose']
+                                             or options['no_password'])
     return options
 
 
@@ -1278,9 +1310,12 @@ class Prompter:
                 return options[int(answer) - 1][0]
             print(f'  Enter 1–{len(options)}, or press Enter for the default.')
 
-    def password(self):
+    def password(self, generate=False):
+        """A typed password; with generate, an empty answer means "generate one" and returns ''."""
         while True:
-            first = self.secret('  New password (8–200 characters): ')
+            first = self.secret('  New password (8–200 characters' + (', Enter to generate one' if generate else '') + '): ')
+            if generate and not first:
+                return ''
             if (len(first) < 8 or len(first) > 200 or first != first.strip()
                     or any(ch in first for ch in ('\n', '\r', '\0', '$', '#', '\\', '"', "'"))):
                 print('  Use 8–200 characters, no spaces at either end, and none of $ # " \' \\')
@@ -1316,7 +1351,19 @@ def default_payload(dest, prior):
     return payload
 
 
-def customize(ask, style, dest_default, family):
+def choose_access(ask, style, payload, no_password=False):
+    """The password question for a new install; updates payload, returns the generated password or None."""
+    if not no_password and ask.yes('Protect Rocsy with a password?', True):
+        typed = ask.password(generate=True)
+        payload.update(password_mode='custom', new_password=typed or secrets.token_urlsafe(18))
+        payload.pop('no_password_ack', None)
+        return None if typed else payload['new_password']
+    print('  ' + style.warn('No password: anyone who can reach Rocsy can use it, change settings and uninstall it.'))
+    payload.update(password_mode='none', no_password_ack=True, new_password='')
+    return None
+
+
+def customize(ask, style, dest_default, family, no_password=False):
     """Walk the installer's steps as questions; returns (payload, generated password or None)."""
     print(style.bold('\n1. Location'))
     while True:
@@ -1359,19 +1406,7 @@ def customize(ask, style, dest_default, family):
 
     if payload['mode'] in ('install', 'reinstall'):
         print(style.bold('\n3. Access'))
-        how = ask.choose('Rocsy password', [('generate', 'Generate one for me (printed at the end)'),
-                                            ('custom', 'Set my own'),
-                                            ('none', 'No password (trusted machines only)')], 'generate')
-        if how == 'custom':
-            payload.update(password_mode='custom', new_password=ask.password())
-        elif how == 'none':
-            print('  ' + style.warn('Anyone who can reach Rocsy can use it, change settings and uninstall it.'))
-            if not ask.yes('Install without a password?', False):
-                raise SystemExit('Nothing was installed.')
-            payload.update(password_mode='none', no_password_ack=True, new_password='')
-        else:
-            generated = payload['new_password'] = secrets.token_urlsafe(18)
-            payload['password_mode'] = 'custom'
+        generated = choose_access(ask, style, payload, no_password)
 
     print(style.bold('\n4. Desktop & helpers'))
     if windowshost.is_wsl():
@@ -1443,22 +1478,30 @@ def terminal_main(options, read=input, secret=None):
                 return 1
             payload = default_payload(dest, prior)
             generated = payload.get('new_password')
+            if options.get('no_password') and payload['mode'] == 'install':
+                generated = choose_access(ask, style, payload, no_password=True)
         else:
             if not tty:
                 print(style.bad('  There is no terminal to ask questions in. Run with --defaults for the default install.'))
                 return 1
             print('\n  Press Enter for the default install, or type ' + style.bold('c') + ' to choose the options yourself.')
             if read('  > ').strip().lower().startswith('c'):
-                payload, generated = customize(ask, style, options['dir'] or DEFAULT_DIR, host['family'])
+                payload, generated = customize(ask, style, options['dir'] or DEFAULT_DIR, host['family'], options.get('no_password'))
             else:
                 dest = safe_destination(options['dir'] or DEFAULT_DIR)
                 prior = existing_install(dest)
                 if not prior and dest.exists() and any(dest.iterdir()):
                     print(style.warn(f'  {dest} already has files, so the options are needed.'))
-                    payload, generated = customize(ask, style, str(dest), host['family'])
+                    payload, generated = customize(ask, style, str(dest), host['family'], options.get('no_password'))
                 else:
                     payload = default_payload(dest, prior)
-                    generated = payload.get('new_password')
+                    generated = None
+                    if payload['mode'] == 'install':
+                        print(style.bold('\nAccess'))
+                        generated = choose_access(ask, style, payload, options.get('no_password'))
+        if options.get('no_password') and payload['mode'] in ('update', 'repair'):
+            print('  ' + style.warn('--no-password only applies to a new install; this one keeps its password '
+                                    '(change it in Settings → Security).'))
         print(style.bold('\nSummary'))
         print('\n'.join(summary_lines(payload, style, generated)))
         if not options['defaults'] and not ask.yes('Start now?', True):

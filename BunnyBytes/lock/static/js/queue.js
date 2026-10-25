@@ -18,12 +18,18 @@
     ["Mus", "Ambient music mix"],
     ["Vid", "Continuous LTX batch"],
     ["Trainer", "Style LoRA training"],
+    ["Krea", "inkw4sh_fox-000003 · seed 410716218: test prompt", "IMAGE - EPOCH TESTING"],
+    ["Krea", "inkw4sh_fox-000004 · seed 410716218: test prompt", "IMAGE - EPOCH TESTING"],
+    ["Krea", "inkw4sh_fox-000005 · seed 410716218: test prompt", "IMAGE - EPOCH TESTING"],
   ];
   let demoMode = new URLSearchParams(location.search).has("demo");
   let demoEntries = [];
   let liveEntries = [];
+  // entry_id -> {percent, remaining_seconds, stage}: the running job's render progress, from "progress" events.
+  let progressById = {};
   const cancelling = new Set();
   const locking = new Set();
+  const openGroups = new Set();
   let draggingId = null;
   let reorderPending = false;
 
@@ -34,15 +40,17 @@
   }
 
   function makeDemoEntries() {
-    return TEST_JOBS.map(([app, label], index) => ({
+    return TEST_JOBS.map(([app, label, group], index) => ({
       entry_id: `test-${index + 1}`,
       app,
       label,
+      group: group || null,
       state: index === 0 ? "active" : "waiting",
       is_continuous: index === 0 || index === 8,
       is_locked: false,
       shutdown_at: null,
       position: index === 0 ? null : index,
+      progress: index === 0 ? { percent: 42, remaining_seconds: 155, stage: "render" } : null,
     }));
   }
 
@@ -54,7 +62,7 @@
   }
 
   function refresh() {
-    demoToggle.textContent = demoMode ? "Show live queue" : "Load 10 test jobs";
+    demoToggle.textContent = demoMode ? "Show live queue" : "Load test jobs";
     modeIndicator.innerHTML = demoMode ? "Test jobs only" : "<i></i> Live updates";
     render(displayEntries());
   }
@@ -140,11 +148,159 @@
     return `${hours}h ${minutes}m remaining`;
   }
 
+  function fmtLeft(seconds) {
+    if (seconds == null) return "";
+    if (seconds < 60) return "<1m left";
+    const minutes = Math.round(seconds / 60);
+    return minutes < 60 ? `~${minutes}m left` : `~${Math.floor(minutes / 60)}h ${minutes % 60}m left`;
+  }
+
+  function progressFor(entry) {
+    return demoMode ? entry.progress : progressById[entry.entry_id];
+  }
+
+  // The bar is updated in place by "progress" events, so a drag or an open group isn't redrawn every tick.
+  function progressBar(entry) {
+    const wrap = document.createElement("div");
+    wrap.className = "queue-progress";
+    wrap.dataset.progressFor = entry.entry_id;
+    wrap.innerHTML = '<div class="queue-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i></i></div><span class="queue-progress-text"></span>';
+    fillProgress(wrap, progressFor(entry));
+    return wrap;
+  }
+
+  function fillProgress(wrap, progress) {
+    wrap.hidden = !progress;
+    if (!progress) return;
+    const percent = Math.max(0, Math.min(100, Number(progress.percent) || 0));
+    wrap.querySelector("i").style.width = `${percent}%`;
+    wrap.querySelector(".queue-progress-track").setAttribute("aria-valuenow", String(Math.round(percent)));
+    const parts = [`${Math.floor(percent)}%`];
+    if (progress.stage) parts.push(progress.stage);
+    const left = percent < 100 ? fmtLeft(progress.remaining_seconds) : "finishing…";
+    if (left) parts.push(left);
+    wrap.querySelector(".queue-progress-text").textContent = parts.join(" · ");
+  }
+
+  function updateProgressBars() {
+    for (const wrap of entriesEl.querySelectorAll("[data-progress-for]")) fillProgress(wrap, progressById[wrap.dataset.progressFor]);
+  }
+
+  async function cancelEntry(entry, quiet = false) {
+    if (demoMode) {
+      demoEntries = demoEntries.filter((job) => job.entry_id !== entry.entry_id);
+      if (!quiet) showMessage(`${APP_LABELS[entry.app] || entry.app} test job cancelled.`);
+      refresh();
+      return;
+    }
+    if (cancelling.has(entry.entry_id)) return;
+    cancelling.add(entry.entry_id);
+    refresh();
+    if (!quiet) showMessage("");
+    try {
+      const response = await fetch(`${PREFIX}/api/queue/${encodeURIComponent(entry.entry_id)}/cancel`, { method: "POST" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || result.detail || `Cancel failed (HTTP ${response.status}).`);
+      if (!quiet) showMessage(result.removed === "orphan"
+        ? `${APP_LABELS[entry.app] || entry.app} no longer had this job, so it was removed from the queue.`
+        : `Cancel request sent for ${APP_LABELS[entry.app] || entry.app}.`);
+      if (!quiet) await loadOnce();
+    } catch (err) {
+      console.error("Cancel failed", err);
+      showMessage(err.message || "Unable to cancel this job. Please try again.", true);
+    } finally {
+      cancelling.delete(entry.entry_id);
+      refresh();
+    }
+  }
+
+  // Entries sharing a `group` (e.g. the Trainer's epoch-test renders) are one card, placed where the group's
+  // first entry sits; it opens into the list of its jobs, each still cancellable.
+  function renderGroup(name, members) {
+    const active = members.find((entry) => entry.state === "active");
+    const waiting = members.filter((entry) => entry.state === "waiting");
+    const open = openGroups.has(name);
+    const row = document.createElement("div");
+    row.className = "queue-card queue-group" + (active ? " is-active" : " is-waiting") + (open ? " is-open" : "");
+    const posEl = document.createElement("div");
+    posEl.className = "queue-order";
+    posEl.textContent = active ? "▶" : String(waiting[0]?.position ?? "?");
+    row.appendChild(posEl);
+    const body = document.createElement("div");
+    body.className = "queue-card-body";
+    const title = document.createElement("span");
+    title.className = "queue-app";
+    title.textContent = name;
+    const count = document.createElement("span");
+    count.className = "queue-label";
+    count.textContent = `${members.length} job${members.length === 1 ? "" : "s"}` + (active ? " · 1 running" : "") + (waiting.length ? ` · ${waiting.length} waiting` : "");
+    body.append(title, count);
+    const meta = document.createElement("div");
+    meta.className = "queue-meta";
+    meta.textContent = active ? `Now: ${active.label}` : `Next: ${waiting[0]?.label || ""}`;
+    body.appendChild(meta);
+    if (active) body.appendChild(progressBar(active));
+    if (open) {
+      const list = document.createElement("ol");
+      list.className = "group-list";
+      for (const entry of members) {
+        const item = document.createElement("li");
+        item.className = entry.state === "active" ? "is-active" : "";
+        const text = document.createElement("span");
+        text.textContent = entry.label;
+        text.title = entry.label;
+        const tag = document.createElement("em");
+        tag.textContent = entry.state === "active" ? "running" : `#${entry.position ?? "?"}`;
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "queue-cancel";
+        cancel.textContent = cancelling.has(entry.entry_id) ? "Cancelling…" : "Cancel";
+        cancel.disabled = cancelling.has(entry.entry_id);
+        cancel.setAttribute("aria-label", `Cancel ${entry.label}`);
+        cancel.addEventListener("click", () => cancelEntry(entry));
+        item.append(tag, text, cancel);
+        list.appendChild(item);
+      }
+      body.appendChild(list);
+    }
+    row.appendChild(body);
+    const actions = document.createElement("div");
+    actions.className = "queue-actions";
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "queue-lock";
+    toggle.textContent = open ? "Hide jobs" : `Show ${members.length} job${members.length === 1 ? "" : "s"}`;
+    toggle.addEventListener("click", () => { open ? openGroups.delete(name) : openGroups.add(name); refresh(); });
+    const cancelAll = document.createElement("button");
+    cancelAll.type = "button";
+    cancelAll.className = "queue-cancel";
+    cancelAll.textContent = "Cancel all";
+    cancelAll.disabled = members.every((entry) => cancelling.has(entry.entry_id));
+    cancelAll.addEventListener("click", async () => {
+      if (!confirm(`Cancel all ${members.length} ${name} job${members.length === 1 ? "" : "s"}?`)) return;
+      // Waiting ones first, so the queue doesn't hand the GPU to the next member while the running one stops.
+      for (const entry of [...waiting, ...(active ? [active] : [])]) await cancelEntry(entry, true);
+      showMessage(`Cancel requests sent for ${members.length} ${name} job${members.length === 1 ? "" : "s"}.`);
+      await loadOnce();
+    });
+    actions.append(toggle, cancelAll);
+    row.appendChild(actions);
+    entriesEl.appendChild(row);
+  }
+
   function render(entries) {
     entriesEl.innerHTML = "";
     emptyEl.hidden = entries.length > 0;
     emptyEl.textContent = demoMode ? "All test jobs cancelled. Show the live queue or reload the test jobs." : "Nothing queued right now.";
+    const drawn = new Set();
     for (const entry of entries) {
+      if (entry.group) {
+        if (!drawn.has(entry.group)) {
+          drawn.add(entry.group);
+          renderGroup(entry.group, entries.filter((other) => other.group === entry.group));
+        }
+        continue;
+      }
       const row = document.createElement("div");
       row.className = "queue-card" + (entry.state === "active" ? " is-active" : " is-waiting") + (entry.is_continuous ? " is-continuous" : "") + (entry.is_locked ? " is-locked" : "") + (entry.is_informational ? " is-informational" : "");
       row.draggable = entry.state === "waiting" && !entry.is_locked && !entry.is_informational;
@@ -212,6 +368,7 @@
       if (countdown) metaParts.push(countdown);
       meta.textContent = metaParts.join(" · ");
       body.appendChild(meta);
+      if (entry.state === "active" && !entry.is_informational) body.appendChild(progressBar(entry));
 
       row.appendChild(body);
 
@@ -240,33 +397,7 @@
         cancelBtn.setAttribute("aria-label", `Cancel ${APP_LABELS[entry.app] || entry.app} job`);
         cancelBtn.disabled = cancelling.has(entry.entry_id);
         if (cancelBtn.disabled) cancelBtn.textContent = "Cancelling…";
-        cancelBtn.addEventListener("click", async () => {
-          if (demoMode) {
-            demoEntries = demoEntries.filter((job) => job.entry_id !== entry.entry_id);
-            showMessage(`${APP_LABELS[entry.app] || entry.app} test job cancelled.`);
-            refresh();
-            return;
-          }
-          if (cancelling.has(entry.entry_id)) return;
-          cancelling.add(entry.entry_id);
-          refresh();
-          showMessage("");
-          try {
-            const response = await fetch(`${PREFIX}/api/queue/${encodeURIComponent(entry.entry_id)}/cancel`, { method: "POST" });
-            const result = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(result.message || result.detail || `Cancel failed (HTTP ${response.status}).`);
-            showMessage(result.removed === "orphan"
-              ? `${APP_LABELS[entry.app] || entry.app} no longer had this job, so it was removed from the queue.`
-              : `Cancel request sent for ${APP_LABELS[entry.app] || entry.app}.`);
-            await loadOnce();
-          } catch (err) {
-            console.error("Cancel failed", err);
-            showMessage(err.message || "Unable to cancel this job. Please try again.", true);
-          } finally {
-            cancelling.delete(entry.entry_id);
-            refresh();
-          }
-        });
+        cancelBtn.addEventListener("click", () => cancelEntry(entry));
         actions.appendChild(cancelBtn);
       }
       if (actions.childElementCount) row.appendChild(actions);
@@ -275,12 +406,18 @@
     }
   }
 
+  function takeProgress(entries) {
+    progressById = {};
+    for (const entry of entries) if (entry.progress) progressById[entry.entry_id] = entry.progress;
+  }
+
   async function loadOnce() {
     try {
       const response = await fetch(`${PREFIX}/api/queue`);
       if (!response.ok) throw new Error(`Queue request failed (HTTP ${response.status}).`);
       const data = await response.json();
       liveEntries = data.entries || [];
+      takeProgress(liveEntries);
       if (!demoMode && !draggingId && !reorderPending) refresh();
     } catch (err) {
       console.error("Failed to load queue", err);
@@ -293,9 +430,18 @@
       try {
         const data = JSON.parse(event.data);
         liveEntries = data.entries || [];
+        takeProgress(liveEntries);
         if (!demoMode && !draggingId && !reorderPending) refresh();
       } catch (err) {
         console.error("Bad queue event", err);
+      }
+    });
+    source.addEventListener("progress", (event) => {
+      try {
+        progressById = JSON.parse(event.data).progress || {};
+        if (!demoMode) updateProgressBars();
+      } catch (err) {
+        console.error("Bad progress event", err);
       }
     });
     source.onerror = () => {

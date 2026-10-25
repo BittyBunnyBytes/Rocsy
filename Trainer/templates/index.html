@@ -7,8 +7,8 @@
   <link rel="stylesheet" href="{{ mount_prefix }}/static/trainer.css?v={{ asset_version }}">
   <!-- Installable (Home Screen) - iOS only allows web notifications for installed apps. -->
   <link rel="manifest" href="{{ mount_prefix }}/manifest.webmanifest">
-  <link rel="icon" href="{{ mount_prefix }}/static/icons/icon-192.png">
-  <link rel="apple-touch-icon" href="{{ mount_prefix }}/static/icons/apple-touch-icon.png">
+  <link rel="icon" href="{{ mount_prefix }}/static/icons/trainer-192.png">
+  <link rel="apple-touch-icon" href="{{ mount_prefix }}/static/icons/trainer-touch-180.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Trainer">
   <meta name="theme-color" content="#101619">
@@ -38,7 +38,7 @@
 
     <div id="tab-train" class="tab-panel">
     <section class="panel setup-panel">
-      <div class="panel-heading"><div><h2>Trainer environments</h2><p>Three trainers cover every model family below. Install a missing one once; each keeps its own isolated ROCm environment.</p></div><button id="refresh-status" class="button secondary">Refresh</button></div>
+      <div class="panel-heading"><div><h2>Trainer environments</h2><p>Four trainers cover every model family below. Install a missing one once; each keeps its own isolated ROCm environment.</p></div><button id="refresh-status" class="button secondary">Refresh</button></div>
       <div id="backend-status" class="backend-grid"><p class="muted">Checking ROCm and trainer environments…</p></div>
       <details class="other-models" id="other-models" hidden><summary></summary><ul></ul></details>
       <pre id="setup-log" class="log setup-log" hidden></pre>
@@ -52,6 +52,11 @@
             <select name="model" id="model" required><option value="">Checking installed models…</option></select>
           </label>
           <div id="family-status" class="family-status" hidden aria-live="polite"></div>
+          <label data-knob="kind">Kind of training
+            <select name="kind" data-preset>
+              <option value="lora" selected>LoRA</option><option value="finetune">Fine-tune the whole model</option>
+            </select>
+          </label>
           <div class="preset-row">
             <label>Preset
               <select id="preset"><option value="">Custom</option></select>
@@ -63,9 +68,14 @@
             <label>Dataset folder
               <select name="dataset" id="dataset" required><option value="">Loading datasets…</option></select>
             </label>
-            <label>LoRA name<input name="name" maxlength="64" required placeholder="my_character"></label>
+            <label><span id="name-label">LoRA name</span><input name="name" maxlength="64" required placeholder="my_character"></label>
           </div>
           <label data-knob="trigger">Trigger word <span class="muted">(also put it in every caption)</span><input name="trigger" maxlength="64" placeholder="e.g. inkw4sh"></label>
+          <label data-knob="base_model">Base model <span class="muted">(Hugging Face repo id or a folder in models/llm; not GGUF)</span>
+            <input name="base_model" list="llm-bases" maxlength="200" placeholder="e.g. Qwen/Qwen3.5-4B" autocomplete="off" spellcheck="false" data-preset>
+            <small id="base-note" class="slot-why" hidden></small>
+          </label>
+          <datalist id="llm-bases"></datalist>
           <div id="train-check" class="train-check" hidden aria-live="polite"></div>
           <div class="row compact">
             <label data-knob="rank">LoRA rank
@@ -75,6 +85,10 @@
               </select>
             </label>
             <label data-knob="epochs">Epochs<input name="epochs" type="number" min="1" max="500" value="10" list="epoch-choices" data-preset></label>
+            <label data-knob="rotations" data-ft title="One rotation trains every part of the model once">Rotations<input name="rotations" type="number" min="1" max="100" value="4" data-preset></label>
+            <label data-knob="save_every" data-ft title="Every save is a full checkpoint">Save every<select name="save_every" data-preset>
+                <option value="1" selected>rotation</option><option value="2">2 rotations</option><option value="4">4 rotations</option><option value="100">end only</option>
+              </select></label>
             <label data-knob="max_pixels">Max pixels
               <select name="max_pixels" data-preset>
                 <option value="262144">0.26 MP (512²)</option><option value="409600">0.41 MP (640²)</option>
@@ -96,9 +110,22 @@
             <label data-knob="steps">Training steps<input name="steps" type="number" min="1" max="100000" value="2000" data-preset></label>
             <label data-knob="learning_rate">Learning rate<input name="learning_rate" maxlength="16" placeholder="recipe" inputmode="decimal" data-preset></label>
             <label data-knob="repeats">Repeats<input name="repeats" type="number" min="1" max="100" value="1" data-preset></label>
+            <label data-knob="max_length" title="Longest training example, in tokens; longer chats are cut">Context
+              <select name="max_length" data-preset>
+                <option value="512">512 tokens</option><option value="1024">1024 tokens</option><option value="2048" selected>2048 tokens</option>
+                <option value="4096">4096 tokens</option><option value="8192">8192 tokens</option>
+              </select>
+            </label>
+            <label data-knob="quant">Base precision
+              <select name="quant" data-preset>
+                <option value="auto" selected>Auto (fits 24 GB)</option><option value="none">bf16 (best, ≤ ~5 B)</option>
+                <option value="8bit">8-bit</option><option value="4bit">4-bit QLoRA</option>
+              </select>
+            </label>
           </div>
           <datalist id="epoch-choices"><option value="5"></option><option value="10"></option><option value="20"></option><option value="30"></option><option value="50"></option><option value="60"></option></datalist>
           <div class="model-files" id="model-files"></div>
+          <div id="ft-note" class="train-check" hidden aria-live="polite"></div>
           <div id="model-hint" class="hint"></div>
           <button class="button primary" type="submit" id="submit-job">Queue training run</button>
           <p id="form-message" class="form-message" role="status"></p>
@@ -137,7 +164,7 @@
         <div id="ds-view" hidden>
           <div class="ds-toolbar">
             <label class="button secondary ds-add" title="Or drop files anywhere on this panel. A .txt with the same name as a clip becomes its caption.">
-              <input type="file" id="ds-files" multiple accept=".mp4,.mov,.webm,.mkv,.jpg,.jpeg,.png,.webp,.wav,.flac,.m4a,.mp3,.ogg,.txt,.csv">+ Add files
+              <input type="file" id="ds-files" multiple accept=".mp4,.mov,.webm,.mkv,.jpg,.jpeg,.png,.webp,.wav,.flac,.m4a,.mp3,.ogg,.txt,.csv,.jsonl,.json,.md,.markdown,.tsv,.parquet">+ Add files
             </label>
             <label class="tr-check ds-autotrim-label" title="On: uploaded videos wait in 'Waiting to be trimmed' so you can trim them (or add them as-is) later. Off: videos go straight into the dataset."><input type="checkbox" id="ds-autotrim" checked> Hold videos for trimming</label>
             <form id="ds-youtube" class="ds-trigger" title="YouTube links download with yt-dlp (≤1080p). Links from any other site start Hermes, which gets the video (age gates, JavaScript players) using your Find clips model. Then the trimmer opens; the download is deleted after cutting.">
@@ -146,10 +173,12 @@
             </form>
             <button type="button" class="button secondary ds-find-btn" id="ds-find" title="Hermes searches YouTube and other video sites (even ones it has never seen) for source footage; you pick what to download">🔎 Find clips</button>
             <button type="button" class="button secondary ds-autotag-btn" id="ds-autotag" title="Caption every clip with a vision model (llama service)">✨ Auto-tag</button>
+            <button type="button" class="button secondary" id="ds-textmode" aria-pressed="false" title="Text-only data for LLM LoRAs: write chat examples, import .txt/.md/.csv/.parquet">📝 Text data</button>
             <form id="ds-trigger" class="ds-trigger" title="Adds the word to the start of every caption that doesn't contain it yet">
               <input name="trigger" maxlength="64" placeholder="trigger word" required>
               <button class="button secondary" type="submit">Add to all captions</button>
             </form>
+            <button type="button" class="button secondary danger" id="ds-wipe-tags" title="Delete the caption of every clip in this dataset (asks first; a backup copy is kept)">🗑 Wipe all tags</button>
             <div class="ds-filter">
               <label><input type="radio" name="ds-filter" value="all" checked> All</label>
               <label><input type="radio" name="ds-filter" value="nocap"> No caption</label>
@@ -169,6 +198,7 @@
           <details class="job-box ds-dlhist" id="ds-dlhist"><summary><span class="box-title">Download history</span><span class="box-summary"><span id="dlh-count"></span> · every video downloaded and where it was saved; the same video is never downloaded twice by accident</span></summary>
             <div class="box-body"><label class="tr-check"><input type="checkbox" id="dlh-all"> All datasets</label><div id="dlh-list" class="dlh-list"></div></div>
           </details>
+          <div id="ds-text" class="ds-text" hidden></div>
           <div class="ds-split" id="ds-split">
             <div id="ds-items" class="ds-items rows"></div>
             <aside class="hterm" id="ds-term" hidden>

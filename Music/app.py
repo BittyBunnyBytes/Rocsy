@@ -496,13 +496,12 @@ async def cancel_job(job_id: str) -> dict[str, Any]:
     try:
         cancelled = await comfy.cancel(prompt_id)
     except ServiceError as exc:
-        store.update_job(job_id, state=previous_state)
-        await publish_jobs()
-        raise APIError(502, "cancel_failed", str(exc)) from exc
+        # ComfyUI unreachable: nothing will ever finish this job, so the cancel still ends it
+        # and hands back the GPU slot (it used to revert to rendering and hold the lock forever).
+        log.warning("Force-cancelling generation job %s: ComfyUI unreachable (%s)", job_id[:8], exc)
+        cancelled = False
     if not cancelled:
-        store.update_job(job_id, state=previous_state)
-        await publish_jobs()
-        raise APIError(409, "cancel_too_late", "ComfyUI no longer reports this generation as queued or rendering.")
+        log.warning("Force-cancelling generation job %s: ComfyUI no longer has it queued or rendering", job_id[:8])
     store.update_job(job_id, state="cancelled", completed_at=utc_now())
     await finalize_job_lock(job_id, item.get("lock_token"))
     log.info("Cancelled generation job %s (%s)", job_id[:8], prompt_id[:8])

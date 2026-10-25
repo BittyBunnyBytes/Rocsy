@@ -95,6 +95,7 @@
     $("agent-vid-preset-field").hidden = cfg.video_model !== "minimax_h3";
     $("agent-max-jobs").value = cfg.max_jobs;
     $("agent-keep-loaded").value = String(cfg.keep_loaded_ask ?? 0);
+    $("agent-auto-answer").value = String(cfg.auto_answer ?? 0);
     markCli();
   }
 
@@ -239,6 +240,7 @@
     });
   }
   $("agent-keep-loaded").addEventListener("change", (e) => save({ keep_loaded_ask: +e.target.value }));
+  $("agent-auto-answer").addEventListener("change", (e) => save({ auto_answer: +e.target.value }));
   $("agent-max-jobs").addEventListener("change", (e) => {
     const n = Math.round(Number(e.target.value));
     const value = Number.isFinite(n) && n > 0 ? n : 0;   // 0 = no limit

@@ -972,11 +972,26 @@ function renderVersion(holder, detail, version, dirs) {
   }
   const variants = version.variants || [];
   if (!variants.length) { holder.append(el('p', 'empty', 'No files in this version.')); return; }
-  // The model itself is picked by quant; draft models, VAEs, encoders etc. are extras.
+  // The model itself is picked by quant; MTP and vision heads get their own sections; draft models,
+  // VAEs, encoders etc. are extras.
+  const HEADS = ['MTP head', 'Vision head'];
   const main = variants.filter(v => !v.role);
-  const extras = variants.filter(v => v.role);
-  const pickFrom = main.length ? main : extras;
+  const mtpHeads = variants.filter(v => v.role === 'MTP head');
+  const visionHeads = variants.filter(v => v.role === 'Vision head');
+  const extras = variants.filter(v => v.role && !HEADS.includes(v.role));
+  const pickFrom = main.length ? main : extras.length ? extras : [...mtpHeads, ...visionHeads];
+  if (main.length) holder.append(headSupport(main, mtpHeads, visionHeads));
   holder.append(quantPicker(detail, version, pickFrom, dirs));
+  if (main.length) {
+    const auto = visionHeads.find(v => v.auto);
+    holder.append(...[
+      headSection('MTP prediction heads', `${mtpHeads.length}`, 'Speculative-decoding drafters made for this model: it writes several tokens per step. '
+        + 'Download one, then pick it in Llama → the model → Parameters → Draft model (Draft type: MTP).', mtpHeads, detail, version, dirs),
+      headSection('Vision heads (mmproj)', `${visionHeads.length}`, 'Let the model read pictures. To swap one in, pick it in Llama → the model → Parameters → Vision head.'
+        + (auto ? ` Downloading a quant above already brings ${auto.file_label} with it; get another precision here.` : ''),
+        visionHeads, detail, version, dirs),
+    ].filter(Boolean));
+  }
   if (main.length && extras.length) {
     const more = el('details', 'extras');
     more.append(el('summary', '', `Other files (${extras.length}) · ${[...new Set(extras.map(v => v.role))].join(', ')}`));
@@ -987,6 +1002,32 @@ function renderVersion(holder, detail, version, dirs) {
     more.append(list);
     holder.append(more);
   }
+}
+
+// What the quants support, at a glance: MTP built in or as separate heads, and vision heads.
+function headSupport(main, mtpHeads, visionHeads) {
+  const line = el('div', 'head-support');
+  const builtIn = main.filter(v => v.mtp).length;
+  const chip = (cls, text, title) => { const c = el('span', `support-chip ${cls}`, text); c.title = title; return c; };
+  if (builtIn) line.append(chip('is-mtp', builtIn === main.length ? 'MTP built in' : `MTP built into ${builtIn} of ${main.length} quants`,
+    'These quants carry their own multi-token-prediction head: Draft type MTP in Llama → Parameters needs no extra file.'));
+  if (mtpHeads.length) line.append(chip('is-mtp', `MTP heads: ${mtpHeads.length} separate file${mtpHeads.length === 1 ? '' : 's'}`,
+    'Download one from MTP prediction heads below and pick it as the Draft model.'));
+  if (!builtIn && !mtpHeads.length) line.append(chip('is-none', 'No MTP', 'No MTP head in this repo: n-gram or a small draft model can still speed it up.'));
+  line.append(visionHeads.length ? chip('is-vision', `Vision: ${visionHeads.length} head${visionHeads.length === 1 ? '' : 's'}`, 'This model can read pictures with a vision head (mmproj).')
+    : chip('is-none', 'Text only', 'No vision head (mmproj) in this repo.'));
+  return line;
+}
+
+function headSection(title, count, hint, list, detail, version, dirs) {
+  if (!list.length) return null;
+  const section = el('section', 'head-section');
+  const head = el('div', 'quant-head');
+  head.append(el('h3', '', title), el('span', 'hint', count));
+  const rows = el('div', 'variants');
+  list.forEach(variant => rows.append(variantRow(detail, version, variant, dirs)));
+  section.append(head, el('p', 'hint', hint), rows);
+  return section;
 }
 
 // ---- quant picker ---------------------------------------------------------------------------
@@ -1030,7 +1071,14 @@ function quantPicker(detail, version, variants, dirs) {
     });
     wrap.append(legend);
 
-    const names = variants.map(quantName);
+    // Quants that share a name (an MTP build beside the plain one counts as different: it has the badge).
+    const nameKey = v => quantName(v) + (v.mtp ? '+mtp' : '');
+    const names = variants.map(nameKey);
+    // For real duplicates, only the part of the file name that differs (not the whole long stem).
+    const stems = variants.map(v => (v.file_label || quantName(v)).split('/').pop().replace(/\.(gguf|safetensors)$/i, ''));
+    let shared = stems[0] || '';
+    for (const stem of stems) while (shared && !stem.startsWith(shared)) shared = shared.slice(0, -1);
+    shared = shared.replace(/[^-_.]*$/, '');  // cut at a separator, not mid-word
     const groups = new Map();
     for (const variant of variants) {
       const bits = quantBits(variant);
@@ -1057,9 +1105,16 @@ function quantPicker(detail, version, variants, dirs) {
         const label = el('span', 'quant-name');
         if (variant.key === version.best) label.append(el('span', 'star', '★'));
         // Two files with the same quant: say which (e.g. a different source folder).
-        label.append(names.filter(n => n === name).length > 1 ? (variant.file_label || name).split('/').pop().replace(/\.(gguf|safetensors)$/i, '') : name);
+        const text = el('span', 'quant-label');
+        text.textContent = names.filter(n => n === nameKey(variant)).length > 1
+          ? (variant.file_label || name).split('/').pop().replace(/\.(gguf|safetensors)$/i, '').slice(shared.length) || name : name;
+        // The MTP badge already says it: "LOW-MTP-Q6_K" reads "LOW-Q6_K".
+        if (variant.mtp) text.textContent = text.textContent.replace(/(^|[-_.])MTP(?:[-_.]|$)/i, '$1').replace(/[-_.]$/, '') || name;
+        label.append(text);
         const sub = el('span', 'quant-size');
         sub.append(el('span', `dot fit-${tier}`), size(variant.size + (variant.companions || []).reduce((n, f) => n + f.size, 0)));
+        // On the size line, so the quant name keeps the tile's whole width.
+        if (variant.mtp) { const badge = el('span', 'mtp-badge', 'MTP'); badge.title = 'MTP head built in'; sub.append(badge); }
         if (variant.installed) sub.append(el('span', 'quant-have', '✓'));
         tile.append(label, sub);
         tile.addEventListener('click', () => show(variant));
@@ -3277,9 +3332,12 @@ function lastUsed(item) {
 
 // Each kind gets one colour, used in the storage bar, the kind chips, group heads and flat rows.
 const KIND_COLORS = {
-  'LLMs': 'var(--blue)', 'Video models': 'var(--violet)', 'Image models': 'var(--green)', 'LoRAs': 'var(--pink)',
+  'LLMs': 'var(--blue)', 'MTP prediction heads': '#d58cf0', 'Vision heads': '#6fd3e8', 'Video models': 'var(--violet)', 'Image models': 'var(--green)', 'LoRAs': 'var(--pink)',
+  'Trainer models': '#ff8f6b', 'Trainer LoRAs & epochs': '#f5a3c7',
   'Text encoders & VAEs': 'var(--amber)', 'Upscalers & other': 'var(--teal)', 'Other models': 'var(--muted)',
 };
+// Groups whose sub-sections are Trainer runs: every run gets its own heading, epochs fold under it.
+const TRAINER_GROUPS = ['Trainer models', 'Trainer LoRAs & epochs'];
 const kindColor = name => KIND_COLORS[name] || 'var(--faint)';
 try { state.instKind = localStorage.getItem('models.instKind') || ''; } catch { state.instKind = ''; }
 function pickKind(name) {
@@ -3493,11 +3551,16 @@ function renderInstalled() {
     items.forEach(item => { if (!bySub.has(item.sub)) bySub.set(item.sub, []); bySub.get(item.sub).push(item); });
     const body = el('div', 'inst-group-body');
     const singles = [];
+    const runs = TRAINER_GROUPS.includes(group.name);
     bySub.forEach((members, sub) => {
-      if (members.length < 2 || !sub) { singles.push(...members); return; }
+      if (!runs && (members.length < 2 || !sub)) { singles.push(...members); return; }
       const subHead = el('div', 'inst-sub');
       subHead.append(el('span', '', sub), el('span', 'inst-sub-meta', `${members.length} · ${size(members.reduce((n, i) => n + i.size, 0))}`));
-      body.append(subHead, ...members.map(item => installedRow(item, biggest, false)));
+      body.append(subHead);
+      if (members[0].sub_note) body.append(el('div', 'inst-sub-note', members[0].sub_note));
+      const epochs = members.filter(i => i.epoch != null);
+      body.append(...members.filter(i => i.epoch == null).map(item => installedRow(item, biggest, false)));
+      if (epochs.length) body.append(epochFold(epochs, `${group.name}/${sub}`, biggest, !!query));
     });
     if (singles.length) {
       if (body.childElementCount) body.append(el('div', 'inst-sub', 'Other'));
@@ -3508,6 +3571,31 @@ function renderInstalled() {
   }).filter(Boolean);
   $('installed').replaceChildren(...(sections.length ? sections : [el('p', 'empty', 'Nothing matches.')]));
   syncSelection();
+}
+
+// A run's per-epoch checkpoints (and resume states), folded under its final file.
+function epochFold(items, key, biggest, forceOpen) {
+  const open = state.openEpochs || (state.openEpochs = new Set());
+  const fold = el('details', 'inst-epochs');
+  fold.open = forceOpen || open.has(key);
+  fold.addEventListener('toggle', () => fold.open ? open.add(key) : open.delete(key));
+  const head = el('summary');
+  const numbers = items.filter(i => !i.resume_state).map(i => i.epoch);
+  const span = numbers.length ? ` ${Math.min(...numbers)}–${Math.max(...numbers)}` : '';
+  head.append(el('span', '', `Epochs${span}`), el('span', 'inst-sub-meta', `${plural(items.length, 'file')} · ${size(items.reduce((n, i) => n + i.size, 0))}`));
+  const list = el('div', 'inst-epochs-body');
+  // Rows render lazily on first open: a long run can have dozens of checkpoints.
+  const fill = () => { if (!list.childElementCount) { list.append(...items.map(item => installedRow(item, biggest, false))); syncSelection(); } };
+  if (fold.open || state.instSelecting) list.append(...items.map(item => installedRow(item, biggest, false)));
+  fold.addEventListener('toggle', () => fold.open && fill());
+  fold.append(head, list);
+  return fold;
+}
+
+function trainerTag(item) {
+  if (item.resume_state) return `Resume state · epoch ${item.epoch}`;
+  if (item.epoch != null) return `Epoch ${item.epoch}`;
+  return item.final ? 'Final' : '';
 }
 
 function installedRow(item, biggest, flat = false, showSub = false) {
@@ -3541,13 +3629,20 @@ function installedRow(item, biggest, flat = false, showSub = false) {
   const where = el('div', 'inst-where');
   if (flat) where.append(el('span', 'kind-dot'), el('span', 'inst-kind', item.sub ? `${item.group} · ${item.sub}` : item.group));
   else if (showSub && item.sub) where.append(el('span', 'inst-kind', item.sub));
+  if (trainerTag(item)) where.append(el('span', 'tag ' + (item.final ? 'epoch-final' : 'epoch'), trainerTag(item)));
+  if (item.copy) {
+    const tag = el('span', 'tag stored', item.copy_note || 'Copy');
+    tag.title = 'A copy of this checkpoint; the original stays in the Trainer output folder';
+    where.append(tag);
+  }
   const parts = item.path.split('/');
   if (item.stored) {
     const tag = el('span', 'tag ' + (item.offline ? 'warn' : 'stored'), item.offline ? `${item.stored.label} · offline` : item.stored.managed ? `On ${item.stored.label}` : 'Linked');
     tag.title = item.offline ? `Its file is on ${item.stored.target}, which isn't reachable (drive unplugged?)` : `Stored at ${item.stored.target.replace(HOME_RE, '~/')}`;
     where.append(tag);
   }
-  if (item.location) where.append(el('span', 'hint', item.location));
+  // Trainer runs: the folder is enough, the file name is the row title.
+  if (item.location) where.append(el('span', 'hint', item.job ? item.location.replace(/\/[^/]+$/, '') : item.location));
   else if (parts.length > 2 && item.group !== 'LLMs') where.append(el('span', 'hint', `models/${parts.slice(0, -1).join('/')}`));
   if (where.childElementCount) main.append(where);
   const tags = el('div', 'inst-meta');
@@ -3570,7 +3665,7 @@ function installedRow(item, biggest, flat = false, showSub = false) {
   const remove = el('button', 'secondary-button small danger', 'Uninstall');
   remove.type = 'button';
   remove.addEventListener('click', async () => {
-    if (!confirm(`Uninstall ${item.name}?\n\nDeletes models/${item.path} (${size(item.size)}).`)) return;
+    if (!confirm(`Uninstall ${item.name}?\n\nDeletes ${item.location || `models/${item.path}`} (${size(item.size)}).`)) return;
     remove.disabled = true;
     const run = force => post('uninstall', {path: item.path, force});
     try {
@@ -3590,7 +3685,8 @@ function installedRow(item, biggest, flat = false, showSub = false) {
   });
   const actions = el('div', 'lib-actions');
   if (BASE_GROUPS.includes(item.group)) actions.append(basePicker(item));
-  if (item.removable !== false) {
+  if (item.removable !== false && item.movable === false) actions.append(remove);
+  else if (item.removable !== false) {
     const move = el('button', 'secondary-button small', 'Move');
     move.type = 'button';
     move.title = 'Store this file on another drive or folder (Settings → Storage)';
@@ -4225,6 +4321,90 @@ $('rescan').addEventListener('click', async () => {
   refreshState();
 });
 
+// ---- drafter / vision head search (Llama → Parameters → Find drafter models / Find vision heads) -----------
+// The Parameters tab opens /Models/?drafter={id, name, family, stem, arch, mtp_head} or ?vision={…, has_vision}:
+// a bar with one chip per kind, best kind first, each a Hugging Face GGUF search for files made for that model.
+const DRAFTER_KINDS = [
+  ['mtp', 'MTP drafter', 'MTP', 'A multi-token-prediction drafter made for this exact model: the highest acceptance rate. Draft type: MTP.'],
+  ['dflash', 'DFlash', 'DFlash', 'A DFlash block drafter trained for this model. Draft type: DFlash.'],
+  ['eagle3', 'EAGLE-3', 'eagle3', 'An EAGLE-3 speculator trained for this model. Draft type: EAGLE-3.'],
+  ['small', 'Small same-family model', '', 'A 0.5–2 B model of the same family (same tokenizer), about a tenth of its size or less. Draft type: Draft model.'],
+];
+const VISION_KINDS = [
+  ['mmproj', 'Vision head (mmproj)', 'mmproj', 'Repos with an mmproj made for this model: open one and get a file from its "Vision heads (mmproj)" section.'],
+  ['gguf', 'GGUF repos of this model', 'GGUF', 'Most GGUF repos ship their mmproj files next to the quants: look in "Vision heads (mmproj)" on the model page.'],
+  ['family', 'Same family', 'mmproj', 'Heads from other finetunes of the same family: one with the same width as this model loads (Llama ★-marks those).'],
+];
+let drafterContext = null;
+const searchKinds = () => drafterContext.mode === 'vision' ? VISION_KINDS : DRAFTER_KINDS;
+
+function drafterQuery(kind) {
+  const c = drafterContext;
+  const stem = c.stem || c.family || c.name || '';
+  const word = searchKinds().find(k => k[0] === kind)[2];
+  if (kind === 'family') return `${c.family || stem} ${word}`.trim();
+  return kind === 'small' ? (c.family || stem) : `${stem} ${word}`.trim();
+}
+
+function pickDrafterKind(kind, run = true) {
+  state.source = 'hf';
+  $('source').querySelectorAll('[data-source]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.source === 'hf')));
+  state.category = 'llm';
+  $('category').querySelectorAll('[data-category]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.category === 'llm')));
+  $('gguf').checked = true;
+  $('sort').value = 'downloads';
+  $('q').value = drafterQuery(kind);
+  $('drafter-bar').querySelectorAll('[data-drafter]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.drafter === kind)));
+  const where = drafterContext.mode === 'vision' ? 'Vision head' : 'Draft model';
+  $('drafter-hint').textContent = searchKinds().find(k => k[0] === kind)[3]
+    + ` Download it, then pick it in Llama → ${drafterContext.name || drafterContext.id} → Parameters → ${where}.`;
+  if (run) search(true);
+}
+
+function startDrafterSearch() {
+  const params = new URLSearchParams(location.search);
+  const mode = params.get('vision') ? 'vision' : 'drafter';
+  const raw = params.get(mode);
+  if (!raw) return false;
+  try { drafterContext = JSON.parse(raw); } catch (_) { return false; }
+  if (!drafterContext || typeof drafterContext !== 'object') return false;
+  drafterContext.mode = mode;
+  history.replaceState(history.state, '', location.pathname + '#models');
+  // With its own MTP head the model needs no MTP download; the next best drafter is DFlash.
+  const best = mode === 'vision' ? 'mmproj' : drafterContext.mtp_head > 0 ? 'dflash' : 'mtp';
+  const bar = $('drafter-bar');
+  const title = document.createElement('strong');
+  title.textContent = `${mode === 'vision' ? 'Vision heads' : 'Draft models'} for ${drafterContext.name || drafterContext.id}`;
+  const chips = document.createElement('div');
+  chips.className = 'chips';
+  chips.setAttribute('role', 'radiogroup');
+  chips.setAttribute('aria-label', mode === 'vision' ? 'Where to look' : 'Kind of drafter');
+  for (const [kind, label] of searchKinds()) {
+    const chip = document.createElement('button');
+    chip.type = 'button'; chip.className = 'chip'; chip.setAttribute('role', 'radio'); chip.dataset.drafter = kind;
+    chip.textContent = (kind === best ? '★ ' : '') + label;
+    if (kind === best) chip.title = 'Recommended for this model';
+    chip.addEventListener('click', () => pickDrafterKind(kind));
+    chips.append(chip);
+  }
+  const close = document.createElement('button');
+  close.type = 'button'; close.className = 'drafter-close'; close.textContent = '✕';
+  close.title = mode === 'vision' ? 'Close the vision head search' : 'Close the drafter search';
+  close.addEventListener('click', () => { bar.hidden = true; drafterContext = null; });
+  const hint = document.createElement('p');
+  hint.className = 'hint'; hint.id = 'drafter-hint';
+  const note = document.createElement('p');
+  note.className = 'hint';
+  note.textContent = mode === 'vision'
+    ? (drafterContext.has_vision ? 'This model already has a vision head; another one only helps if it is a better precision or adds audio.'
+      : 'This model has no vision head yet: it reads text only.')
+    : drafterContext.mtp_head > 0 ? '★ This model already has its own MTP head: Draft type MTP needs no download. A DFlash drafter may draft further.' : '';
+  bar.replaceChildren(title, chips, close, hint, ...(note.textContent ? [note] : []));
+  bar.hidden = false;
+  pickDrafterKind(best, false);
+  return true;
+}
+
 // ---- start --------------------------------------------------------------------------------------
 
 (async () => {
@@ -4233,7 +4413,7 @@ $('rescan').addEventListener('click', async () => {
   detectHermesTab();
   loadBases();
   await refreshState();
-  let start = location.hash.slice(1);
+  let start = startDrafterSearch() ? 'models' : location.hash.slice(1);
   // Links straight to a Manager sub-tab (the home page's Updates chip uses #updates).
   if (['updates', 'installed', 'downloads', 'settings', 'core'].includes(start)) { state.sub = start; start = 'manager'; }
   setView(['models', 'loras', 'hermes', 'manager', 'hardware'].includes(start) ? start : 'models', {push: false});

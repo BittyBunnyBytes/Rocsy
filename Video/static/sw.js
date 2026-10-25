@@ -14,8 +14,8 @@ self.addEventListener("push", (event) => {
     tag: data.tag || "h3-machine",
     renotify: true,
     // Agentic session milestones send their own icon/badge; renders use the H3 one.
-    icon: data.icon || `${scopeUrl.pathname}static/icons/icon-192.png`,
-    badge: data.badge || `${scopeUrl.pathname}static/icons/badge-96.png`,
+    icon: data.icon || `${scopeUrl.pathname}static/icons/video-192.png`,
+    badge: data.badge || `${scopeUrl.pathname}static/icons/video-badge-96.png`,
     vibrate: [120, 60, 120],
     data: { url: data.url || scopeUrl.pathname },
   }));

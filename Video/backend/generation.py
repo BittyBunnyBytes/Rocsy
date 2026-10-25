@@ -8,6 +8,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from .config import Settings, local_variant
@@ -275,11 +276,17 @@ def stage(config: Settings, references: list[dict[str, Any]]) -> list[str]:
     return staged
 
 
-def _minimax_h3_lora_stack_data(loras: list[Any]) -> str:
+def _test_loras(request: Any) -> list[tuple[str, float]]:
+    """The Trainer's epoch-test LoRA (one training checkpoint), loaded after the user's stack."""
+    return [(request.test_lora, request.test_lora_strength)] if getattr(request, "test_lora", None) else []
+
+
+def _minimax_h3_lora_stack_data(loras: list[Any], extra: list[tuple[str, float]] = ()) -> str:
     """JSON-encodes a request's LoRA slots into the exact `stack_data` shape
     DaSiWa_LTX2LoraLoader expects (confirmed via ComfyUI's own /object_info):
     one object per known slot, in MINIMAX_H3_LORA_SLOTS order, padding any
-    slot the request omitted with disabled/default."""
+    slot the request omitted with disabled/default. `extra` rows (the epoch
+    test LoRA) follow the slots; the node applies any number of rows."""
     padded = list(loras) + [None] * (len(MINIMAX_H3_LORA_SLOTS) - len(loras))
     entries = []
     for slot, (filename, _label) in zip(padded, MINIMAX_H3_LORA_SLOTS):
@@ -289,18 +296,20 @@ def _minimax_h3_lora_stack_data(loras: list[Any]) -> str:
         # _apply_slot uses str * vs), not strengths - they used to be set to
         # `strength` too, which silently squared every LoRA's real weight.
         entries.append({"on": enabled, "lora": filename if enabled else "None", "str": strength, "vs": 1.0, "as": 1.0})
+    entries += [{"on": True, "lora": filename, "str": strength, "vs": 1.0, "as": 1.0} for filename, strength in extra]
     return json.dumps(entries)
 
 
 def _wire_minimax_h3_loras(
     workflow: dict[str, Any], loras: list[Any], model_node: str, clip_node: str,
-    consumers: list[tuple[str, str]], next_id: int,
+    consumers: list[tuple[str, str]], next_id: int, extra: list[tuple[str, float]] = (),
 ) -> int:
     """Inserts a DaSiWa_LTX2LoraLoader node reading model_node's output and
     repoints each (node_id, input_key) in `consumers` to read from it instead.
     No-op, leaving the workflow's existing wiring untouched, when every LoRA
-    slot is disabled - this node isn't part of the base API templates."""
-    if not any(slot.enabled for slot in loras):
+    slot is disabled and there is no `extra` (epoch test) LoRA - this node
+    isn't part of the base API templates."""
+    if not any(slot.enabled for slot in loras) and not extra:
         return next_id
     loader_id = str(next_id)
     next_id += 1
@@ -308,7 +317,7 @@ def _wire_minimax_h3_loras(
         "class_type": "DaSiWa_LTX2LoraLoader",
         "inputs": {
             "model": [model_node, 0], "clip": [clip_node, 0],
-            "stack_data": _minimax_h3_lora_stack_data(loras), "model_type": "Basic",
+            "stack_data": _minimax_h3_lora_stack_data(loras, extra), "model_type": "Basic",
         },
         "_meta": {"title": "Video LoRA stack"},
     }
@@ -520,7 +529,7 @@ def build_workflow(config: Settings, request: GenerationRequest, references: lis
             lora_consumer = ("17", "model")
         else:
             lora_consumer = ("15", "model") if request.mode == "ref2v" else ("6", "model")
-        _wire_minimax_h3_loras(workflow, request.loras, model_node, "1", [lora_consumer], next_id=500)
+        _wire_minimax_h3_loras(workflow, request.loras, model_node, "1", [lora_consumer], next_id=500, extra=_test_loras(request))
         # "Speedup & Saves" toggles. Each turbo LoRA goes together with its
         # AdaLN compatibility fix; skip the fix first so the LoRA's own input
         # (the user LoRA stack) then passes through to the next node.
@@ -1555,7 +1564,7 @@ def build_ltx_workflow(
         if "423" in nodes:
             nodes["423"]["widgets_values_named"]["stage2_mode"] = LTX_STAGE2_NATIVE
         nodes["75"]["widgets_values_named"]["filename_prefix"] = f"H3Machine_LTX25_{time.strftime('%Y%m%d-%H%M%S')}"
-        _apply_ltx_loras(nodes["428"]["widgets_values_named"], request.ltx_loras)
+        _apply_ltx_loras(nodes["428"]["widgets_values_named"], [*request.ltx_loras, *(SimpleNamespace(lora=f, strength=s) for f, s in _test_loras(request))])
         prompt = _frontend_workflow_to_prompt(workflow, 75)
         if msr_images:
             _apply_ltx_msr(config, prompt, msr_images, msr_audios)
@@ -2108,7 +2117,7 @@ def build_seedhunter_candidates_workflow(
 
         if request.checkpoint:
             workflow["4"]["inputs"]["unet_name"] = request.checkpoint
-        _wire_minimax_h3_loras(workflow, request.loras, "4", "1", [("5", "model")], next_id=500)
+        _wire_minimax_h3_loras(workflow, request.loras, "4", "1", [("5", "model")], next_id=500, extra=_test_loras(request))
 
         model_source, next_id = _maybe_insert_live_preview(workflow, request.enable_live_preview, next_id=200)
         conditioning_node, next_id = _wire_seedhunter_references(
@@ -2166,7 +2175,7 @@ def build_seedhunter_finalize_workflow(
 
         if original_request.checkpoint:
             workflow["4"]["inputs"]["unet_name"] = original_request.checkpoint
-        _wire_minimax_h3_loras(workflow, original_request.loras, "4", "1", [("5", "model")], next_id=500)
+        _wire_minimax_h3_loras(workflow, original_request.loras, "4", "1", [("5", "model")], next_id=500, extra=_test_loras(original_request))
 
         model_source, next_id = _maybe_insert_live_preview(workflow, original_request.enable_live_preview, next_id=200)
         conditioning_node, next_id = _wire_seedhunter_references(

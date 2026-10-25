@@ -2088,7 +2088,7 @@ async def llama_params_models(request: Request):
         models = await asyncio.to_thread(llama_params.models, running)
     except (OSError, yaml.YAMLError) as error:
         return JSONResponse({"error": "config_unreadable", "message": str(error)}, status_code=500)
-    return {"params": llama_params.spec(), "models": models, "backend": llama_params.backend_info()}
+    return {"params": await asyncio.to_thread(llama_params.spec), "models": models, "backend": llama_params.backend_info()}
 
 
 @app.put("/llama-params/models/{model_id}")

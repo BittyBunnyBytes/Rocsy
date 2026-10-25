@@ -37,6 +37,7 @@ class QueueEntry:
     enqueued_at: str
     became_active_at: str | None
     expires_at: str | None
+    group: str | None = None    # shown as one card on the queue page (e.g. "IMAGE - EPOCH TESTING")
 
     def public(self, position: int | None = None) -> dict[str, Any]:
         return {
@@ -45,7 +46,7 @@ class QueueEntry:
             "shutdown_at": self.shutdown_at, "enqueued_at": self.enqueued_at,
             "is_locked": self.is_locked,
             "became_active_at": self.became_active_at, "expires_at": self.expires_at,
-            "position": position,
+            "position": position, "group": self.group,
         }
 
 
@@ -55,7 +56,7 @@ def _row_to_entry(row: sqlite3.Row) -> QueueEntry:
         label=row["label"], state=row["state"], is_continuous=bool(row["is_continuous"]),
         shutdown_at=row["shutdown_at"], seq=row["seq"], sort_order=row["sort_order"],
         is_locked=bool(row["is_locked"]), enqueued_at=row["enqueued_at"],
-        became_active_at=row["became_active_at"], expires_at=row["expires_at"],
+        became_active_at=row["became_active_at"], expires_at=row["expires_at"], group=row["grp"],
     )
 
 
@@ -103,6 +104,8 @@ class QueueStore:
                 self._conn.execute("ALTER TABLE queue ADD COLUMN sort_order INTEGER")
             if "is_locked" not in columns:
                 self._conn.execute("ALTER TABLE queue ADD COLUMN is_locked INTEGER NOT NULL DEFAULT 0")
+            if "grp" not in columns:
+                self._conn.execute("ALTER TABLE queue ADD COLUMN grp TEXT")
             self._conn.execute("UPDATE queue SET sort_order = seq WHERE sort_order IS NULL")
         # Restart recovery: a row left "active" from a prior process is only
         # reaped if its TTL has actually lapsed (expires_at is a plain
@@ -147,7 +150,7 @@ class QueueStore:
         return _row_to_entry(row)
 
     def enqueue(self, app: str, job_id: str, label: str, is_continuous: bool, ttl_seconds: float,
-                priority: bool = False) -> tuple[QueueEntry, bool, int | None]:
+                priority: bool = False, group: str | None = None) -> tuple[QueueEntry, bool, int | None]:
         """Insert a new entry. Returns (entry, promoted, position) -- promoted is
         True if it became active immediately (queue was empty), position is its
         waiting slot otherwise. Insert, promotion and priority move all happen
@@ -159,9 +162,9 @@ class QueueStore:
             self._reap_expired_active_locked(now)
             next_order = self._conn.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM queue").fetchone()[0]
             self._conn.execute(
-                """INSERT INTO queue (entry_id, app, job_id, token, label, state, is_continuous, shutdown_at, enqueued_at, sort_order)
-                   VALUES (?, ?, ?, NULL, ?, 'waiting', ?, NULL, ?, ?)""",
-                (entry_id, app, job_id, label, 1 if is_continuous else 0, iso(now), next_order),
+                """INSERT INTO queue (entry_id, app, job_id, token, label, state, is_continuous, shutdown_at, enqueued_at, sort_order, grp)
+                   VALUES (?, ?, ?, NULL, ?, 'waiting', ?, NULL, ?, ?, ?)""",
+                (entry_id, app, job_id, label, 1 if is_continuous else 0, iso(now), next_order, group or None),
             )
             promoted = self._promote_next_locked(now, ttl_seconds)
             if priority and not promoted:

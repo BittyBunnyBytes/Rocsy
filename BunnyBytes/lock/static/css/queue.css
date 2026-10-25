@@ -72,3 +72,22 @@ h1 { margin: 0; color: var(--text); font-size: clamp(21px, 3vw, 27px); line-heig
 .queue-cancel:focus-visible, .queue-lock:focus-visible, .demo-toggle:focus-visible, .restart-comfyui:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
 .empty { border: 1px dashed var(--border); border-radius: 12px; color: var(--muted); padding: 30px 12px; text-align: center; }
 @media (max-width: 520px) { .page-heading { align-items: flex-start; flex-direction: column; } .heading-actions { justify-content: flex-start; } .queue-grid { grid-template-columns: minmax(0, 1fr); } }
+/* Grouped entries (e.g. IMAGE - EPOCH TESTING): one card, opens into its job list */
+.queue-card.queue-group { border-color: #6b5a2c; background: linear-gradient(150deg, #231f14, var(--panel-soft)); }
+.queue-card.queue-group .queue-app { color: var(--amber); }
+.queue-card.queue-group.is-waiting .queue-app { color: #c9a55e; }
+.queue-card.queue-group.is-open { grid-column: 1 / -1; }
+.group-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 4px; max-height: 360px; overflow: auto; }
+.group-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; border: 1px solid #25333a; border-radius: 8px; padding: 4px 6px 4px 9px; font-size: 12px; color: #aab9b5; }
+.group-list li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-list li em { font-style: normal; font-size: 10px; font-weight: 800; color: var(--faint); min-width: 30px; }
+.group-list li.is-active { border-color: #567967; color: var(--text); }
+.group-list li.is-active em { color: var(--mint); }
+.group-list .queue-cancel { padding: 3px 8px; font-size: 10px; }
+/* Render progress of the running job (percent from its own app, time left estimated) */
+.queue-progress { margin-top: 10px; }
+.queue-progress-track { height: 6px; border-radius: 999px; background: #0e1519; border: 1px solid #25333a; overflow: hidden; }
+.queue-progress-track i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--mint); transition: width .6s ease; }
+.queue-card.is-continuous .queue-progress-track i { background: #bba0de; }
+.queue-card.queue-group .queue-progress-track i { background: var(--amber); }
+.queue-progress-text { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }

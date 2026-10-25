@@ -201,7 +201,7 @@
     if (pushSubscribed || permission() !== "granted") return;
     const title = failed ? "LoRA training failed" : "LoRA training complete";
     const options = {body: `${job.model_title || job.model} · ${job.name}\n${failed ? String(job.error || "").slice(0, 140) : `Dataset ${job.dataset}`}`,
-      tag: `trainer-job-${job.id}`, icon: `${base}/static/icons/icon-192.png`, badge: `${base}/static/icons/badge-96.png`,
+      tag: `trainer-job-${job.id}`, icon: `${base}/static/icons/trainer-192.png`, badge: `${base}/static/icons/trainer-badge-96.png`,
       data: {url: `${base}/?job=${job.id}`}};
     try {
       if (swRegistration) { swRegistration.showNotification(title, options).catch(() => {}); return; }

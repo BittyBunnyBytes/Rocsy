@@ -377,6 +377,16 @@ table.fits th { color: var(--muted); font-size: 11px; font-weight: 700; text-tra
 .inst-sub { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 0; padding: 12px 14px 4px 17px; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
 .inst-sub > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inst-sub-meta { flex: none; color: var(--faint); text-transform: none; letter-spacing: 0; font-weight: 600; }
+.inst-sub-note { padding: 0 14px 4px 17px; color: var(--faint); font-size: 12px; }
+.inst-epochs { margin: 2px 14px 6px 17px; border: 1px solid color-mix(in srgb,var(--border) 70%,transparent); border-radius: 10px; }
+.inst-epochs > summary { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 7px 12px; cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 700; list-style: none; }
+.inst-epochs > summary::-webkit-details-marker { display: none; }
+.inst-epochs > summary > span:first-child::before { content: '▸'; display: inline-block; width: 1em; transition: transform .15s; }
+.inst-epochs[open] > summary > span:first-child::before { transform: rotate(90deg); }
+.inst-epochs .inst-row { padding-left: 12px; }
+.inst-where .tag { flex: none; }
+.tag.epoch { color: var(--muted); }
+.tag.epoch-final { color: var(--green); border-color: color-mix(in srgb,var(--green) 45%,transparent); }
 .inst-list { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-top: 6px; }
 .inst-row { display: grid; grid-template-columns: minmax(0,1fr) 140px 170px 280px; align-items: center; gap: 16px; padding: 9px 14px 9px 17px; border-top: 1px solid color-mix(in srgb,var(--border) 55%,transparent); }
 .inst-list .inst-row:first-child { border-top: 0; }
@@ -671,3 +681,20 @@ html.drawer-open,html.drawer-open body { overflow: hidden; }
 .move-note { font-size: 12px; }
 .move-actions { display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 560px) { .move-row { grid-template-columns: minmax(0,1fr) auto; } .move-row .size-bar { grid-column: 1 / -1; grid-row: 2; } }
+/* Drafter search bar (opened from Llama → Parameters → Find drafter models) */
+.drafter-bar { position: relative; display: grid; gap: 8px; margin: 0 0 12px; padding: 12px 40px 12px 14px; border: 1px solid var(--blue); border-radius: 12px; background: var(--raised); }
+.drafter-bar .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.drafter-bar .hint { margin: 0; }
+.drafter-close { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; }
+.drafter-close:hover { background: var(--field); color: var(--text); }
+/* What a repo supports: MTP (built in / separate heads) and vision heads, plus their own sections */
+.head-support { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 10px; }
+.support-chip { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--field); color: var(--muted); font-size: 12px; font-weight: 650; }
+.support-chip.is-mtp { color: var(--text); border-color: var(--violet); background: color-mix(in srgb, var(--violet) 16%, var(--field)); }
+.support-chip.is-vision { color: var(--text); border-color: var(--teal); background: color-mix(in srgb, var(--teal) 16%, var(--field)); }
+.quant-name .quant-label { min-width: 0; overflow-wrap: normal; word-break: normal; }
+.mtp-badge { flex: none; margin-left: auto; padding: 0 5px; border-radius: 5px; background: color-mix(in srgb, var(--violet) 28%, transparent); color: var(--text); font: 700 10px/1.6 system-ui, sans-serif; white-space: nowrap; overflow-wrap: normal; }
+.head-section { display: grid; gap: 8px; margin-top: 14px; }
+.head-section > .hint { margin-top: -4px; }
+.mtp-badge + .quant-have { margin-left: 2px; }
+.quant-size { flex-wrap: wrap; white-space: nowrap; row-gap: 3px; }

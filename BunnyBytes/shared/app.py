@@ -189,6 +189,16 @@ async def agentic_preview(studio: str, body: agentic.PreviewRequest):
     return await agentic.preview(studio, body)
 
 
+@app.post("/v1/agentic/{studio}/write-prompt", dependencies=[Depends(require_internal)])
+async def agentic_write_prompt(studio: str, body: agentic.PromptRequest):
+    """One prompt from the studio's agentic model + model guide (the Trainer's epoch tests)."""
+    _studio(studio)
+    try:
+        return await agentic.write_prompt(studio, body)
+    except (ValueError, agentic.httpx.HTTPError) as exc:
+        raise HTTPException(502, f"Could not write a prompt: {exc}"[:400]) from exc
+
+
 @app.get("/v1/agentic/models", dependencies=[Depends(require_internal)])
 async def agentic_models():
     try:

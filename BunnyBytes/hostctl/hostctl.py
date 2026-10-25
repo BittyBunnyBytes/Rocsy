@@ -22,6 +22,7 @@ Safety:
 from __future__ import annotations
 
 import calendar
+from concurrent.futures import ThreadPoolExecutor
 import hmac
 import json
 import logging
@@ -205,6 +206,10 @@ def unit_status(spec: dict[str, Any]) -> dict[str, Any]:
     shown = run("systemctl", "--user", "show", spec["unit"], "--no-pager",
                 "-p", "ActiveState,SubState,UnitFileState,LoadState,ActiveEnterTimestampMonotonic,MainPID", timeout=10)
     props = dict(line.split("=", 1) for line in shown.stdout.splitlines() if "=" in line)
+    if shown.returncode != 0:
+        raise RuntimeError((shown.stderr or shown.stdout).strip()[:200] or "systemctl show failed")
+    if "LoadState" not in props:
+        raise RuntimeError("systemctl show returned no unit status")
     if props.get("LoadState") == "not-found":
         return {"exists": False, "running": False, "state": "not installed", "boot": False}
     since = None
@@ -229,12 +234,7 @@ def comfy_status() -> dict[str, Any]:
     return {"exists": True, "running": running, "state": detail, "boot": None}
 
 
-def container_status(name: str) -> dict[str, Any]:
-    inspected = run("docker", "inspect", "--format",
-                    "{{json .State}}|{{.HostConfig.RestartPolicy.Name}}", name, timeout=15)
-    if inspected.returncode != 0:
-        return {"exists": False, "running": False, "state": "not created", "boot": False}
-    state_json, policy = inspected.stdout.strip().rsplit("|", 1)
+def _container_status(state_json: str, policy: str) -> dict[str, Any]:
     state = json.loads(state_json)
     since = None
     if state.get("Running") and state.get("StartedAt"):
@@ -249,10 +249,45 @@ def container_status(name: str) -> dict[str, Any]:
             "boot": policy in {"always", "unless-stopped"}, "since": since}
 
 
-def describe(item_id: str) -> dict[str, Any]:
+def container_status(name: str) -> dict[str, Any]:
+    inspected = run("docker", "inspect", "--type=container", "--format",
+                    "{{json .State}}|{{.HostConfig.RestartPolicy.Name}}", name, timeout=15)
+    if inspected.returncode != 0:
+        if "no such object" in inspected.stderr.lower() or "no such container" in inspected.stderr.lower():
+            return {"exists": False, "running": False, "state": "not created", "boot": False}
+        raise RuntimeError((inspected.stderr or inspected.stdout).strip()[:200] or "docker inspect failed")
+    state_json, policy = inspected.stdout.strip().rsplit("|", 1)
+    return _container_status(state_json, policy)
+
+
+def container_statuses() -> dict[str, dict[str, Any]]:
+    """Read the container list once and inspect only the managed containers that exist."""
+    names = [name for name, spec in ITEMS.items() if spec["kind"] == "container"]
+    listed = run("docker", "ps", "--all", "--format", "{{.Names}}", timeout=15)
+    if listed.returncode != 0:
+        raise RuntimeError((listed.stderr or listed.stdout).strip()[:200] or "docker ps failed")
+    present = set(listed.stdout.splitlines())
+    found = [name for name in names if name in present]
+    result = {name: {"exists": False, "running": False, "state": "not created", "boot": False}
+              for name in names if name not in present}
+    if found:
+        inspected = run("docker", "inspect", "--type=container", "--format",
+                        "{{.Name}}|{{json .State}}|{{.HostConfig.RestartPolicy.Name}}", *found, timeout=15)
+        if inspected.returncode != 0:
+            raise RuntimeError((inspected.stderr or inspected.stdout).strip()[:200] or "docker inspect failed")
+        for line in inspected.stdout.splitlines():
+            name, state_json, policy = line.split("|", 2)
+            result[name.removeprefix("/")] = _container_status(state_json, policy)
+        if any(name not in result for name in found):
+            raise RuntimeError("docker inspect returned incomplete status")
+    return result
+
+
+def describe(item_id: str, status: dict[str, Any] | None = None) -> dict[str, Any]:
     spec = ITEMS[item_id]
-    status = (unit_status(spec) if spec["kind"] == "unit" else comfy_status() if spec["kind"] == "comfyui"
-              else container_status(item_id))
+    if status is None:
+        status = (unit_status(spec) if spec["kind"] == "unit" else comfy_status() if spec["kind"] == "comfyui"
+                  else container_status(item_id))
     actions = {}
     for action in ALL_ACTIONS:
         reason = locked_reason(spec, action)
@@ -265,23 +300,43 @@ def describe(item_id: str) -> dict[str, Any]:
             **status, "actions": actions}
 
 
-def all_items() -> list[dict[str, Any]]:
-    threads: dict[str, dict[str, Any]] = {}
+_items_cache_lock = threading.Lock()
+_items_cache: tuple[float, list[dict[str, Any]]] = (0.0, [])
 
-    def fill(item_id: str) -> None:
-        try:
-            threads[item_id] = describe(item_id)
-        except Exception as exc:  # noqa: BLE001
-            spec = ITEMS[item_id]
-            threads[item_id] = {"id": item_id, "kind": spec["kind"], "group": spec["group"], "name": spec["name"],
-                                "note": spec["note"], "exists": False, "running": False, "state": f"error: {exc}",
-                                "boot": None, "actions": {}}
-    workers = [threading.Thread(target=fill, args=(item_id,)) for item_id in ITEMS]
-    for worker in workers:
-        worker.start()
-    for worker in workers:
-        worker.join(30)
-    return [threads[item_id] for item_id in ITEMS if item_id in threads]
+
+def _status_error(item_id: str, exc: Exception) -> dict[str, Any]:
+    spec = ITEMS[item_id]
+    return {"id": item_id, "kind": spec["kind"], "group": spec["group"], "name": spec["name"],
+            "note": spec["note"], "exists": None, "running": False, "state": f"status unavailable: {exc}",
+            "boot": None, "actions": {}}
+
+
+def all_items() -> list[dict[str, Any]]:
+    global _items_cache
+    with _items_cache_lock:
+        if time.monotonic() - _items_cache[0] < 3:
+            return _items_cache[1]
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            containers = pool.submit(container_statuses)
+            units = {name: pool.submit(describe, name) for name, spec in ITEMS.items() if spec["kind"] != "container"}
+            try:
+                container_states = containers.result()
+                container_error = None
+            except Exception as exc:  # noqa: BLE001
+                container_states, container_error = {}, exc
+            rows = []
+            for name, spec in ITEMS.items():
+                try:
+                    if spec["kind"] == "container":
+                        if container_error:
+                            raise container_error
+                        rows.append(describe(name, container_states[name]))
+                    else:
+                        rows.append(units[name].result())
+                except Exception as exc:  # noqa: BLE001
+                    rows.append(_status_error(name, exc))
+        _items_cache = (time.monotonic(), rows)
+        return rows
 
 
 # ---------------------------------------------------------------- actions --
@@ -483,10 +538,32 @@ def browser_disconnect() -> dict[str, Any]:
 # ------------------------------------------------------------------ server --
 
 _action_lock = threading.Lock()
+_cli_slots = threading.BoundedSemaphore(8)
 
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "bunny-hostctl"
+
+    def parse_request(self) -> bool:
+        if not super().parse_request():
+            return False
+        if self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            self.send_error(400, "Chunked request bodies are unsupported")
+            return False
+        raw_length = self.headers.get("Content-Length", "0")
+        limit = (48 * 1024 * 1024 if self.path in ("/clis/run", "/clis/chat", "/providers/chat")
+                 else 16384 if self.path.startswith("/core/comfynodes/") or self.path == "/comfyui/profiles"
+                 else 8192)
+        try:
+            length = int(raw_length)
+        except ValueError:
+            length = -1
+        if length < 0 or length > limit:
+            self.close_connection = True
+            self.send_error(413 if length > limit else 400, "Invalid request body length")
+            return False
+        return True
 
     def log_message(self, fmt: str, *args: Any) -> None:  # quieter access log
         log.debug(fmt, *args)
@@ -504,7 +581,7 @@ class Handler(BaseHTTPRequestHandler):
         return bool(SECRET) and hmac.compare_digest(supplied, SECRET) and not self.headers.get("CF-Connecting-IP")
 
     def _small_json(self) -> dict:
-        length = min(int(self.headers.get("Content-Length") or 0), 8192)
+        length = int(self.headers.get("Content-Length") or 0)
         try:
             body = json.loads(self.rfile.read(length) or b"{}") if length else {}
         except ValueError:
@@ -667,11 +744,17 @@ class Handler(BaseHTTPRequestHandler):
         self._send(status, reply)
 
     def _stream_cli(self) -> None:
+        if not _cli_slots.acquire(blocking=False):
+            return self._send(503, {"error": "Too many CLI streams are running"})
+        try:
+            self._stream_cli_active()
+        finally:
+            _cli_slots.release()
+
+    def _stream_cli_active(self) -> None:
         """POST /clis/run (NDJSON events), /clis/chat and /providers/chat (chat-completion SSE): see
         codingclis and providerchat."""
         length = int(self.headers.get("Content-Length") or 0)
-        if length > 48 * 1024 * 1024:
-            return self._send(413, {"error": "Request too large"})
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
             if not isinstance(body, dict):
@@ -708,14 +791,14 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/clis/stop":
             return self._send(200, {"stopped": codingclis.stop(str(self._small_json().get("run") or ""))})
         if self.path.startswith("/rea/mods/"):
-            length = min(int(self.headers.get("Content-Length") or 0), 8192)
+            length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}") if length else {}
             except ValueError:
                 body = {}
             return self._send(*reamods.handle("POST", self.path, body if isinstance(body, dict) else {}))
         if self.path.startswith("/rea/"):
-            length = min(int(self.headers.get("Content-Length") or 0), 8192)
+            length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
@@ -724,7 +807,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/gpu-tune/"):
             return self._send(*gputune.handle("POST", self.path, self._small_json()))
         if self.path == "/uninstall/start":
-            length = min(int(self.headers.get("Content-Length") or 0), 4096)
+            length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
@@ -740,7 +823,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/core/voice/"):
             return self._send(*voiceengines.handle("POST", self.path))
         if self.path.startswith("/core/engines/") or self.path.startswith("/llama-benchmark/"):
-            length = min(int(self.headers.get("Content-Length") or 0), 4096)
+            length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
@@ -748,7 +831,7 @@ class Handler(BaseHTTPRequestHandler):
             return (self._engines("POST", body) if self.path.startswith("/core/engines/")
                     else self._benchmark("POST", body))
         if self.path.startswith("/core/llamacpp/"):
-            length = min(int(self.headers.get("Content-Length") or 0), 4096)
+            length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
@@ -757,7 +840,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/core/extras/"):
             return self._extras("POST")
         if self.path.startswith("/core/comfynodes/"):
-            length = min(int(self.headers.get("Content-Length") or 0), 16384)
+            length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
@@ -780,35 +863,35 @@ class Handler(BaseHTTPRequestHandler):
                 log.info("%s -> %s", self.path, reply.get("dest") or reply.get("error"))
             return self._send(status, reply)
         if self.path.startswith("/core/runtime/"):
-            length = min(int(self.headers.get("Content-Length") or 0), 4096)
+            length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
                 body = {}
             return self._runtime("POST", body if isinstance(body, dict) else {})
         if self.path.startswith("/core/swap/"):
-            length = min(int(self.headers.get("Content-Length") or 0), 4096)
+            length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
                 body = {}
             return self._swap("POST", body if isinstance(body, dict) else {})
         if self.path == "/connections/hermes":
-            length = min(int(self.headers.get("Content-Length") or 0), 4096)
+            length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
                 body = {}
             return self._hermes_link("POST", body if isinstance(body, dict) else {})
         if self.path in ("/llama-hipblaslt/start", "/llama-hipblaslt/delete"):
-            length = min(int(self.headers.get("Content-Length") or 0), 4096)
+            length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
                 body = {}
             return self._send(*llama_hipblaslt.handle("POST", self.path, body if isinstance(body, dict) else {}))
         if self.path == "/llama-optimize/start":
-            length = min(int(self.headers.get("Content-Length") or 0), 4096)
+            length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
@@ -817,7 +900,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/connections/hermes/disconnect":
             return self._hermes_link("DISCONNECT", {})
         if self.path in ("/browser/connect", "/browser/disconnect"):
-            length = min(int(self.headers.get("Content-Length") or 0), 4096)
+            length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
@@ -835,7 +918,7 @@ class Handler(BaseHTTPRequestHandler):
         match = re.fullmatch(r"/items/([a-z0-9-]+)/(start|stop|restart|boot-on|boot-off)", self.path)
         if not match or match.group(1) not in ITEMS:
             return self._send(404, {"error": "unknown item or action"})
-        length = min(int(self.headers.get("Content-Length") or 0), 4096)
+        length = int(self.headers.get("Content-Length") or 0)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
@@ -845,6 +928,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(409, {"error": "Another action is still running", "can_force": False})
         try:
             message = perform(item_id, action, bool(isinstance(body, dict) and body.get("force")))
+            global _items_cache
+            with _items_cache_lock:
+                _items_cache = (0.0, [])
             log.info("%s %s -> %s", action, item_id, message)
             self._send(200, {"message": message, "item": describe(item_id)})
         except Refused as exc:
@@ -861,7 +947,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/gpu-tune":
             return self._send(*gputune.handle("PUT", self.path, self._small_json()))
         if self.path == "/load-priority":
-            length = min(int(self.headers.get("Content-Length") or 0), 4096)
+            length = int(self.headers.get("Content-Length") or 0)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
@@ -869,7 +955,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(*loadpriority.save(body))
         if self.path != "/comfyui/profiles":
             return self._send(404, {"error": "not found"})
-        length = min(int(self.headers.get("Content-Length") or 0), 16384)
+        length = int(self.headers.get("Content-Length") or 0)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
             reply = http_json(f"{SUPERVISOR}/profiles", "PUT", body, timeout=10)
@@ -925,6 +1011,34 @@ def warm_caches() -> None:
             log.exception("%s cache warm-up failed", name)
 
 
+class BoundedHTTPServer(ThreadingHTTPServer):
+    request_queue_size = 64
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._slots = threading.BoundedSemaphore(48)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
 def main() -> None:
     if not SECRET:
         raise SystemExit("HOSTCTL_SECRET is not set - refusing to start without authentication")
@@ -937,7 +1051,7 @@ def main() -> None:
     threading.Thread(target=warm_caches, daemon=True).start()
     storage.busy_check = busy_check
     storage.start_background()
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server = BoundedHTTPServer((HOST, PORT), Handler)
     log.info("bunny-hostctl on %s:%s (%d items)", HOST, PORT, len(ITEMS))
     server.serve_forever()
 

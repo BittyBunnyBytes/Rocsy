@@ -437,6 +437,11 @@
       const bench = add('Benchmarking', 'benchmark', mountBenchmark);
       after.after(bench);
     }
+    // Arriving from the Trainer's "Use in Llama": open Parameters straight away (llama-params.js preselects the LoRA).
+    try {
+      const pending = JSON.parse(localStorage.getItem('rocsy-pending-lora') || 'null');
+      if (pending && pending.model === modelId) setTimeout(() => params.click(), 0);
+    } catch (_) {}
     if (!root.dataset.bpListening) {
       root.dataset.bpListening = '1';
       const leave = event => {

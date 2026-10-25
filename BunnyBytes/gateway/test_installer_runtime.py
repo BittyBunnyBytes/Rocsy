@@ -313,22 +313,26 @@ class InstallerTests(unittest.TestCase):
             if name == 'ytdlp-install':
                 raise m.CommandFailed('Downloading yt-dlp… failed (exit 1).', 'HTTP 503')
         with patch.object(m, 'run_backend_job', side_effect=job), patch.object(m, 'setup_comfyui') as comfy, \
-             patch.object(m, 'setup_supervisor') as supervisor:
+             patch.object(m, 'setup_h3', return_value=[]) as h3, patch.object(m, 'setup_supervisor') as supervisor:
             results = m.install_backends(dest, dest / 'external/ComfyUI', False, dict(m.COMPONENTS), False, lambda *_: None)
         self.assertEqual(jobs, ['ytdlp-install', 'hermes-download'])
         comfy.assert_called_once()
+        h3.assert_called_once()
         supervisor.assert_called_once()
         self.assertEqual([(r['name'], r['ok']) for r in results], [('yt-dlp', False), ('ComfyUI', True), ('Hermes Agent', True)])
         self.assertIn('COMPOSE_PROFILES=motion,hermes\n', (dest / 'BunnyBytes/.env').read_text())
 
     def test_existing_comfyui_only_gets_the_supervisor(self):
         m = self.module
-        with patch.object(m, 'setup_comfyui') as comfy, patch.object(m, 'setup_supervisor') as supervisor:
+        with patch.object(m, 'setup_comfyui') as comfy, patch.object(m, 'setup_supervisor') as supervisor, \
+             patch.object(m, 'setup_h3', return_value=['ComfyUI-KJNodes: offline']) as h3:
             results = m.install_backends(self.root, self.root / 'mine', True,
                                          {**m.COMPONENTS, 'hermes': False, 'ytdlp': False}, False, lambda *_: None)
         comfy.assert_not_called()
+        h3.assert_called_once()  # the H3 packs/patches also go onto a ComfyUI the user brought
         supervisor.assert_called_once()
         self.assertTrue(results[0]['ok'])
+        self.assertIn('1 H3 optimization step', results[0]['message'])
 
     def test_comfyui_download_keeps_existing_model_files(self):
         m = self.module
@@ -439,14 +443,42 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(m.TERMINAL['on'])
 
     def test_enter_takes_the_default_install(self):
-        code, install = self.terminal_run({'dir': str(self.root / 'fresh')}, answers=['', ''])
+        # Enter = default install, Enter = yes to a password, Enter at the password = generate one, start now.
+        code, install = self.terminal_run({'dir': str(self.root / 'fresh')}, answers=['', '', ''], secrets=[''])
         self.assertEqual(code, 0)
-        self.assertEqual(install.call_args.args[0]['mode'], 'install')
+        payload = install.call_args.args[0]
+        self.assertEqual((payload['mode'], payload['password_mode']), ('install', 'custom'))
+        self.assertGreaterEqual(len(payload['new_password']), 20)
+
+    def test_default_install_asks_for_a_typed_password(self):
+        code, install = self.terminal_run({'dir': str(self.root / 'fresh')}, answers=['', 'y', ''],
+                                          secrets=['short', 'Secret-pass1', 'other-pass1', 'Secret-pass1', 'Secret-pass1'])
+        self.assertEqual(code, 0)
+        payload = install.call_args.args[0]
+        self.assertEqual((payload['password_mode'], payload['new_password']), ('custom', 'Secret-pass1'))
+
+    def test_default_install_without_a_password(self):
+        code, install = self.terminal_run({'dir': str(self.root / 'fresh')}, answers=['', 'n', ''])
+        self.assertEqual(code, 0)
+        payload = install.call_args.args[0]
+        self.assertEqual((payload['password_mode'], payload['no_password_ack'], payload['new_password']), ('none', True, ''))
+
+    def test_no_password_flag_skips_the_question(self):
+        m = self.module
+        with patch.dict(os.environ, {'DISPLAY': ':0'}):
+            self.assertEqual(m.parse_terminal_args(['--no-password']), {**m.parse_terminal_args([]), 'no_password': True, 'ui': False})
+        code, install = self.terminal_run({'dir': str(self.root / 'fresh'), 'no_password': True}, answers=['', ''])
+        self.assertEqual(code, 0)
+        self.assertEqual(install.call_args.args[0]['password_mode'], 'none')
+        code, install = self.terminal_run({'defaults': True, 'dir': str(self.root / 'quiet'), 'no_password': True})
+        self.assertEqual(code, 0)
+        payload = install.call_args.args[0]
+        self.assertEqual((payload['password_mode'], payload['no_password_ack']), ('none', True))
 
     def test_customize_asks_every_step(self):
         answers = ['c', str(self.root / 'custom'), '',          # customize, folder, ComfyUI folder
                    '', 'y', 'n', 'n', '', 'n',                  # motion, rea, trainer, comfyui, hermes, ytdlp
-                   '2',                                         # set my own password
+                   'y',                                         # a password (typed below)
                    'n', '', 'y', '', '',                        # desktop app, rocsy cmd, launcher, helper, system upgrade
                    '']                                          # start now
         code, install = self.terminal_run({}, answers=answers, secrets=['Secret-pass1', 'Secret-pass1'])
@@ -510,6 +542,30 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(result['comfy'], str(external_comfy))
         self.assertTrue((external_comfy / 'input/VoiceRefs').is_dir())
         self.assertTrue((external_comfy / 'output/postedit-sep').is_dir())
+
+    def test_update_keeps_the_users_llama_models(self):
+        m = self.module
+        self.make_bundle()
+        (self.bundle / 'Llama/config.yaml').write_text('models: {}\n')
+        (self.bundle / 'Llama/llama-launch').write_text('new launcher\n')
+        dest = self.root / 'installed'
+        with patch.object(m, 'ensure_docker', return_value=False), patch.object(m, 'setup_host_helper'), \
+             patch.object(m, 'install_backends', return_value=[]), patch.object(m, 'run_command'):
+            self.install()
+        self.assertEqual((dest / 'Llama/config.yaml').read_text(), 'models: {}\n')
+        # The user adds a model (Models → Manager does this); the next update ships newer code.
+        (dest / 'Llama/config.yaml').write_text('models:\n  my-model: {}\n')
+        (dest / 'Llama/llama-launch').write_text('old launcher\n')
+        (dest / 'Llama/overrides').mkdir()
+        (dest / 'Llama/overrides/my-model.args').write_text('--temp 0.7\n')
+        for mode in ('update', 'repair'):
+            with patch.object(m, 'ensure_docker', return_value=False), patch.object(m, 'setup_host_helper'), \
+                 patch.object(m, 'install_backends', return_value=[]), patch.object(m, 'run_command'):
+                m.install({'destination': str(dest), 'mode': mode})
+            self.assertEqual((dest / 'Llama/config.yaml').read_text(), 'models:\n  my-model: {}\n')
+            self.assertEqual((dest / 'Llama/llama-launch').read_text(), 'new launcher\n')
+            self.assertEqual((dest / 'Llama/overrides/my-model.args').read_text(), '--temp 0.7\n')
+        self.assertIn('Kept your Llama/config.yaml', (dest / 'install.log').read_text())
 
     def test_password_set_in_settings_is_required_for_reinstall(self):
         destination = self.root / 'installed'

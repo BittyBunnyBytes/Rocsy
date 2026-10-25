@@ -55,12 +55,13 @@ apt-get install -y -qq --no-install-recommends curl gnupg ca-certificates >/dev/
 curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor > /usr/share/keyrings/rocm.gpg
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/$ROCM_REPO jammy main" \
     > /etc/apt/sources.list.d/rocm.list
+# torch headers include thrust/complex.h: rocthrust-dev (with rocprim-dev) provides it.
 # Debian ships its own, older hipcc/rocm packages under the same names: the AMD repo must win.
 printf "Package: *\nPin: origin repo.radeon.com\nPin-Priority: 1001\n" > /etc/apt/preferences.d/rocm-pin
 apt-get update -qq
 say INFO "Installing the ROCm $ROCM_REPO compiler (Ubuntu 22.04 packages)"
 apt-get install -y -qq --no-install-recommends git build-essential ninja-build \
-    hipcc hip-dev rocm-llvm rocm-device-libs hip-runtime-amd >/dev/null
+    hipcc hip-dev rocm-llvm rocm-device-libs hip-runtime-amd rocthrust-dev rocprim-dev >/dev/null
 hip=$(/opt/rocm/bin/hipcc --version 2>&1 | grep -m1 -i "hip version" || true)
 case "$hip" in *" $ROCM_REPO"*) say OK "$hip" ;; *) say ERR "Wrong hipcc: ${hip:-none in /opt/rocm/bin}"; exit 1 ;; esac
 # The source folder belongs to the host user (handed back after every run); git runs as root here.

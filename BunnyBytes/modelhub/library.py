@@ -25,7 +25,8 @@ WEIGHT_EXT = (".safetensors", ".gguf", ".ckpt", ".pt", ".pth", ".sft")
 FOLDERS = {"loras": "lora", "checkpoints": "model", "diffusion_models": "model", "unet": "model",
            "text_encoders": "model", "vae": "model", "llm": "model", "classifiers": "model", "upscale_models": "model",
            "audio_encoders": "model", "clip_vision": "model", "controlnet": "model", "vae_approx": "model",
-           "model_patches": "model", "latent_upscale_models": "model", "diffusers": "model"}
+           "model_patches": "model", "latent_upscale_models": "model", "diffusers": "model",
+           "training_adapters": "model"}
 SHARD_REST = re.compile(r"-(0000[2-9]|000[1-9]\d|00[1-9]\d\d)-of-\d{5}\.(gguf|safetensors)$")
 MIN_SIZE = 1024 * 1024
 TRAINER_URL = os.getenv("TRAINER_UPSTREAM", "http://127.0.0.1:8500").rstrip("/") + "/Trainer"

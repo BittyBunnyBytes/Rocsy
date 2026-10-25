@@ -30,7 +30,8 @@ curl -fsSL https://rocsy.rocks/install.sh | sh
 ```
 
 <p align="center"><sub>Fetches the latest installer, checks its SHA-256 and asks the setup questions in the terminal.
-Add <code>-s -- --defaults</code> after <code>sh</code> for the default install with no questions.</sub></p>
+It asks whether you want a password and lets you type it. Add <code>-s -- --defaults</code> after <code>sh</code> for the default
+install with no questions, or <code>-s -- --no-password</code> to install without a password (trusted machines only).</sub></p>
 
 A self-hosted, password-gated AI studio for one machine with an AMD GPU (ROCm). One gateway
 serves video, image, music and voice generation, LoRA training, a local LLM server and an
@@ -90,7 +91,7 @@ services (Motion; REA and the Trainer are off by default) and the core backends 
 ComfyUI with PyTorch for ROCm and its supervisor, Hermes Agent, and yt-dlp. Anything skipped can be
 installed later in Models → Manager → Core Backend. No desktop, or prefer a terminal? Run the bundle's
 `sh "Install Rocsy.sh" --terminal` for the same questions in the terminal, or `--defaults` for the
-default install without questions (`--help` lists the options). By hand:
+default install without questions; `--no-password` installs without a password (`--help` lists the options). By hand:
 
 1. Copy each `.env.example` to `.env` (`BunnyBytes/`, `Video/`, `Krea/`, `Music/`) and fill in
    the secrets (`MASTER_PASSWORD`, `COOKIE_SECRET`, `QUEUE_INTERNAL_SECRET`, `LLAMA_API_KEY`,

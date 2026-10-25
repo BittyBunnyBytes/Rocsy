@@ -12,3 +12,4 @@ pywebpush==2.0.3
 numpy==2.4.4
 starlette==1.7.0
 Pillow==13.0.0
+pyarrow==21.0.0

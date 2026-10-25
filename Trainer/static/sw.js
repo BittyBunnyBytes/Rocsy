@@ -13,8 +13,8 @@ self.addEventListener("push", (event) => {
     body: data.body || "",
     tag: data.tag || "trainer",
     renotify: true,
-    icon: `${scopeUrl.pathname}static/icons/icon-192.png`,
-    badge: `${scopeUrl.pathname}static/icons/badge-96.png`,
+    icon: `${scopeUrl.pathname}static/icons/trainer-192.png`,
+    badge: `${scopeUrl.pathname}static/icons/trainer-badge-96.png`,
     vibrate: [120, 60, 120],
     data: { url: data.url || scopeUrl.pathname },
   }));

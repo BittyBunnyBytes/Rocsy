@@ -163,6 +163,7 @@ DEFAULTS: dict[str, Any] = {
     "gpu_guard": True,           # local model: hold the GPU while thinking, hand it over (unloaded) for renders
     "cache_save": True,          # park the local model's conversation cache on disk before an unload, restore it after
     "keep_loaded_ask": 0,        # minutes the local model stays loaded after a turn that ends with a question (0 = off, -1 = until the GPU is wanted)
+    "auto_answer": 0,            # minutes an unanswered `ask` waits before the agent picks the answer it thinks best (0 = never)
     "confirm_jobs": False,       # review mode (/review): each studio call is a proposal you approve or veto first
     "review_services": [],       # what review mode covers ([] = everything in REVIEW_KINDS)
     "ask_services": False,       # ask before the first use of each service in a session, then it is cleared
@@ -292,6 +293,10 @@ class Config:
             out["keep_loaded_ask"] = max(-1, min(240, int(values.get("keep_loaded_ask") or 0)))
         except (TypeError, ValueError):
             out["keep_loaded_ask"] = 0
+        try:
+            out["auto_answer"] = max(0, min(240, int(values.get("auto_answer") or 0)))
+        except (TypeError, ValueError):
+            out["auto_answer"] = 0
         try:
             out["limit_restarts"] = max(-1, min(100, int(values.get("limit_restarts") or 0)))
         except (TypeError, ValueError):
@@ -574,6 +579,7 @@ def public(s: dict[str, Any], since: int = -1) -> dict[str, Any]:
     out["prefill"] = dict(prefill_live[s["id"]]) if s["id"] in prefill_live else None
     parked = parked_turns.get(s["id"])
     out["parked"] = {"until": getattr(parked, "parked_until", None)} if parked else None
+    out["auto_answer"] = {"at": at} if (at := auto_answer_at(s)) else None
     out["turns"] = s["turns"]
     out["busy"] = s["state"] in BUSY
     out["attachments"] = public_attachments(s.get("attachments"))
@@ -1270,9 +1276,9 @@ def permissions_block(cfg: dict[str, Any]) -> str:
                if cfg["image_mode"] == "headless" else
                f"opens {engine} in the user's visible Chromium (the /browser window) and tells you to search there with your "
                "browser tools; open a big result to get its original image URL, then `$R grab URL [--name NAME]`")
-        lines.append(f"- Reference pictures from the web: FIRST `$R images \"subject official art\"`, the user's chosen image search: "
+        lines.append(f"- Reference pictures from the web: FIRST `$R images \"SUBJECT\"`, the user's chosen image search: "
                      f"it {how}. Search the whole web: don't add 'wiki' to the query and don't go to wikis first (their page "
-                     "pictures are often tiny sprites/thumbnails). grab downloads, checks and attaches it in one step (att5 for "
+                     "pictures are often tiny sprites/thumbnails). ONE subject per search (a query listing several is refused): search, grab, then search the next subject. Never add 'public domain', 'free', 'copyright free', 'royalty free', 'clip art', 'PNG', 'vector' or 'stock' to a query: they pull in low-quality clip art. Don't add style or source words either ('official art', 'photo', 'render'...): search the subject's name and judge the results by quality (big, detailed, clean), whatever kind of picture they are. grab downloads, checks and attaches it in one step (att5 for "
                      "--ref) and also takes a direct image URL or a page that shows it. Don't curl images yourself, and never "
                      "build or guess URLs. Look at every grabbed picture with your vision tool before using it. If 3 grabs "
                      "fail, stop: go on without it, or `ask` the user for a picture.")
@@ -1904,11 +1910,10 @@ async def conversation(sid: str, request: str) -> None:
             set_state(s, "stopped", "Stopped")
             ev(s, "warn", "Stopped")
         elif s.get("asked"):
-            set_state(s, "done", "Waiting for your answer")
-            await notify(s, "done", "The Master Agent has a question", s["asked"][:180])
+            set_state(s, "done", "Waiting for your answer")   # pushed when it asked (the ask tool)
         elif waiting := review_pending(s):
             set_state(s, "done", "Waiting for your review")
-            await notify(s, "done", "The Master Agent wants your OK", ", ".join(f"{x['id']} {x['title']}" for x in waiting)[:180])
+            await notify(s, "question", "The Master Agent wants your OK", ", ".join(f"{x['id']} {x['title']}" for x in waiting)[:180])
         else:
             set_state(s, "done", "Done")
             ev(s, "ok", "Done")
@@ -2163,6 +2168,8 @@ async def refresh_jobs(s: dict[str, Any]) -> None:
                 j.update(state="failed", error="the studio no longer has this job")
                 ev(s, "warn", f"{j['ref']} disappeared from {j['service']}")
             continue
+        if not isinstance(item, dict):     # malformed answer: keep the card; Cancel forces it if it never recovers
+            continue
         state = str(item.get("state") or j["state"])
         j["progress"] = studios.progress(item)
         j["stage"] = str(item.get("stage") or "")[:120]
@@ -2188,8 +2195,10 @@ async def refresh_agentic(s: dict[str, Any], j: dict[str, Any]) -> None:
             ev(s, "warn", f"{j['ref']} disappeared from Vid", job=j["ref"])
             sessions.save(s["id"])
         return
+    if not isinstance(item, dict) or "state" not in item:
+        return
     state = item["state"]
-    j["progress"], j["stage"] = item["progress"], item["stage"]
+    j["progress"], j["stage"] = item.get("progress"), item.get("stage") or ""
     # Mirror Vid's Agentic log in the existing Master Agent terminal card. The
     # revision changes for streaming updates; length/last entry catches normal
     # log lines that are appended without a revision bump.
@@ -2262,7 +2271,7 @@ async def backfill_agentic_clips() -> None:
             sessions.save(s["id"])
 
 
-async def cancel_job_of(j: dict[str, Any]) -> None:
+async def cancel_job_of(j: dict[str, Any], timeout: float = 30) -> None:
     if not j.get("job_id"):
         task = deferred_tasks.pop(f"{j.get('sid')}:{j['ref']}", None)
         if task:
@@ -2270,9 +2279,81 @@ async def cancel_job_of(j: dict[str, Any]) -> None:
         j.update(state="cancelled", error="cancelled before it started")
         return
     if j.get("kind") == "agentic":
-        await studios.agentic_cancel(j["job_id"])
+        await studios.agentic_cancel(j["job_id"], timeout=timeout)
     else:
-        await studios.cancel(j["service"], j["job_id"])
+        await studios.cancel(j["service"], j["job_id"], timeout=timeout)
+
+
+# A cancel the studio can't carry out (its ComfyUI job is gone or malformed, or the studio doesn't
+# answer) would leave the card "rendering" and the session waiting on it forever: after this long
+# the job is marked cancelled here, its GPU queue entry dropped, and the session restarted.
+FORCE_CANCEL_GRACE = 20
+
+
+async def force_cancel(s: dict[str, Any], j: dict[str, Any], why: str) -> None:
+    if j["state"] in studios.DONE:
+        return
+    j.update(state="cancelled", error=f"force-cancelled: {why}"[:500], progress=None)
+    ev(s, "warn", f"{j['ref']} force-cancelled ({why})", job=j["ref"])
+    if j.get("job_id"):
+        with suppress(Exception):                  # only this job's own entries; the lock forwards or drops orphans
+            for entry in await studios.queue():
+                if entry.get("job_id") == j["job_id"] and entry.get("entry_id"):
+                    await studios.queue_cancel(entry["entry_id"])
+    sessions.save(s["id"])
+
+
+async def restart_after_cancel(s: dict[str, Any], ref: str, why: str) -> None:
+    """The user cancelled a job: get the session moving again. A watcher still waiting on it
+    resumes the agent by itself; a wedged or dead one is replaced by a fresh turn."""
+    sid = s["id"]
+    task = runners.get(sid)
+    alive = bool(task and not task.done())
+    if s.get("stop") or s["state"] == "stopped" or (alive and s["state"] in ("thinking", "starting", "waiting_for_gpu")):
+        return                                     # Stopped by the user, or a turn is live and will see it
+    if alive and s["state"] == "rendering":
+        for _ in range(FORCE_CANCEL_GRACE):
+            await asyncio.sleep(1)
+            if task.done() or s["state"] != "rendering" or unfinished(s):
+                return                             # it resumed, or still waits for other jobs
+        task.cancel()                              # still "rendering" with nothing left: wedged
+        with suppress(BaseException):
+            await asyncio.wait_for(task, 10)
+    elif alive:
+        return
+    if unfinished(s) or sid not in sessions.items:
+        return
+    ev(s, "system", f"Restarting the Master Agent session after cancelling {ref}")
+    start(s, f"(The user cancelled {ref}: {why}. Don't restart it unless they ask.)\nYour jobs so far:\n"
+             + "\n".join(job_line(j) for j in s["jobs"] if j.get("msg") == s.get("msg"))
+             + "\n\nCheck them (`$R jobs`) and finish what the original request still needs, or end with a short "
+               "summary for the user.\n\nThe original request was:\n"
+             + next((t["text"] for t in reversed(s["turns"]) if t["role"] == "user" and not t.get("review")), ""),
+          shown=False)
+
+
+async def cancel_and_settle(s: dict[str, Any], j: dict[str, Any], restart: bool) -> None:
+    """Ask the studio to cancel; if it can't, or the job is still running after the grace
+    period, force it. `restart` (the user's Cancel button): then restart the session."""
+    why = ""
+    try:
+        await cancel_job_of(j, timeout=10)
+    except Exception as exc:  # noqa: BLE001 - unreachable, 404 (job gone), malformed answer: all mean force
+        why = f"{j['service']} couldn't cancel it: {str(exc)[:200]}"
+    if not why:
+        for _ in range(FORCE_CANCEL_GRACE // 2):
+            if j["state"] in studios.DONE:
+                break
+            await asyncio.sleep(2)
+            if j.get("job_id") and j.get("kind") != "motion":
+                with suppress(Exception):
+                    await (refresh_agentic(s, j) if j.get("kind") == "agentic" else refresh_jobs(s))
+        else:
+            why = f"{j['service']} still reported it {j['state']} {FORCE_CANCEL_GRACE} s after the cancel"
+    if why:
+        await force_cancel(s, j, why)
+    if restart:
+        await restart_after_cancel(s, j["ref"], why or "cancelled from its card")
 
 
 async def notify(s: dict[str, Any], event: str, title: str, body: str) -> None:
@@ -2890,6 +2971,7 @@ async def lifespan(_: FastAPI):
     task = asyncio.create_task(flusher())
     relay = asyncio.create_task(rea_outbox())
     timer = asyncio.create_task(scheduler())
+    answerer = asyncio.create_task(auto_answerer())
     asyncio.create_task(backfill_agentic_clips())
     for s in sessions.items.values():          # restarted while its jobs rendered: keep watching them
         if s["state"] == "rendering":
@@ -2900,7 +2982,40 @@ async def lifespan(_: FastAPI):
         task.cancel()
         relay.cancel()
         timer.cancel()
+        answerer.cancel()
         sessions.flush()
+
+
+def auto_answer_at(s: dict[str, Any]) -> float | None:
+    """When an unanswered `ask` gets answered by the agent itself (Settings → Agentic), or None."""
+    minutes = config.load()["auto_answer"]
+    if not minutes or not s.get("asked") or not s.get("asked_t") or s.get("stop"):
+        return None
+    at = s["asked_t"] + minutes * 60
+    # Long past it (the service was down, or the switch was just turned on): an old question stays the user's.
+    return at if now() < at + 300 else None
+
+
+async def auto_answerer() -> None:
+    """A question the user leaves unanswered past the auto-answer time: a new turn tells the agent to
+    pick what it thinks is best, say which and why, and carry on (like the user's reply would)."""
+    while True:
+        await asyncio.sleep(5)
+        with suppress(Exception):
+            for s in list(sessions.items.values()):
+                at = auto_answer_at(s)
+                if not at or now() < at or s["state"] in BUSY or (s["id"] in runners and not runners[s["id"]].done()):
+                    continue
+                minutes, question = config.load()["auto_answer"], s["asked"]
+                choices = s.get("asked_choices") or []
+                ev(s, "system", f"No answer after {minutes} min: the Master Agent picks what it thinks is best")
+                start(s, f"(No answer from the user after {minutes} min; auto-answer is on in Settings → Agentic.) "
+                         f"Your question was: {question}"
+                         + (f"\nThe choices were: {'; '.join(choices)}" if choices else "")
+                         + "\nDecide it yourself: pick the answer you think is best for what the user asked for, say in one "
+                           "short line which one you picked and why (they can still change it), then carry on with the work. "
+                           "Don't ask the same question again.", shown=False)
+                sessions.save(s["id"])
 
 
 REA_API = os.getenv("REA_WEB_URL", "http://127.0.0.1:8976/REA/api").rstrip("/")
@@ -3527,7 +3642,7 @@ async def session_events(sid: str, request: Request, since: int = -1):
             snap = public(s, last)
             if snap["events"]:
                 last = snap["events"][-1]["i"]
-            key = json.dumps([snap["state"], snap.get("stage"), snap["jobs"], snap.get("pending"), snap["summary"], snap["title"], snap["live"], snap.get("usage"), snap.get("compress"), snap.get("prefill"), snap.get("parked"), snap.get("boards")], default=str)
+            key = json.dumps([snap["state"], snap.get("stage"), snap["jobs"], snap.get("pending"), snap["summary"], snap["title"], snap["live"], snap.get("usage"), snap.get("compress"), snap.get("prefill"), snap.get("parked"), snap.get("auto_answer"), snap.get("boards")], default=str)
             if snap["events"] or key != sent:
                 sent = key
                 yield sse(snap)
@@ -3622,15 +3737,25 @@ async def create_session(body: SessionBody, request: Request) -> dict[str, Any]:
 INLINE_TYPES = re.compile(r"^(image/(png|jpeg|gif|webp|avif)|video/(mp4|webm|quicktime)|audio/[\w.+-]+)$")
 
 
-async def _receive(request: Request, path: Path, room: int) -> int:
+async def _receive(request: Request, path: Path, room: int, offset: int = 0) -> int:
+    """Append the body at `offset`; a failed part (too big, dropped) leaves the file at `offset`."""
     size = 0
-    with open(path, "ab") as handle:
-        async for chunk in request.stream():
-            size += len(chunk)
-            if size > room:
-                raise HTTPException(413, f"Attachments can be up to {MAX_UPLOAD // 1024 // 1024} MB")
-            handle.write(chunk)
+    with open(path, "r+b" if offset else "wb") as handle:
+        handle.truncate(offset)    # drop anything past the recorded size
+        handle.seek(offset)
+        try:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > room:
+                    raise HTTPException(413, f"Attachments can be up to {MAX_UPLOAD // 1024 // 1024} MB")
+                handle.write(chunk)
+        except BaseException:
+            handle.truncate(offset)
+            raise
     return size
+
+
+_upload_locks: dict[str, asyncio.Lock] = {}
 
 
 def _upload_guard(request: Request) -> None:
@@ -3671,15 +3796,19 @@ async def upload(request: Request) -> dict[str, Any]:
 @app.post(p("/api/uploads/{aid}/append"))
 async def upload_part(aid: str, request: Request) -> dict[str, Any]:
     _upload_guard(request)
-    meta = attachment_meta(aid)
-    if not meta or meta.get("complete"):
-        raise HTTPException(404, "No unfinished upload with that id")
-    if request.headers.get("x-upload-offset") != str(meta["size"]):
-        raise HTTPException(409, f"Expected the part at byte {meta['size']}")
-    added = await _receive(request, ATTACH_DIR / aid / meta["name"], meta["total"] - meta["size"])
-    meta["size"] += added
-    meta["complete"] = meta["size"] == meta["total"]
-    (ATTACH_DIR / aid / "meta.json").write_text(json.dumps(meta))
+    async with _upload_locks.setdefault(aid, asyncio.Lock()):    # one part at a time, so the offset check and the append agree
+        meta = attachment_meta(aid)
+        if not meta or meta.get("complete"):
+            _upload_locks.pop(aid, None)
+            raise HTTPException(404, "No unfinished upload with that id")
+        if request.headers.get("x-upload-offset") != str(meta["size"]):
+            raise HTTPException(409, f"Expected the part at byte {meta['size']}")
+        added = await _receive(request, ATTACH_DIR / aid / meta["name"], meta["total"] - meta["size"], meta["size"])
+        meta["size"] += added
+        meta["complete"] = meta["size"] == meta["total"]
+        (ATTACH_DIR / aid / "meta.json").write_text(json.dumps(meta))
+        if meta["complete"]:
+            _upload_locks.pop(aid, None)
     return {**public_attachments([meta])[0], "received": meta["size"], "complete": meta["complete"]}
 
 
@@ -3690,6 +3819,7 @@ async def drop_upload(aid: str) -> dict[str, Any]:
         raise HTTPException(404, "No such unsent upload")
     import shutil
     shutil.rmtree(ATTACH_DIR / aid, ignore_errors=True)
+    _upload_locks.pop(aid, None)
     return {"deleted": aid}
 
 
@@ -3852,10 +3982,9 @@ async def message(sid: str, body: MessageBody, request: Request) -> dict[str, An
         note = ""
         if body.on_busy == "cancel" and left:
             stopped = []
-            for j in left:
-                with suppress(studios.StudioError):
-                    await cancel_job_of(j)
-                    stopped.append(j["ref"])
+            for j in left:                 # forced if its studio can't, so the queued message isn't stuck behind it
+                asyncio.create_task(cancel_and_settle(s, j, restart=False))
+                stopped.append(j["ref"])
             s["cancel_for_message"] = True
             note = f"they stopped {', '.join(stopped)} to send this; don't restart those unless they ask"
             ev(s, "warn", f"You stopped {', '.join(stopped) or 'the jobs'} to steer the conversation")
@@ -3974,11 +4103,12 @@ async def cancel_job(sid: str, ref: str) -> dict[str, Any]:
     j = next((j for j in (s or {}).get("jobs", []) if j["ref"] == ref), None)
     if not j:
         raise HTTPException(404, "No such job")
-    try:
-        await cancel_job_of(j)
-    except studios.StudioError as exc:
-        raise HTTPException(502, str(exc)) from exc
+    if j["state"] in studios.DONE:
+        return public(s)
     ev(s, "warn", f"You cancelled {ref}")
+    settle = asyncio.create_task(cancel_and_settle(s, j, restart=True))
+    with suppress(asyncio.TimeoutError):               # answer fast; a dead studio is forced in the background
+        await asyncio.wait_for(asyncio.shield(settle), 12)
     return public(s)
 
 
@@ -4056,6 +4186,7 @@ async def ask_user(s: dict[str, Any], what: str, kind: str = "job", choices: lis
     previous = (s["state"], s.get("stage", ""))
     set_state(s, "thinking", "Waiting for your approval")
     ev(s, "approval", f"Approve this job? {what}" if kind == "job" else f"Allow this command? {what}")
+    asyncio.create_task(notify(s, "question", "The Master Agent wants your OK", what[:180]))
     try:
         for _ in range(1800):
             if s["pending"]["answer"] is not None or s.get("stop"):
@@ -5323,6 +5454,37 @@ async def grab_media(url: str) -> tuple[str, bytes, str, str, str]:
     raise ValueError(f"{final} is not a picture, video or song (it starts {body[:16]!r})")
 
 
+# Words that steer image search to free/stock/clip-art pictures, which are low quality references.
+# They are taken out of `$R images` queries; results from such sites are left out too.
+IMAGE_QUERY_JUNK = re.compile(
+    r"\b(?:public[\s-]*domain|copyright[\s-]*free|royalty[\s-]*free|license[\s-]*free|no[\s-]*copyright|free[\s-]*to[\s-]*use|"
+    r"free[\s-]*for[\s-]*commercial(?:[\s-]*use)?|creative[\s-]*commons|cc[\s-]*by(?:[\s-]*sa)?|cc0|"
+    r"clip[\s-]*arts?|cliparts?|vector[\s-]*(?:art|graphics?|illustrations?|images?)|svg|stock[\s-]*(?:photos?|images?|pictures?)|free[\s-]*(?:png|images?|pictures?|photos?|download)|"
+    r"transparent[\s-]*(?:png|background)|png|unlicensed|unsplash|pixabay|pexels|wikimedia(?:[\s-]*commons)?)\b", re.I)
+IMAGE_JUNK_SITES = re.compile(
+    r"(?:^|\.)(?:clipart|clip-art|openclipart|publicdomain|freepik|vecteezy|pngtree|pngwing|pngegg|pngitem|pngimg|kisspng|"
+    r"stickpng|pngfind|pngkey|pngkit|purepng|seekpng|clipartmax|clipartkey|clipground|webstockreview|pixabay|pexels|unsplash|"
+    r"rawpixel|pikpng|nicepng|favpng|freesvg|svgrepo|vectorstock|dreamstime|shutterstock|istockphoto|123rf|depositphotos|"
+    r"craiyon|pngarts|toppng|subpng|cleanpng|hiclipart|imgbin|klipartz|uxwing|flaticon|iconfinder)", re.I)
+
+
+def clean_image_query(query: str) -> tuple[str, list[str]]:
+    dropped = list(dict.fromkeys(m.group(0).lower() for m in IMAGE_QUERY_JUNK.finditer(query)))
+    query = re.sub(r"\s{2,}", " ", IMAGE_QUERY_JUNK.sub(" ", query)).strip(" ,;|/-")
+    return query, dropped
+
+
+def image_subjects(query: str) -> list[str]:
+    """The subjects a query lists ("Kris, Susie and Ralsei" → 3): `$R images` takes one at a time."""
+    parts = [p.strip() for p in re.split(r"\s*(?:[,;|+\n]|\s&\s|\band\b|\bvs\.?|\bversus\b)\s*", query, flags=re.I)]
+    return [p for p in parts if p]
+
+
+def junk_image(x: dict[str, Any], site: str) -> bool:
+    return bool(IMAGE_JUNK_SITES.search(site) or IMAGE_JUNK_SITES.search(x["url"].split("/")[2] if "//" in x["url"] else "")
+                or re.search(r"\b(?:clip\s*art|clipart|vector (?:art|illustration|graphic)|free png|transparent png|stock photo|public domain)\b", x.get("title") or "", re.I))
+
+
 async def bing_images(client: httpx.AsyncClient, query: str) -> list[dict[str, Any]]:
     """Bing Images' first page (no API key): each tile's m="{json}" has the original + page URL, its link the size."""
     import html
@@ -5376,7 +5538,7 @@ async def commons_images(client: httpx.AsyncClient, query: str) -> list[dict[str
     return out
 
 
-async def image_search(query: str, n: int = 10, min_side: int = 400, engine_id: str = "duckduckgo") -> list[dict[str, Any]]:
+async def image_search(query: str, n: int = 10, min_side: int = 600, engine_id: str = "duckduckgo") -> list[dict[str, Any]]:
     """`$R images` headless: real image search across the web, big enough to be a reference."""
     from urllib.parse import urlsplit
     found: list[dict[str, Any]] = []
@@ -5396,6 +5558,8 @@ async def image_search(query: str, n: int = 10, min_side: int = 400, engine_id: 
             continue
         seen.add(key)
         x["site"] = (urlsplit(x["page"] or x["url"]).hostname or "").removeprefix("www.")
+        if junk_image(x, x["site"]):        # clip art, stock and free-PNG sites: low-quality references
+            continue
         out.append(x)
     if not out and errors:
         raise ValueError("image search failed (" + ", ".join(errors) + ")")
@@ -5918,11 +6082,10 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
             return {"text": f"cancel requested for {service} job {job_id}"}
         if not j:
             return {"text": f"error: no job {ref}; see jobs" + ("" if cfg["may_cancel_others"] else " (you may only cancel your own jobs)")}
-        try:
-            await cancel_job_of(j)
-        except studios.StudioError as exc:
-            return {"text": f"error: {exc}"}
+        if j["state"] in studios.DONE:
+            return {"text": f"{ref} already {j['state']}"}
         ev(s, "warn", f"Master Agent cancelled {ref}")
+        asyncio.create_task(cancel_and_settle(s, j, restart=False))   # forced if the studio can't, so wait never hangs
         return {"text": f"cancel requested for {ref}"}
     if name == "goal":
         g = s.get("goal")
@@ -6009,10 +6172,14 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
         if not question:
             return {"text": "error: give the question"}
         choices = [c.strip()[:120] for c in re.split(r"[;|\n]", str(args.get("choices") or "")) if c.strip()][:6]
-        s["asked"] = question
+        s.update(asked=question, asked_t=now(), asked_choices=choices)
         ev(s, "ask", question, choices=choices)
+        minutes = cfg.get("auto_answer") or 0
+        asyncio.create_task(notify(s, "question", "The Master Agent has a question",
+                                   (question[:160] + (f" (it picks the best answer itself in {minutes} min if you don't reply)" if minutes else ""))))
         return {"text": "Shown to the user" + (f" with {len(choices)} choices" if choices else "") + ". End your turn now with no "
-                        "further text; their answer arrives as the next message." + (" Your jobs keep rendering meanwhile." if unfinished(s) else "")}
+                        "further text; their answer arrives as the next message." + (" Your jobs keep rendering meanwhile." if unfinished(s) else "")
+                        + (f" If they don't answer within {minutes} min you are asked to decide it yourself." if minutes else "")}
     if name == "reamod":
         action, mod = str(args.get("action") or "status"), str(args.get("mod") or "")
         if not re.fullmatch(r"[0-9a-f]{12}", mod):
@@ -6104,10 +6271,14 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
     if name == "images":
         if not perm(cfg, "web"):
             return {"text": "error: the Web permission is off (Settings → Agentic)"}
-        query = str(args.get("query") or "").strip()[:300]
+        query, dropped = clean_image_query(str(args.get("query") or "")[:300])
         if not query:
-            return {"text": "error: give a search query"}
-        min_side = int(num("min", int) or 400)
+            return {"text": "error: give a search query (one subject, e.g. \"Ralsei\")"}
+        if not args.get("together") and len(parts := image_subjects(query)) > 1:
+            return {"text": f"error: one subject per search. Nothing was searched. Run one `$R images` per subject and grab right "
+                            f"after each, e.g. `$R images \"{parts[0]}\" && $R grab img1 --name ...`, then `$R images \"{parts[1]}\"` "
+                            "and so on. Only for ONE picture showing them together, add --together."}
+        min_side = int(num("min", int) or 600)
         engine = IMAGE_ENGINES[cfg["image_engine"]]
         if cfg["image_mode"] == "browser":
             from urllib.parse import quote_plus
@@ -6123,7 +6294,7 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
             url = engine["url"].format(q=quote_plus(query))
             return {"text": f"Image search is set to the live browser ({engine['label']}): {browser_line(state)}\n"
                             f"Open {url} with your browser tools (browser_navigate), look at the results, click a big clean one "
-                            "of the subject alone (official art or real photos over fan art unless asked) and take its ORIGINAL "
+                            "of the subject alone (the most detailed, highest-quality picture, whatever its style; skip tiny sprites, pixel art and thumbnails unless asked) and take its ORIGINAL "
                             f"image URL (the full-size view's 'Visit'/'View image' link, at least {min_side}px), then "
                             "`$R grab URL --name NAME` and look at it with your vision tool. Never guess image URLs."}
         try:
@@ -6133,13 +6304,17 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
         s["image_results"] = hits
         sessions.save(s["id"])
         if not hits:
-            return {"text": f"No pictures of at least {min_side}px for \"{query}\". Try other words (drop 'wiki'; add "
-                            "'official art', 'portrait', 'photo', 'render' or 'screenshot') or a lower --min."}
+            return {"text": f"No pictures of at least {min_side}px for \"{query}\". Try other words for the subject (drop 'wiki'; a fuller name, "
+                            "the work it is from) or a lower --min."}
+        if dropped:
+            ev(s, "system", f"Image search: dropped {', '.join(dropped)} from the query (it pulls in clip art and low-quality pictures)")
         lines = [f"img{i}: {x['w']}x{x['h']} · {x['site']} · {x['title'][:90]}\n      {x['url'][:200]}"
                  for i, x in enumerate(hits, 1)]
-        return {"text": f"Image results for \"{query}\" from {engine['label']} (sizes are the originals):\n" + "\n".join(lines) +
-                        "\nPick a big, clean one showing the subject alone (official art or real photos over fan art unless "
-                        "asked), then `$R grab imgN --name NAME` and look at it with your vision tool."}
+        return {"text": f"Image results for \"{query}\" from {engine['label']} (sizes are the originals"
+                        + (f"; dropped {', '.join(dropped)}: never ask for free, public-domain or clip-art pictures" if dropped else "")
+                        + "):\n" + "\n".join(lines) +
+                        "\nPick a big, clean one showing the subject alone "
+                        "(the most detailed, highest-quality picture, whatever its style; skip tiny sprites, pixel art and thumbnails unless asked), then `$R grab imgN --name NAME` and look at it with your vision tool."}
     if name == "notify":
         if not perm(cfg, "notify_user"):
             return {"text": "error: push notifications are off for you (Settings → Agentic → Permissions)"}

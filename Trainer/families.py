@@ -7,10 +7,12 @@ by its architecture, not its file name. Families whose base model is not install
 listed, so the Train tab can say what to download.
 
 Backends:
-  fizgig     - vendor/Fizgig (Krea 2, MiniMax H3, Flux.2 Klein 9B); vendor/Fizgig-latest (Qwen Image 2.1, MOSS-Image)
+  fizgig     - vendor/Fizgig (Krea 2, MiniMax H3, Flux.2 Klein 9B); vendor/Fizgig-latest (Qwen Image 2.1, MOSS-Image,
+               and every full fine-tune: Krea 2, Qwen Image 2.1, Klein 9B, MOSS-Image, MiniMax H3, SDXL, Anima)
   sd-scripts - a kohya sd-scripts checkout (TRAINER_SDSCRIPTS_DIR) with its ROCm venv
                (Anima, SDXL, SD 1.5, Flux.1 / Chroma, SD3, Lumina 2, HunyuanImage 2.1)
   ai-toolkit - vendor/ai-toolkit (LTX 2.5, plus one recipe per upstream example config)
+  llm        - vendor/llm-lora (PEFT LoRAs for chat/text LLMs from Hugging Face, converted to GGUF for llama.cpp)
 """
 from __future__ import annotations
 
@@ -32,6 +34,8 @@ TRAINER_ROOT = Path(os.getenv("TRAINER_REPO", "/opt/trainers")).resolve()
 SDSCRIPTS_DIR = Path(os.getenv("TRAINER_SDSCRIPTS_DIR", "/opt/sd-scripts"))
 SDSCRIPTS_PYTHON = Path(os.getenv("TRAINER_SDSCRIPTS_PYTHON", str(SDSCRIPTS_DIR.parent / ".venv-rocm7.10" / "bin" / "python")))
 AITK_DIR = TRAINER_ROOT / "vendor" / "ai-toolkit"
+LLM_DIR = TRAINER_ROOT / "vendor" / "llm-lora"
+HF_HOME = Path(os.getenv("HF_HOME", "/data/hf-cache"))
 
 
 # ---- safetensors headers ---------------------------------------------------------------------
@@ -312,10 +316,33 @@ def _ae_vae(h: Header | None, name: str):
     return (READY, "") if h is not None else (UNTESTED, "")
 
 
+def finetune_unfit(path: Path, family_id: str = "") -> str:
+    """Why a base file can't be fully fine-tuned, or "" (Fizgig's families/ft.py rule, header only): the trainer builds
+    its bf16 master from the file and writes every checkpoint in its layout, so fp8/int8/pre-quantised files can't be used.
+    MiniMax H3 is the exception (fizgig/minimax/ft_backend.py): its master is decoded from the pruned int8 ConvRot codes."""
+    h = read_header(path)
+    if h is None:
+        return "not a readable .safetensors file"
+    if family_id == "minimax_h3":
+        if not h.has("adaln_t_table"):
+            return "it is not a pruned H3 build (the 66 GB bf16 file trains LoRAs only)"
+        if h.has(".weight_codebook") or h.fp8 or not h.int8:
+            return "it is not the int8 ConvRot build (w4a8/fp8 files can't be fine-tuned)"
+        return ""
+    if h.has(".weight_scale", ".scale_weight"):
+        return "it is a pre-quantised checkpoint (weight scales); a fine-tune needs the bf16 release"
+    low = sum(n for d, n in h.dtypes.items() if d.startswith(("F8", "I8", "U8")))
+    if low:
+        return f"it stores {low} tensor(s) below 16 bits (fp8/int8); a fine-tune needs the bf16 release"
+    return ""
+
+
 S = Slot
 FIZGIG = "fizgig"
 SDS = "sd-scripts"
 AITK = "ai-toolkit"
+LLM = "llm"
+FT_NOTE = ("Fine-tune trains the whole model (Fizgig's rotating windows: one slice trains at a time on a 4-bit trunk, the bf16 master stays in system RAM). One rotation = every part of the model trained once; every save is a full checkpoint.")
 IMG = frozenset({"image"})
 
 FAMILIES: list[Family] = [
@@ -330,11 +357,12 @@ FAMILIES: list[Family] = [
            get={"repo": "Comfy-Org/MiniMax-H3", "path": "vae/minimax_h3_audio_vae_fp32.safetensors", "dest": "vae", "gb": 0.6}),
          S("training_adapter", "Training adapter (recommended)", ("training_adapters", "loras"), required=False, suggest=r"h3.*training_adapter|minimax.*adapter",
            get={"repo": "ostris/minimax_h3_training_adapter", "path": "minimax_h3_training_adapter_v1.safetensors", "dest": "training_adapters", "gb": 0.2})],
-        ("rank", "epochs", "resolution", "trigger"),
-        {"rank": 16, "epochs": 10, "resolution": 512},
+        ("rank", "epochs", "resolution", "trigger", "kind", "rotations", "save_every", "learning_rate"),
+        {"rank": 16, "epochs": 10, "resolution": 512, "kind": "lora", "rotations": 4, "save_every": 1},
         "MiniMax H3 uses Fizgig ROCm (Automagic v3, EMA 0.98, TREAD on clips). Clips must be .mp4, 24 fps, 22/39/56/73 frames, sides divisible by 32. "
         "Add the audio VAE only for sound/voice data. Stop ComfyUI first so the trainer gets the whole GPU.",
-        _detect_h3),
+        _detect_h3, extra={"finetune": {"lr": "3e-5", "fizgig": "minimax", "gb": 21.0, "lr_ft_only": True,
+            "base": "the pruned int8 build, minimax_h3_fl2va_pruned_int8_convrot.safetensors (Comfy-Org/MiniMax-H3)"}}),
     Family(
         "krea2", "Krea 2", FIZGIG, "Image", IMG,
         [S("dit", "Base model (RAW DiT)", BASE_FOLDERS, base=True,
@@ -343,11 +371,11 @@ FAMILIES: list[Family] = [
            get={"repo": "Comfy-Org/Krea-2", "path": "vae/qwen_image_vae.safetensors", "dest": "vae", "gb": 0.25}),
          S("text_encoder", "Text encoder (Qwen3-VL 4B)", ("text_encoders", "clip"), suggest=r"qwen3vl_4b|qwen_3_4b|qwen3_4b",
            get={"repo": "Comfy-Org/Krea-2", "path": "text_encoders/qwen3vl_4b_bf16.safetensors", "dest": "text_encoders", "gb": 8.9})],
-        ("rank", "epochs", "learning_rate", "trigger"),
-        {"rank": 16, "epochs": 10, "learning_rate": "1e-4"},
+        ("rank", "epochs", "learning_rate", "trigger", "kind", "rotations", "save_every"),
+        {"rank": 16, "epochs": 10, "learning_rate": "1e-4", "kind": "lora", "rotations": 4, "save_every": 1},
         "Krea 2 uses Fizgig ROCm, 4-bit base quantisation, 768 px buckets. It trains on the RAW bf16 DiT; Lustify and other Krea 2 finetunes "
         "are detected but are fp8/int8 files, which are untested or unsupported as a training base.",
-        _detect_krea2),
+        _detect_krea2, extra={"finetune": {"lr": "1e-5", "fizgig": "krea2", "gb": 26.3}}),
     Family(
         "qwen_image_21", "Qwen Image 2.1", FIZGIG, "Image", IMG,
         [S("dit", "Base model (bf16 DiT)", BASE_FOLDERS, base=True,
@@ -359,12 +387,12 @@ FAMILIES: list[Family] = [
            get={"repo": "Comfy-Org/Qwen-Image-2.1", "path": "text_encoders/qwen3vl_8b_bf16.safetensors", "dest": "text_encoders", "gb": 17.5}),
          S("training_adapter", "Training adapter (recommended)", ("training_adapters", "loras"), required=False, suggest=r"qwen.*training_adapter|fizgig_qwen",
            get={"repo": "ShootTheSound/Fizgig-Qwen-Image-2.1-Training-Adapter", "path": "fizgig_qwen_image_2.1_training_adapter.safetensors", "dest": "training_adapters", "gb": 0.1})],
-        ("rank", "epochs", "max_pixels", "learning_rate", "trigger"),
-        {"rank": 16, "epochs": 30, "max_pixels": 524288, "learning_rate": "1e-4"},
+        ("rank", "epochs", "max_pixels", "learning_rate", "trigger", "kind", "rotations", "save_every"),
+        {"rank": 16, "epochs": 30, "max_pixels": 524288, "learning_rate": "1e-4", "kind": "lora", "rotations": 4, "save_every": 1},
         "Qwen Image 2.1 uses Fizgig's family trainer (v8.7.9, from vendor/Fizgig-latest): Standard is rank 16 with adaptive LR 1e-4…2e-4, "
         "Fast is rank 8 with 2e-4…4e-4; EMA 0.98, the training adapter, auto precision, 0.5 MP. "
         "It needs the bf16 DiT, the diffusers-format VAE and the bf16 Qwen3-VL-8B encoder; the ComfyUI int8 files you render with can't be trained on.",
-        _detect_qwen21),
+        _detect_qwen21, extra={"finetune": {"lr": "1e-5", "fizgig": "qwen_image21", "gb": 14.2}}),
     Family(
         "klein9b", "Flux.2 Klein 9B", FIZGIG, "Image", IMG,
         [S("dit", "Base model (klein base 9B)", BASE_FOLDERS, base=True,
@@ -373,10 +401,11 @@ FAMILIES: list[Family] = [
            get={"repo": "black-forest-labs/FLUX.2-dev", "path": "ae.safetensors", "dest": "vae", "gated": True, "manual": True}),
          S("text_encoder", "Text encoder (Qwen3 8B)", ("text_encoders", "clip"), suggest=r"qwen_?3_?8b",
            get={"repo": "Comfy-Org/vae-text-encorder-for-flux-klein-9b", "path": "split_files/text_encoders/qwen_3_8b.safetensors", "dest": "text_encoders", "gb": 16.4})],
-        ("rank", "epochs", "learning_rate", "trigger"),
-        {"rank": 16, "epochs": 30, "learning_rate": "1e-4"},
+        ("rank", "epochs", "learning_rate", "trigger", "kind", "rotations", "save_every"),
+        {"rank": 16, "epochs": 30, "learning_rate": "1e-4", "kind": "lora", "rotations": 4, "save_every": 1},
         "Flux.2 Klein 9B uses Fizgig's Klein recipe (fp8 scaled base, adaptive LR 5e-5…4e-4, flux2_shift). Its base model repos are gated on Hugging Face: accept the licence there first.",
-        _detect_klein, name_hint=r"klein"),
+        _detect_klein, name_hint=r"klein", extra={"finetune": {"lr": "1e-5", "fizgig": "klein", "gb": 17.0,
+            "base": "the bf16 klein base (black-forest-labs/FLUX.2-klein-base-9B, gated), not the fp8 file the LoRA recipe uses"}}),
     Family(
         "moss_image", "MOSS-Image", FIZGIG, "Image", IMG,
         [S("dit", "Base model (Base bf16 DiT)", BASE_FOLDERS, base=True,
@@ -385,13 +414,13 @@ FAMILIES: list[Family] = [
            get={"repo": "Comfy-Org/MOSS-Image", "path": "vae/flux2-vae_small.safetensors", "dest": "vae", "gb": 0.25}),
          S("text_encoder", "Text encoder (Qwen3.5-9B)", ("text_encoders", "clip"), suggest=r"qwen3\.?5.?9b(?!.*qwen_image)",
            get={"repo": "Comfy-Org/Qwen3.5", "path": "text_encoders/qwen3.5_9b_bf16.safetensors", "dest": "text_encoders", "gb": 19.3})],
-        ("rank", "epochs", "max_pixels", "learning_rate", "trigger"),
-        {"rank": 32, "epochs": 70, "max_pixels": 1048576, "learning_rate": "1e-4"},
+        ("rank", "epochs", "max_pixels", "learning_rate", "trigger", "kind", "rotations", "save_every"),
+        {"rank": 32, "epochs": 70, "max_pixels": 1048576, "learning_rate": "1e-4", "kind": "lora", "rotations": 4, "save_every": 1},
         "MOSS-Image uses Fizgig's family trainer (v8.7.9, from vendor/Fizgig-latest). Standard: rank 32, AdamW 1e-4, EMA 0.98, auto INT8/NF4 base, "
         "1 MP; Fast: rank 16 at 0.26 MP. Both use Fizgig's Clean-end share of 30% (its MOSS training fix: likeness sooner, steadier composition). "
         "Train on Base, not SFT or Kromoss, and use the LoRA on SFT; an SFT base trains attention only. 70 epochs, then pick the epoch; "
         "under 50 pictures it can take longer. Write long, detailed captions. A NaN/Inf gradient step is skipped; 25 in a row stop the run.",
-        _detect_moss_image, name_hint=r"moss.?image"),
+        _detect_moss_image, name_hint=r"moss.?image", extra={"finetune": {"lr": "1e-5", "fizgig": "moss_image", "gb": 10.2}}),
     Family(
         "anima", "Anima", SDS, "Image", IMG,
         [S("dit", "Base model (Anima DiT)", BASE_FOLDERS, base=True,
@@ -400,18 +429,18 @@ FAMILIES: list[Family] = [
            get={"repo": "circlestone-labs/Anima", "path": "split_files/text_encoders/qwen_3_06b_base.safetensors", "dest": "text_encoders", "gb": 1.2}),
          S("vae", "VAE (Qwen-Image)", ("vae",), suggest=r"(^|/)qwen_image_vae",
            get={"repo": "circlestone-labs/Anima", "path": "split_files/vae/qwen_image_vae.safetensors", "dest": "vae", "gb": 0.25})],
-        ("rank", "epochs", "resolution", "learning_rate", "repeats", "trigger"),
-        {"rank": 32, "epochs": 30, "resolution": 1024, "learning_rate": "2e-5", "repeats": 1},
+        ("rank", "epochs", "resolution", "learning_rate", "repeats", "trigger", "kind", "rotations", "save_every"),
+        {"rank": 32, "epochs": 30, "resolution": 1024, "learning_rate": "2e-5", "repeats": 1, "kind": "lora", "rotations": 4, "save_every": 1},
         "Anima uses kohya sd-scripts with the ROCm venv from its own checkout (the setup the tested character preset used): AdamW8bit with warmup, sigmoid "
         "timesteps, shuffled tags with the trigger kept first, cached latents, 1024 px buckets. Train on anima base or aesthetic; the 2.9B/3.8B builds aren't supported by sd-scripts yet.",
-        _detect_anima, extra={"alpha_ratio": 0.5}),
+        _detect_anima, extra={"alpha_ratio": 0.5, "finetune": {"lr": "1e-5", "fizgig": "anima", "gb": 4.2}}),
     Family(
         "sdxl", "SDXL / Pony / Illustrious", SDS, "Image", IMG,
         [S("dit", "Checkpoint", BASE_FOLDERS, base=True, note="any SDXL-architecture checkpoint (Pony, Illustrious, NoobAI…)")],
-        ("rank", "epochs", "resolution", "learning_rate", "repeats", "trigger"),
-        {"rank": 16, "epochs": 10, "resolution": 1024, "learning_rate": "1e-4", "repeats": 1},
+        ("rank", "epochs", "resolution", "learning_rate", "repeats", "trigger", "kind", "rotations", "save_every"),
+        {"rank": 16, "epochs": 10, "resolution": 1024, "learning_rate": "1e-4", "repeats": 1, "kind": "lora", "rotations": 4, "save_every": 1},
         "SDXL-family checkpoints train with sd-scripts (U-Net only, AdamW, bf16, cached latents). Not yet run on this machine; same ROCm venv as Anima.",
-        _detect_sdxl),
+        _detect_sdxl, extra={"finetune": {"lr": "1e-5", "fizgig": "sdxl", "gb": 7.0}}),
     Family(
         "sd15", "SD 1.5", SDS, "Image", IMG,
         [S("dit", "Checkpoint", BASE_FOLDERS, base=True)],
@@ -469,6 +498,16 @@ FAMILIES: list[Family] = [
         "LTX 2.5 trains video LoRAs through AI Toolkit (int8 ConvRot, low-VRAM). Use short clips with same-stem .txt captions; 25 frames is the starter. "
         "AI Toolkit fetches the model from Hugging Face on first run.",
         _detect_ltx),
+    Family(
+        "llm", "LLM (chat / text model)", LLM, "Text", frozenset({"text"}), [],
+        ("base_model", "rank", "epochs", "learning_rate", "max_length", "quant"),
+        {"rank": 16, "epochs": 3, "learning_rate": "2e-4", "max_length": 2048, "quant": "auto"},
+        "Trains a LoRA for a chat/text LLM with PEFT on ROCm. The base model must be the Hugging Face (safetensors) release: "
+        "GGUF files can't be trained, so pick the unquantised weights your installed GGUF was made from and the LoRA fits it. "
+        "Up to ~5 B parameters train in bf16, bigger models with a 4-bit (QLoRA) base. The dataset is .jsonl/.json "
+        "(chat messages, ShareGPT, prompt/completion, Alpaca or plain text); only the assistant replies are learned. "
+        "The result is a PEFT adapter plus a GGUF LoRA for llama.cpp (--lora). Unload chat models in Llama first so the VRAM is free.",
+        None),
 ]
 
 # Families detected only so the Trainer can say "recognised, but not trainable here".
@@ -535,6 +574,8 @@ def title(family_id: str) -> str:
 # ---- backends --------------------------------------------------------------------------------
 
 def backend_python(backend: str) -> Path:
+    if backend == LLM:
+        return LLM_DIR / "venv" / "bin" / "python"
     if backend == FIZGIG:
         return TRAINER_ROOT / "vendor" / "Fizgig" / "venv" / "bin" / "python"
     if backend == SDS:
@@ -553,7 +594,108 @@ BACKENDS = {
           "covers": "Anima · SDXL · SD 1.5 · Flux.1/Chroma · SD3 · Lumina 2 · HunyuanImage",
           "note": "Uses the checkout and ROCm venv in TRAINER_SDSCRIPTS_DIR (docker-compose.override.yml)."},
     AITK: {"title": "AI Toolkit", "install": "ltx", "covers": "LTX 2.5 + every upstream example recipe (Wan, Flux, HiDream, Qwen-Image…)"},
+    LLM: {"title": "LLM trainer", "install": "llm", "covers": "Chat/text LLMs (Qwen, Llama, Gemma, Mistral…) → PEFT + GGUF LoRA",
+          "note": "PEFT on the container's ROCm PyTorch; llama.cpp's converter makes the GGUF LoRA."},
 }
+
+
+# ---- LLM base models ----------------------------------------------------------------------------
+
+_gguf_cache: dict[str, tuple[float, int, dict[str, str]]] = {}
+_GGUF_SIZES = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
+
+
+def gguf_general(path: Path) -> dict[str, str]:
+    """The general.* string metadata of a GGUF (name, base_model.N.repo_url, source.url…). Quantisers append
+    some of it after the vocab arrays, so the whole key/value block is read (cached by mtime/size)."""
+    try:
+        st = path.stat()
+    except OSError:
+        return {}
+    hit = _gguf_cache.get(str(path))
+    if hit and hit[:2] == (st.st_mtime, st.st_size):
+        return hit[2]
+    out: dict[str, str] = {}
+    try:
+        with path.open("rb", buffering=1 << 20) as f:
+            if f.read(4) != b"GGUF":
+                raise ValueError
+            f.read(4 + 8)
+            count = struct.unpack("<Q", f.read(8))[0]
+
+            def text() -> str:
+                n = struct.unpack("<Q", f.read(8))[0]
+                if n > 1 << 20:
+                    raise ValueError
+                return f.read(n).decode("utf-8", "replace")
+            for _ in range(min(count, 4096)):
+                key = text()
+                kind = struct.unpack("<I", f.read(4))[0]
+                if kind == 8:
+                    value = text()
+                    if key.startswith("general."):
+                        out[key] = value[:300]
+                elif kind == 9:
+                    sub_kind, n = struct.unpack("<IQ", f.read(12))
+                    for _ in range(n):
+                        text() if sub_kind == 8 else f.seek(_GGUF_SIZES[sub_kind], 1)
+                else:
+                    f.seek(_GGUF_SIZES[kind], 1)
+    except (OSError, ValueError, KeyError, struct.error):
+        pass
+    _gguf_cache[str(path)] = (st.st_mtime, st.st_size, out)
+    return out
+
+
+def _hf_repo(url: str) -> str:
+    m = re.match(r"https?://huggingface\.co/([\w.-]+/[\w.-]+)/?$", url.strip())
+    return m.group(1) if m else ""
+
+
+def llm_bases(model_root: Path) -> list[dict[str, str]]:
+    """Base models the LLM family can train: local Hugging Face folders under models/llm, repos already in
+    the Trainer's Hugging Face cache, and the unquantised source/base repo of every installed GGUF."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add(value: str, label: str, note: str) -> None:
+        if value and value not in seen:
+            seen.add(value)
+            out.append({"value": value, "label": label, "note": note})
+    root = model_root / "llm"
+    ggufs = []
+    if root.is_dir():
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+            rel = Path(dirpath).relative_to(model_root)
+            if len(rel.parts) > 3:
+                dirnames[:] = []
+                continue
+            dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in {"build", "src", "ggml", "tools"}]
+            if "config.json" in filenames and any(n.endswith(".safetensors") for n in filenames):
+                add(str(rel), f"{rel.name} (local folder)", "Hugging Face weights in models/" + str(rel))
+            ggufs += [Path(dirpath) / n for n in filenames
+                      if n.endswith(".gguf") and not re.search(r"mmproj|^ggml-vocab", n, re.I)]
+    hub = HF_HOME / "hub"
+    if hub.is_dir():
+        for repo in sorted(hub.glob("models--*")):
+            snaps = [s for s in (repo / "snapshots").glob("*") if (s / "config.json").is_file() and any(s.glob("*.safetensors"))]
+            arch = ""
+            if snaps:
+                try:
+                    arch = " ".join(json.loads((snaps[0] / "config.json").read_text()).get("architectures") or [])
+                except (OSError, ValueError):
+                    pass
+            if snaps and re.search(r"CausalLM|ConditionalGeneration", arch):
+                add(repo.name[len("models--"):].replace("--", "/", 1), "", "already downloaded")
+    for path in sorted(ggufs, key=lambda p: p.name.casefold()):
+        meta = gguf_general(path)
+        source = _hf_repo(meta.get("general.source.url", ""))
+        base = _hf_repo(meta.get("general.base_model.0.repo_url", ""))
+        if source:
+            add(source, "", f"the unquantised weights of your {path.name}: the LoRA fits it exactly")
+        if base:
+            add(base, "", f"base model of your {path.name}" + (" (the LoRA also loads on the finetune, a little less exactly)" if source else ""))
+    return out
 
 
 # ---- scanning ----------------------------------------------------------------------------------
@@ -611,6 +753,9 @@ def scan(model_root: Path) -> dict[str, Any]:
         for slot in fam.slots:
             if slot.base:
                 cands = [{"file": rel, **info} for rel, info in base_files.items() if info["family"] == fam.id]
+                if fam.extra.get("finetune"):
+                    for c in cands:
+                        c["ft_reason"] = finetune_unfit(model_root / c["file"], fam.id)
             else:
                 files = folder_cache.setdefault(slot.folders, _walk(model_root, slot.folders))
                 rx = re.compile(slot.suggest, re.I) if slot.suggest else None
@@ -634,7 +779,7 @@ def scan(model_root: Path) -> dict[str, Any]:
                           "get": slot.get, "missing": slot.required and not usable,
                           "untested_only": slot.key in untested_only})
         has_base = any(s["candidates"] for s in slots if s["base"])
-        if fam.id.startswith("aitk:"):
+        if fam.id.startswith("aitk:") or fam.backend == LLM:
             state = "ready" if backend_ok else "needs_trainer"
         elif not has_base and any(s.base and s.required for s in fam.slots):
             state = "not_installed"
@@ -648,6 +793,8 @@ def scan(model_root: Path) -> dict[str, Any]:
             "id": fam.id, "title": fam.title, "backend": fam.backend, "backend_title": BACKENDS[fam.backend]["title"],
             "group": fam.group, "media": sorted(fam.media), "knobs": list(fam.knobs), "defaults": fam.defaults,
             "hint": fam.hint, "state": state, "missing": missing, "untested_only": untested_only, "slots": slots, "recipe": fam.id.startswith("aitk:"),
+            **({"bases": llm_bases(model_root)} if fam.backend == LLM else {}),
+            **({"finetune": {**fam.extra["finetune"], "note": FT_NOTE}} if fam.extra.get("finetune") else {}),
         })
     others = [{"file": rel, **info} for rel, info in base_files.items() if info["family"] is None]
     return {"families": families, "unrecognised": others, "ai_toolkit": aitk,

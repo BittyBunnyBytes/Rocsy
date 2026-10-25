@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 import time
 import uuid
 from datetime import datetime
@@ -143,6 +144,16 @@ def retire_verified_update(job: dict) -> bool:
     return True
 
 
+# GGUF architectures that are speculative-decoding drafters (plus any "*-assistant", Gemma 4's MTP drafters).
+DRAFTER_ARCHITECTURES = {"eagle3", "dflash"}
+
+
+def _is_drafter(path: Path) -> bool:
+    with path.open("rb") as handle:
+        arch = llama_gguf_architecture(handle.read(4096))
+    return arch.endswith("-assistant") or arch in DRAFTER_ARCHITECTURES
+
+
 async def download_done(job: dict) -> None:
     link = dict(job.get("link") or {})
     if link:
@@ -152,6 +163,9 @@ async def download_done(job: dict) -> None:
     try:
         if after.get("type") == "gallery":
             job["note"] = await integrations.register_lora(job, after)
+        elif after.get("type") == "llama" and after.get("role") == "model" and _is_drafter(ROOT / job["path"]):
+            # MTP / EAGLE-3 / DFlash drafters only run beside the model they were made for: no llama-swap entry.
+            job["note"] = "Drafter for speculative decoding, not a chat model: pick it in Llama → the model → Parameters → Draft model"
         elif after.get("type") == "llama" and after.get("role") == "model":
             with (ROOT / job["path"]).open("rb") as handle:
                 llama_gguf_architecture(handle.read(4096))
@@ -215,6 +229,7 @@ async def startup() -> None:
     asyncio.create_task(comfy_nodes_watch())
     asyncio.create_task(warm_searches())
     asyncio.create_task(locations.loop())
+    asyncio.create_task(llama_autodetect_loop())
 
 
 def download_store(dest: str, link: Path) -> str:
@@ -726,6 +741,7 @@ class DownloadBody(BaseModel):
     companions: bool = True
     replace: str = ""  # installed file (relative path) this download updates in place
     schedule: bool = False  # Civitai early access: queue it to start when it becomes free
+    via: str = ""  # "trainer": the Trainer asked for it (Installed -> Trainer models)
 
 
 def _clean_dest(dest: str) -> str:
@@ -935,6 +951,8 @@ async def queue_download(body: DownloadBody, *, supersede: str = ""):
                 link = {"source": body.source, "model_id": body.model_id, "version_id": version["id"],
                         "version_name": version["name"], "name": detail["name"], "base": version["base"],
                         "nsfw": body.source == "civitai_red" and detail.get("nsfw", False)}
+            if body.via == "trainer":
+                link["via"] = "trainer"
             planned_path = str(Path(dest) / Path(name).name)
             matched_old = next((entry for entry in supersede_files if entry["path"] == planned_path), None)
             replacing_same_path = bool(body.replace and matched_old)
@@ -1648,8 +1666,131 @@ async def library_olds():
 
 SUPPORT = {"text_encoders": "Text encoders & VAEs", "vae": "Text encoders & VAEs", "clip_vision": "Text encoders & VAEs",
            "audio_encoders": "Text encoders & VAEs", "vae_approx": "Text encoders & VAEs"}
-GROUP_ORDER = ["LLMs", "Decision & classification models", "Video models", "Image models", "Audio models", "LoRAs", "Text encoders & VAEs",
-               "Upscalers & other", "Other models"]
+GROUP_ORDER = ["LLMs", "MTP prediction heads", "Vision heads", "Decision & classification models", "Video models", "Image models", "Audio models", "LoRAs",
+               "Trainer models", "Trainer LoRAs & epochs", "Text encoders & VAEs", "Upscalers & other", "Other models"]
+TRAINER_URL = os.getenv("TRAINER_UPSTREAM", "http://127.0.0.1:8500").rstrip("/") + "/Trainer"
+
+
+_llm_kind_cache: dict[str, tuple[float, int, str]] = {}
+
+
+def _llm_file_kind(item: dict) -> str:
+    """"vision" (mmproj), "mtp" (an MTP drafter: Gemma 4 *-assistant, or a small *MTP* file) or "model",
+    from the GGUF's architecture (first key of the header), cached by mtime/size."""
+    if "mmproj" in item["name"].lower():
+        return "vision"
+    path = ROOT / item["path"]
+    hit = _llm_kind_cache.get(item["path"])
+    if hit and hit[:2] == (item["mtime"], item["size"]):
+        return hit[2]
+    arch = ""
+    if path.suffix.lower() == ".gguf":
+        try:
+            with path.open("rb") as handle:
+                arch = llama_gguf_architecture(handle.read(4096))
+        except (OSError, ValueError):
+            arch = ""
+    kind = ("vision" if arch == "clip" else "mtp" if arch.endswith("-assistant")
+            or (sources.MTP_NAME.search(item["name"]) and item["size"] < 3 * 1024**3) else "model")
+    _llm_kind_cache[item["path"]] = (item["mtime"], item["size"], kind)
+    return kind
+
+
+def _draft_uses() -> dict[str, list[str]]:
+    """models/llm-relative draft file -> llama-swap model ids whose Parameters pick it (overrides/<id>.args)."""
+    uses: dict[str, list[str]] = {}
+    for args in (integrations.LLAMA_CONFIG.parent / "overrides").glob("*.args"):
+        try:
+            for line in args.read_text().splitlines():
+                flag, _, value = line.strip().partition(" ")
+                if flag == "--spec-draft-model" and value.strip():
+                    uses.setdefault(value.strip(), []).append(args.stem)
+                elif flag == "--mmproj" and value.strip() not in ("", "none"):
+                    uses.setdefault("vision:" + value.strip(), []).append(args.stem)
+        except OSError:
+            continue
+    return uses
+
+
+# ---- llama-swap auto-detect: GGUF chat models in models/llm without an entry get one ----
+
+LLAMA_SEEN = DATA / "llama_autodetect.json"   # paths added once: a hand-removed entry is not re-added
+
+
+def _gguf_is_chat_model(path: Path) -> bool:
+    """A loadable llama.cpp model: has tensors (not a ggml-vocab test file), not a LoRA adapter, not a drafter."""
+    with path.open("rb") as handle:
+        header = handle.read(65536)
+    llama_gguf_architecture(header)  # raises on bad / unsupported architectures
+    if len(header) < 16 or struct.unpack_from("<Q", header, 8)[0] == 0:
+        return False
+    return b"adapter.lora" not in header and not _is_drafter(path)
+
+
+def llama_autodetect() -> list[str]:
+    """Add a llama-swap entry for every GGUF chat model under models/llm that none points at
+    (manual copies, downloads whose post-processing missed it). Returns the new ids."""
+    base = ROOT / "llm"
+    if not base.is_dir():
+        return []
+    try:
+        seen = set(json.loads(LLAMA_SEEN.read_text()))
+    except (OSError, ValueError):
+        seen = set()
+    entries = integrations.llama_models()
+    used = {m["model"] for m in entries} | {m["mmproj"] for m in entries}
+    used |= {str(Path(p).resolve()) for p in used if p}
+    drafts = set(_draft_uses())
+    busy = {j.get("path") for j in downloads.jobs.values() if not j.get("postprocessed")}
+    added = []
+    for path in sorted(base.rglob("*.gguf")):
+        rel = str(path.relative_to(ROOT))
+        if rel in seen or rel in busy or path.parent.name == "loras" or "llama.cpp" in path.parent.name:
+            continue
+        if re.search(r"-000(?!01)\d\d-of-\d{5}\.gguf$", path.name, re.I):
+            continue  # later shards load through the first one
+        host = integrations.host_path(rel)
+        try:
+            stat = path.stat()
+            if host in used or str(path.resolve()) in used or str(path.relative_to(base)) in drafts:
+                continue
+            if time.time() - stat.st_mtime < 120:
+                continue  # still being copied
+            item = {"name": path.name, "path": rel, "mtime": stat.st_mtime, "size": stat.st_size}
+            if _llm_file_kind(item) != "model" or not _gguf_is_chat_model(path):
+                continue
+        except (OSError, ValueError):
+            continue
+        mmprojs = sorted((p for p in path.parent.glob("*.gguf") if "mmproj" in p.name.lower()),
+                         key=lambda p: ("f16" not in p.name.lower(), p.name))
+        folder = re.sub(r"[-_.]?gguf$", "", path.parent.name, flags=re.I) if path.parent != base else path.stem
+        quant = sources.quant_tag(path.name)
+        name = f"{folder} {quant}".strip() if quant and quant.lower() not in folder.lower() else folder
+        tier = hardware.fit(stat.st_size, "llm", path.name, "GGUF", hw_cache)["tier"]
+        link = library.links.get(rel) or {}
+        source = (f"https://huggingface.co/{link['repo']}" if link.get("repo") else "") or "a file found in models/llm"
+        model_id = integrations.add_llama_model(name, rel, str(mmprojs[0].relative_to(ROOT)) if mmprojs else "",
+                                                tier in ("offload", "multi", "nvme"), source, tier == "nvme")
+        seen.add(rel)
+        added.append(model_id)
+        used.add(host)
+    if added:
+        LLAMA_SEEN.write_text(json.dumps(sorted(seen), indent=1))
+    return added
+
+
+async def llama_autodetect_loop() -> None:
+    await asyncio.sleep(20)
+    while True:
+        try:
+            added = await asyncio.to_thread(llama_autodetect)
+        except Exception:  # noqa: BLE001 - try again on the next pass
+            logging.exception("llama-swap auto-detect failed")
+            added = []
+        if added:
+            restarter.request(f"new model {', '.join(added)}")
+            notify("llama-detect", "Added to llama-swap", ", ".join(added) + " · shows up once no model is loaded")
+        await asyncio.sleep(120)
 
 
 def _base_of(item: dict) -> str:
@@ -1660,26 +1801,130 @@ def _base_of(item: dict) -> str:
     return base or _guess_base(item["name"])
 
 
+_trainer_cache: dict = {"at": 0.0, "runs": []}
+_fp_cache: dict[str, tuple[float, int, str]] = {}
+
+
+async def _trainer_runs() -> list[dict]:
+    """The Trainer's runs with their checkpoint files (Trainer GET /api/files); [] when it isn't running."""
+    if time.time() - _trainer_cache["at"] < 15:
+        return _trainer_cache["runs"]
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            runs = (await client.get(TRAINER_URL + "/api/files")).raise_for_status().json().get("runs", [])
+    except (httpx.HTTPError, ValueError):
+        runs = []
+    _trainer_cache.update(at=time.time(), runs=runs)
+    return runs
+
+
+def _fingerprint(item: dict) -> str:
+    """Same identity the Trainer computes for its outputs: size + first/last 256 KB (cached by mtime/size)."""
+    hit = _fp_cache.get(item["path"])
+    if hit and hit[:2] == (item["mtime"], item["size"]):
+        return hit[2]
+    digest = hashlib.sha1(str(item["size"]).encode())
+    try:
+        with (ROOT / item["path"]).open("rb") as handle:
+            digest.update(handle.read(262144))
+            if item["size"] > 262144:
+                handle.seek(max(262144, item["size"] - 262144))
+                digest.update(handle.read(262144))
+    except OSError:
+        return ""
+    _fp_cache[item["path"]] = (item["mtime"], item["size"], digest.hexdigest())
+    return digest.hexdigest()
+
+
+def _run_label(run: dict, runs: list[dict]) -> str:
+    """Sub-section title of a run; same-named runs get their job id so they don't merge."""
+    twins = sum(1 for r in runs if r["name"] == run["name"])
+    return f"{run['name']} · {run['job'][:6]}" if twins > 1 else run["name"]
+
+
+def _run_note(run: dict) -> str:
+    kind = {"finetune": "Fine-tune", "llm": "LLM LoRA"}.get(run["kind"], "LoRA")
+    bits = [kind + (f" of {run['model_title']}" if run.get("model_title") else ""),
+            run.get("dataset") and f"{run['dataset']} dataset", (run.get("completed_at") or run.get("created_at") or "")[:10]]
+    if run["state"] == "removed":
+        bits.append("run removed from the Trainer list")
+    elif run["state"] not in ("complete", "failed", "cancelled"):
+        bits.append("still training")
+    return " · ".join(b for b in bits if b)
+
+
+def _epoch_fields(file: dict) -> dict:
+    return {"epoch": file.get("epoch"), "final": bool(file.get("final")), "resume_state": bool(file.get("resume_state"))}
+
+
+def _trainer_match(item: dict, runs: list[dict], by_fp: dict, sizes: set) -> tuple[dict, dict | None] | None:
+    """(run, its file) for a models/ file that came out of a Trainer run, else None."""
+    path = item["path"]
+    for run in runs:
+        if run["models_dir"] and path.startswith(run["models_dir"] + "/"):
+            rel = path[len(run["models_dir"]) + 1:]
+            return run, next((f for f in run["files"] if f["rel"] == rel), None)
+    if item["folder"] in ("loras", "llm") and item["size"] in sizes:
+        hit = by_fp.get(_fingerprint(item))
+        if hit:
+            return hit
+    # Copies the Trainer named after the job: epoch tests, Image-gallery publishes, "Use in Llama" (<name>.json sidecar).
+    found = re.search(r"(?:^loras/[^/]+/epoch-tests/|^loras/KreaCustom/trainer-)([0-9a-f]{32})", path)
+    job = found.group(1) if found else ""
+    if path.startswith("llm/loras/"):
+        try:
+            job = str(json.loads((ROOT / path).with_suffix(".json").read_text()).get("job") or "")
+        except (OSError, ValueError, AttributeError):
+            job = ""
+    run = next((r for r in runs if job and r["job"] == job), None)
+    return (run, None) if run else None
+
+
 @app.get(f"{PREFIX}/api/installed")
 async def installed(unused_days: int = 7):
     await locations.refresh()
     lora_uses = await integrations.lora_usage()
     now, window = time.time(), max(1, min(365, unused_days)) * 86400
     llama = integrations.llama_models()
+    drafts = _draft_uses()
+    runs = await _trainer_runs()
+    by_fp = {f["fp"]: (run, f) for run in runs for f in run["files"] if not run["models_dir"]}
+    sizes = {f["size"] for run in runs for f in run["files"]}
     rows = []
     for item in library.view():
         folder, base = item["folder"], _base_of(item)
-        uses = []
-        if folder == "loras":
+        uses, extra = [], {}
+        link = item.get("link") or {}
+        trained = await asyncio.to_thread(_trainer_match, item, runs, by_fp, sizes) if runs else None
+        if trained:
+            run, file = trained
+            group = "Trainer models" if run["kind"] == "finetune" else "Trainer LoRAs & epochs"
+            sub = ("Fine-tune · " if run["kind"] == "finetune" else "") + _run_label(run, runs)
+            extra = {"sub_note": _run_note(run), "job": run["job"], **_epoch_fields(file or {})}
+            if not run["models_dir"]:
+                extra["copy"] = True  # a gallery / epoch-test / llama copy of a checkpoint in the Trainer's output folder
+                if "/epoch-tests/" in item["path"]:
+                    extra["copy_note"] = "Epoch-test copy"
+            if folder == "loras":
+                uses = [{"label": u["label"], "kind": "gallery", "managed": bool(u.get("custom_id"))} for u in lora_uses.get(item["path"], [])]
+        elif link.get("via") == "trainer" or folder == "training_adapters":
+            group, sub = "Trainer models", "Downloaded for training"
+            extra = {"sub_note": "Base models, encoders and adapters the Trainer downloaded through the Models hub"}
+        elif folder == "loras":
             group = "LoRAs"
             uses = [{"label": u["label"], "kind": "gallery", "managed": bool(u.get("custom_id"))} for u in lora_uses.get(item["path"], [])]
             sub = (lora_uses.get(item["path"]) or [{}])[0].get("label") or (f"{base} (no studio gallery)" if base else "Not in a studio gallery")
         elif folder == "llm":
-            group = "LLMs"
+            kind = _llm_file_kind(item)
+            group = {"vision": "Vision heads", "mtp": "MTP prediction heads"}.get(kind, "LLMs")
             host = integrations.host_path(item["path"])
             uses = [{"label": f"llama-swap: {m['name']} ({m['id']})", "kind": "llama", "managed": m["managed"]}
                     for m in llama if host in (m["model"], m["mmproj"])]
-            sub = "Vision projector" if "mmproj" in item["name"].lower() else item["path"].split("/")[1]
+            uses += [{"label": f"Draft model of {model_id}", "kind": "llama", "managed": True}
+                     for model_id in drafts.get(item["path"].removeprefix("llm/"), [])]
+            uses += [{"label": f"Vision head of {model_id}", "kind": "llama", "managed": True}
+                     for model_id in drafts.get("vision:" + item["path"].removeprefix("llm/"), [])]
+            sub = item["path"].split("/")[1]
         elif folder == "classifiers":
             group, sub = "Decision & classification models", item["path"].split("/")[1] if len(item["path"].split("/")) > 2 else "Other classifiers"
         elif folder in SUPPORT:
@@ -1691,8 +1936,7 @@ async def installed(unused_days: int = 7):
         else:
             group, sub = "Upscalers & other", folder.replace("_", " ")
         seen = usage.info(item["path"], folder)
-        link = item.get("link") or {}
-        rows.append({"path": item["path"], "name": item["name"], "size": item["size"], "group": group, "sub": sub,
+        rows.append({**extra, "path": item["path"], "name": item["name"], "size": item["size"], "group": group, "sub": sub,
                      "base": base, "base_manual": link.get("base_manual", ""),
                      "uses": uses, "status": item["status"], "source": link.get("source", ""),
                      "added": item["mtime"], **seen, "stored": locations.describe(item["path"]),
@@ -1715,9 +1959,21 @@ async def installed(unused_days: int = 7):
                      "sub": "Laya", "base": "", "base_manual": "", "uses": [], "status": "", "source": "local",
                      "added": checkpoint.stat().st_mtime, "last_used": 0, "tracked_since": 0,
                      "usage_note": "Installed locally", "unused": False, "removable": False})
+    # Checkpoints still in the Trainer's own output folder (~/AI/Trainer/data/output/<job>), outside models/.
+    for run in runs:
+        if run["models_dir"]:
+            continue
+        group = "Trainer LoRAs & epochs"
+        for file in run["files"]:
+            rows.append({"path": f"trainer/{run['job']}/{file['rel']}", "name": file["name"], "size": file["size"],
+                         "location": f"{run['host_dir']}/{file['rel']}", "group": group, "sub": _run_label(run, runs),
+                         "sub_note": _run_note(run), "job": run["job"], **_epoch_fields(file),
+                         "base": run.get("model_title", ""), "base_manual": "", "uses": [], "status": "", "source": "local",
+                         "added": file["mtime"], "last_used": 0, "tracked_since": 0, "usage_note": "Trainer output",
+                         "unused": False, "movable": False})
     groups = []
     for name in GROUP_ORDER:
-        members = sorted((r for r in rows if r["group"] == name), key=lambda r: (r["sub"].casefold(), r["name"].casefold()))
+        members = sorted((r for r in rows if r["group"] == name), key=lambda r: (r["sub"].casefold(), r.get("epoch") or 0, r["name"].casefold()))
         if members:
             groups.append({"name": name, "count": len(members), "size": sum(r["size"] for r in members), "items": members})
     return {"groups": groups, "free": hw_cache.get("disks", {}).get("Models folder", {}).get("free", 0),
@@ -1768,6 +2024,21 @@ STEM_SIDECARS = (".metadata.json", ".civitai.info", ".preview.png", ".preview.jp
 
 @app.post(f"{PREFIX}/api/uninstall")
 async def uninstall(body: UninstallBody):
+    trainer_file = re.fullmatch(r"trainer/([0-9a-f]{32})/(.+)", body.path)
+    if trainer_file:  # a checkpoint in the Trainer's output folder: the Trainer deletes it
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.delete(TRAINER_URL + "/api/files", params={"job": trainer_file.group(1), "rel": trainer_file.group(2)})
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, "The Trainer isn't reachable, so its files can't be deleted right now") from exc
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("detail")
+            except ValueError:
+                detail = ""
+            raise HTTPException(response.status_code, detail or f"Trainer: {response.status_code}")
+        _trainer_cache["at"] = 0
+        return {"ok": True, "freed": response.json().get("freed", 0), "notes": [], "removed": [body.path]}
     item = next((i for i in library.items if i["path"] == body.path), None)
     if not item:
         raise HTTPException(404, "Not an installed file")

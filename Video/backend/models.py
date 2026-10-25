@@ -3,13 +3,16 @@ from __future__ import annotations
 import re
 
 import json
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 MODES = {"text": 0, "fl2v": 1, "ref2v": 2}
+TEST_LORA_RE = re.compile(r"H3MachineCustom/epoch-tests/[0-9a-f]{32}/[A-Za-z0-9_.-]{1,150}\.safetensors")
 MODE_LABELS = {"text": "Text", "fl2v": "Keyframe", "ref2v": "Reference"}
 MODEL_LABELS = {"minimax_h3": "MiniMax H3", "ltx_2_5": "LTX 2.5", "wan_2_2": "Wan 2.2", "stitch": "Stitch", "postedit": "Post-Edit", "motion": "Motion"}
 # Jobs this app renders itself with ffmpeg (no ComfyUI, no GPU lock, no timing/rating).
@@ -456,6 +459,21 @@ class GenerationRequest(BaseModel):
     # existing default for that mode.
     checkpoint: str | None = Field(default=None, max_length=255)
     loras: list[MinimaxLoraSlot] = Field(default_factory=list)
+    # The Trainer's epoch tests: one checkpoint of a training run, loaded on top of the stack above
+    # (H3) or the LTX LoRAs, from H3MachineCustom/epoch-tests/<job>/ — never listed in the gallery.
+    test_lora: str | None = Field(default=None, max_length=255)
+    test_lora_strength: float = Field(default=1.0, ge=0.0, le=2.0)
+
+    @field_validator("test_lora")
+    @classmethod
+    def known_test_lora(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        if not TEST_LORA_RE.fullmatch(value):
+            raise ValueError("Unknown epoch-test LoRA.")
+        if not (Path(os.getenv("H3_CUSTOM_LORA_DIR", "/models/loras/H3MachineCustom")).parent / value).is_file():
+            raise ValueError("The epoch-test LoRA file is gone (the Trainer removes it when the test is deleted).")
+        return value
 
     @model_validator(mode="before")
     @classmethod

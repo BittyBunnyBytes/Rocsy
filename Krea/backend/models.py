@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+import re
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
@@ -171,6 +174,10 @@ class GenerationRequest(BaseModel):
     use_references: bool = False
     references: list[ReferenceSlot] = Field(default_factory=list)
     loras: list[LoraSlot] = Field(default_factory=list)
+    # The Trainer's epoch tests: one checkpoint of a training run, applied after the slots above,
+    # from KreaCustom/epoch-tests/<job>/ (never listed in the gallery).
+    test_lora: str | None = Field(default=None, max_length=255)
+    test_lora_strength: float = Field(default=1.0, ge=0.0, le=2.0)
     # Krea 2 / Lustify only (see TURBO_LORAS); ignored for Qwen.
     # standard / turbo4 / turbo2 = Krea 2 and Lustify; viggle = Qwen-Image 2.1 (6 steps).
     speed: Literal["standard", "turbo4", "turbo2", "viggle", "dmd8", "dmad4"] = "standard"
@@ -195,6 +202,17 @@ class GenerationRequest(BaseModel):
     kv_cache_device: Literal["auto", "gpu", "cpu", "off"] = "auto"
     kv_cache_dtype: Literal["default", "int8", "int4"] = "default"
     text_encoder: Literal["standard", "abliterated"] = "standard"
+
+    @field_validator("test_lora")
+    @classmethod
+    def known_test_lora(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        if not re.fullmatch(r"KreaCustom/epoch-tests/[0-9a-f]{32}/[A-Za-z0-9_.-]{1,150}\.safetensors", value):
+            raise ValueError("Unknown epoch-test LoRA.")
+        if not (Path(os.getenv("KREA_CUSTOM_LORA_DIR", "/models/loras/KreaCustom")).parent / value).is_file():
+            raise ValueError("The epoch-test LoRA file is gone (the Trainer removes it when the test is deleted).")
+        return value
 
     @field_validator("prompt")
     @classmethod

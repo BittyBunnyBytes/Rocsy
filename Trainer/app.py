@@ -34,6 +34,8 @@ from push import PushService
 from rules_api import build_router as build_rules_router
 from tagger import build_router as build_tagger_router, vision_models
 from store import TrainerStore, utc_now
+from epoch_tests import EpochTests
+import epoch_tests as epoch_tests_mod
 import families
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -45,6 +47,9 @@ DATASET_ROOT = Path(os.getenv("TRAINER_DATASET_ROOT", "/datasets")).resolve()
 MODEL_ROOT = Path(os.getenv("TRAINER_MODEL_ROOT", "/models")).resolve()
 TRAINER_ROOT = Path(os.getenv("TRAINER_REPO", "/opt/trainers")).resolve()
 FIZGIG_LATEST = TRAINER_ROOT / "vendor" / "Fizgig-latest"  # up-to-date checkout (v8.7.9) for MOSS-Image and Qwen Image 2.1
+# Full fine-tunes save straight into ComfyUI's models (writable mount): every checkpoint is a base model to render
+# with, train LoRAs on, or extract a LoRA from, and copying 15-26 GB files afterwards would double the disk use.
+FT_ROOT = MODEL_ROOT / "diffusion_models" / "Trainer"
 QUEUE_URL = os.getenv("TRAINER_QUEUE_URL", "http://127.0.0.1:8600").rstrip("/")
 H3_GALLERY_URL = os.getenv("TRAINER_H3_GALLERY_URL", "http://127.0.0.1:8000/Video").rstrip("/")
 QUEUE_SECRET = os.getenv("TRAINER_QUEUE_INTERNAL_SECRET", "")
@@ -87,6 +92,15 @@ class JobRequest(BaseModel):
     repeats: int = Field(default=1, ge=1, le=100)
     learning_rate: str = Field(default="", max_length=16)
     trigger: str = Field(default="", max_length=64)
+    # LLM family: a Hugging Face repo id or a model folder under /models, the context length and base quantisation.
+    base_model: str = Field(default="", max_length=200)
+    max_length: int = Field(default=2048, ge=128, le=32768)
+    quant: Literal["auto", "4bit", "8bit", "none"] = "auto"
+    # Fizgig families: "finetune" trains the whole base model (rotating windows) instead of a LoRA; its length is
+    # whole rotations (one rotation = every part of the model trained once) and it saves a checkpoint every N of them.
+    kind: Literal["lora", "finetune"] = "lora"
+    rotations: int = Field(default=4, ge=1, le=100)
+    save_every: int = Field(default=1, ge=1, le=100)
 
     def file(self, key: str) -> str:
         return (getattr(self, key, "") if key in {"dit", "vae", "text_encoder", "audio_vae", "training_adapter"} else "") or self.files.get(key, "")
@@ -156,6 +170,35 @@ def _safe_name(value: str) -> str:
     if not name:
         raise HTTPException(422, "Give this LoRA a name containing at least one letter or number.")
     return name[:64]
+
+
+def _output_dir(job_id: str, request: dict[str, Any], name: str) -> Path:
+    """Where a job's files go: fine-tunes into models/diffusion_models/Trainer/<name>-<id>, everything else data/output/<id>."""
+    if request.get("kind") == "finetune":
+        return FT_ROOT / f"{name}-{job_id[:8]}"
+    return DATA_DIR / "output" / job_id
+
+
+def _item_output_dir(item: dict[str, Any]) -> Path:
+    return _output_dir(item["id"], json.loads(item["request_json"]), item["name"])
+
+
+def _ft_saves(rotations: int, save_every: int) -> int:
+    """Full checkpoints a fine-tune writes: one every save_every rotations before the end, plus the final one."""
+    return (rotations - 1) // save_every + 1
+
+
+def _ft_disk_check(base: str, req: JobRequest) -> str:
+    """Refuse a fine-tune whose checkpoints can't fit on the disk (each save is a full copy of the base)."""
+    size = Path(base).stat().st_size
+    saves = _ft_saves(req.rotations, req.save_every)
+    need = saves * size + 5 * 1024 ** 3
+    free = shutil.disk_usage(FT_ROOT if FT_ROOT.is_dir() else MODEL_ROOT).free
+    gb = lambda n: f"{n / 1024 ** 3:.0f} GB"
+    if need > free:
+        raise HTTPException(422, f"Not enough disk space: {saves} checkpoint(s) of {gb(size)} each need about {gb(need)}, "
+                                 f"but only {gb(free)} is free. Save less often (Save every) or train fewer rotations.")
+    return f"[Trainer] Fine-tune: {saves} full checkpoint(s) of ~{gb(size)} each (~{gb(saves * size)}), {gb(free)} free.\n"
 
 
 def _plan_note(plan: dict[str, Any]) -> str:
@@ -263,11 +306,12 @@ def _make_aitk_config(dataset: Path, job_id: str, req: JobRequest, fam: families
     return target
 
 
-def _assert_env(fam: families.Family) -> Path:
-    python = families.backend_python(fam.backend)
+def _assert_env(fam: families.Family, backend: str = "") -> Path:
+    backend = backend or fam.backend
+    python = families.backend_python(backend)
     if not python.is_file():
-        raise HTTPException(503, f"{fam.title} trains with {families.BACKENDS[fam.backend]['title']}, which is not installed. Use its Install button first.")
-    if fam.backend == families.SDS and not families.SDSCRIPTS_DIR.is_dir():
+        raise HTTPException(503, f"{fam.title} trains with {families.BACKENDS[backend]['title']}, which is not installed. Use its Install button first.")
+    if backend == families.SDS and not families.SDSCRIPTS_DIR.is_dir():
         raise HTTPException(503, f"sd-scripts was not found at {families.SDSCRIPTS_DIR}.")
     return python
 
@@ -276,6 +320,8 @@ def _fizgig_spec(req: JobRequest, fam: families.Family, files: dict[str, str | N
                  trainset: Path, job_id: str, name: str) -> list[str]:
     root = TRAINER_ROOT / "vendor" / "Fizgig"
     py = str(families.backend_python(families.FIZGIG))
+    if req.kind == "finetune":
+        return _fizgig_ft_spec(req, fam, files, plan, trainset, job_id, name, py)
     out = str(DATA_DIR / "output" / job_id)
     dit, vae, encoder = files["dit"], files["vae"], files["text_encoder"]
     if fam.id == "krea2":
@@ -415,6 +461,65 @@ def _fizgig_spec(req: JobRequest, fam: families.Family, files: dict[str, str | N
     ]
 
 
+def _fizgig_ft_spec(req: JobRequest, fam: families.Family, files: dict[str, str | None], plan: dict[str, Any],
+                    trainset: Path, job_id: str, name: str, py: str) -> list[str]:
+    """A full fine-tune through Fizgig-latest's family driver, as its GUI launches one (families/launch.py): fixed LR
+    (1e-5 for these families), AdamW stepped per parameter as each gradient lands (--ft_fused_backward), the trunk
+    always NF4, length and save cadence in whole rotations. EMA, adaptive LR and torch.compile are off under a
+    fine-tune either way. Only the bf16 base can be fine-tuned (checked up front)."""
+    key = fam.extra["finetune"]["fizgig"]
+    dit = files["dit"]
+    # An SDXL checkpoint carries its own VAE and text encoders (Fizgig's ModelFile.inside: the checkpoint's path).
+    vae, encoder = (dit, dit) if key == "sdxl" else (files["vae"], files["text_encoder"])
+    if key == "minimax" and plan["counts"]["audio"] and not files.get("audio_vae"):
+        raise HTTPException(422, "Select the MiniMax H3 audio VAE when training on audio recordings.")
+    res = ({"krea2": 768, "klein": 1024}.get(key) or (req.resolution if key in ("minimax", "sdxl", "anima") else 0)
+           or max(256, min(2048, round(req.max_pixels ** 0.5 / 32) * 32)))
+    config = _make_fizgig_config(trainset, job_id, res)
+    out = _output_dir(job_id, {"kind": "finetune"}, name)
+    out.mkdir(parents=True, exist_ok=True)
+    train = [
+        "--family", key, "--dataset_config", str(config), "--dit", dit, "--vae", vae, "--text_encoder", encoder,
+        "--output_dir", str(out), "--output_name", name,
+        "--network_dim", "16", "--network_alpha", "16",   # required by the parser; unused by a fine-tune
+        "--learning_rate", _lr(req, fam.extra["finetune"]["lr"]), "--max_train_epochs", "1", "--save_every_n_epochs", "1",
+        "--seed", "42", "--optimizer_type", "adamw", "--compile_blocks", "off",
+        "--finetune", "--ft_rotations", str(req.rotations), "--ft_save_every_rotations", str(req.save_every),
+        "--ft_rotate_every", "1", "--ft_fused_backward",
+    ]
+    if key == "moss_image":
+        train += ["--family_option", "lownoise_pct=30"]
+        if "sft" in Path(dit).name.lower():
+            train += ["--family_option", "lora_sft=1"]  # SFT base: attention only, as for its LoRAs
+    aux: list[str] = []
+    if key == "minimax":
+        # The H3 GUI's options as they apply under Fine-tune (families/minimax.py): "Likeness and Style" structure
+        # (60% clean-end), caption dropout 0.05, Training mode Default = photos, clips and voice on blocks 20-49
+        # (Fizgig's Optimised Likeness Learning), each clip's sharpest frame also as a photo. TREAD is LoRA-only.
+        train += ["--family_option", "lownoise_pct=60", "--family_option", "highnoise_lr_pct=100",
+                  "--family_option", "caption_dropout=0.05"]
+        for blocks in ("photo_blocks", "clip_blocks", "audio_blocks"):
+            train += ["--family_option", f"{blocks}=20-49"]
+        if plan["counts"]["video"]:
+            train += ["--family_option", "clip_still_as_photo=1"]
+            aux += ["--aux", "clip_still=1"]
+        if files.get("audio_vae"):
+            train += ["--family_option", f"audio_vae={files['audio_vae']}"]
+            aux += ["--aux", f"audio_vae={files['audio_vae']}"]
+    if key in ("qwen_image21", "minimax") and files.get("training_adapter"):
+        train += ["--training_adapter", files["training_adapter"]]   # frozen for training, never saved into the checkpoint
+    if req.trigger.strip():
+        train += ["--metadata_trigger_phrase", req.trigger.strip()]
+    fam_py = str(FIZGIG_LATEST / "src/fizgig/families")
+    return [
+        "__fizgig__", py, f"{fam_py}/cache.py", "--family", key, "--stage", "latents",
+        "--dataset_config", str(config), "--model", vae, *aux, "--skip_existing",
+        "&&", py, f"{fam_py}/cache.py", "--family", key, "--stage", "text",
+        "--dataset_config", str(config), "--model", encoder, *aux,
+        "&&", py, f"{fam_py}/train.py", *train,
+    ]
+
+
 # sd-scripts entry point, network module and model-file flags per family.
 SDS_RECIPES: dict[str, dict[str, Any]] = {
     "anima": {"script": "anima_train_network.py", "module": "networks.lora_anima",
@@ -489,12 +594,55 @@ def _sdscripts_spec(req: JobRequest, fam: families.Family, files: dict[str, str 
     return command, env
 
 
+def _llm_base(value: str) -> str:
+    """A Hugging Face repo id (downloaded by the trainer on first use) or a model folder under /models."""
+    value = value.strip().removeprefix("https://huggingface.co/").strip("/")
+    if not value:
+        raise HTTPException(422, "Choose the base model: a Hugging Face repo id like Qwen/Qwen3.5-4B, or a model folder under models/llm.")
+    folder = (MODEL_ROOT / value).resolve()
+    if folder.is_relative_to(MODEL_ROOT) and folder.is_dir():
+        if not (folder / "config.json").is_file() or not any(folder.glob("*.safetensors")):
+            raise HTTPException(422, f"{value} is not a Hugging Face model folder (config.json + .safetensors); GGUF files can't be trained.")
+        return str(folder)
+    if not re.fullmatch(r"[A-Za-z0-9][\w.-]{0,95}/[\w.-]{1,96}", value) or ".." in value:
+        raise HTTPException(422, "The base model must be a Hugging Face repo id like Qwen/Qwen3.5-4B or a folder under models/.")
+    if re.search(r"gguf|[-_.](q[2-8]_|iq[1-4]_|awq|gptq|exl2)", value, re.I):
+        raise HTTPException(422, "That repo looks quantised (GGUF/AWQ/GPTQ/EXL2): pick the original safetensors release.")
+    return value
+
+
+def _llm_spec(req: JobRequest, fam: families.Family, trainset: Path, job_id: str, name: str) -> tuple[list[str], dict[str, str]]:
+    out = DATA_DIR / "output" / job_id
+    command = [
+        str(families.backend_python(families.LLM)), str(BASE_DIR / "llm_train.py"),
+        "--base", _llm_base(req.base_model), "--data", str(trainset), "--out", str(out), "--name", name,
+        "--rank", str(req.rank), "--epochs", str(req.epochs), "--lr", _lr(req, str(fam.defaults["learning_rate"])),
+        "--max_length", str(req.max_length), "--quant", req.quant, "--llama_cpp", str(families.LLM_DIR / "llama.cpp"),
+    ]
+    env = {"HF_HOME": str(DATA_DIR / "hf-cache"), "PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1",
+           "TOKENIZERS_PARALLELISM": "false", "PYTORCH_ALLOC_CONF": "expandable_segments:True",
+           "PYTORCH_HIP_ALLOC_CONF": "expandable_segments:True"}
+    if os.getenv("HF_TOKEN"):
+        env["HF_TOKEN"] = os.environ["HF_TOKEN"]
+    return command, env
+
+
 def _prepare_spec(req: JobRequest, job_id: str) -> dict[str, Any]:
     fam = _family(req.model)
     _dataset(req.dataset)
     name = _safe_name(req.name)
-    _assert_env(fam)
+    _assert_env(fam, families.FIZGIG if req.kind == "finetune" else "")
+    ft = fam.extra.get("finetune")
+    if req.kind == "finetune" and not ft:
+        raise HTTPException(422, f"{fam.title} can only train LoRAs here; full fine-tuning is offered for "
+                                 + ", ".join(f.title for f in families.FAMILIES if f.extra.get("finetune")) + ".")
     files = _slot_files(req, fam)
+    ft_note = ""
+    if req.kind == "finetune":
+        if why := families.finetune_unfit(Path(files["dit"]), fam.id):
+            raise HTTPException(422, f"Can't fine-tune {Path(files['dit']).name}: {why}"
+                                     + (f" ({ft['base']})" if ft.get("base") else "") + ".")
+        ft_note = _ft_disk_check(files["dit"], req)
     if fam.id == "ltx25" and req.frames % 8 != 1:
         raise HTTPException(422, "LTX frame count must be 8n+1 (for example 25 or 49).")
     # Only captioned, trainer-ready files reach the trainer: uncaptioned clips (and anything it
@@ -506,8 +654,11 @@ def _prepare_spec(req: JobRequest, job_id: str) -> dict[str, Any]:
         raise HTTPException(422, f"Nothing in this dataset is ready to train for {fam.title} yet" + why + ".")
     trainset = DATA_DIR / "train-sets" / job_id
     datasets_router.build_trainset(req.dataset, plan, trainset)
-    spec: dict[str, Any] = {"request": req.model_dump(), "name": name, "env": {}, "note": _plan_note(plan)}
-    if fam.backend == families.FIZGIG:
+    spec: dict[str, Any] = {"request": req.model_dump(), "name": name, "env": {}, "note": _plan_note(plan) + ft_note}
+    if fam.backend == families.LLM:
+        spec["command"], spec["env"] = _llm_spec(req, fam, trainset, job_id, name)
+        spec["cwd"] = str(BASE_DIR)
+    elif fam.backend == families.FIZGIG or req.kind == "finetune":   # every fine-tune runs on Fizgig-latest
         spec["command"] = _fizgig_spec(req, fam, files, plan, trainset, job_id, name)
     elif fam.backend == families.SDS:
         spec["command"], spec["env"] = _sdscripts_spec(req, fam, files, trainset, job_id, name)
@@ -533,24 +684,50 @@ def _job_progress(item: dict[str, Any], request: dict[str, Any]) -> dict[str, An
     return result
 
 
-def _job_outputs(job_id: str) -> list[dict[str, Any]]:
-    folder = DATA_DIR / "output" / job_id
+def _job_outputs(item: dict[str, Any]) -> list[dict[str, Any]]:
+    folder = _item_output_dir(item)
     if not folder.is_dir():
         return []
-    files = sorted(folder.rglob("*.safetensors"))
+    # LLM runs also leave a GGUF LoRA; their PEFT adapter folder (peft/) repeats the final LoRA, so it isn't listed.
+    # A fine-tune's state folders and Fizgig's crash scratch (.fizgig_ft_master) aren't outputs either.
+    files = sorted(f for f in [*folder.rglob("*.safetensors"), *folder.rglob("*.gguf")]
+                   if not any(part == "peft" or part.startswith(".") for part in f.relative_to(folder).parts[:-1]))
+    where = (f"models/{folder.relative_to(MODEL_ROOT)}" if folder.is_relative_to(MODEL_ROOT)
+             else f"~/AI/Trainer/data/output/{item['id']}")
     return [{"name": f.name, "size_mb": round(f.stat().st_size / 1048576, 1),
-             "host_path": f"~/AI/Trainer/data/output/{job_id}/{f.relative_to(folder)}"} for f in files]
+             "host_path": f"{where}/{f.relative_to(folder)}"} for f in files]
+
+
+def _session_timing(item: dict[str, Any], progress: dict[str, Any]) -> dict[str, Any]:
+    """Whole-session clock, start of the run to its end: the wall time so far (caching, loading and training)
+    plus the epoch-average estimate of the training still to run (progress.train_remaining_seconds)."""
+    try:
+        start = datetime.fromisoformat(item["started_at"])
+    except (TypeError, ValueError):
+        return {}
+    end = item["completed_at"]
+    now = datetime.fromisoformat(end) if end else datetime.now(start.tzinfo)
+    elapsed = max(0, round((now - start).total_seconds()))
+    out = {"session_elapsed_seconds": elapsed, "avg_epoch_seconds": progress.get("avg_epoch_seconds")}
+    remaining = progress.get("train_remaining_seconds")
+    if not end and remaining is not None and progress.get("phase") == "training":
+        out.update(remaining_seconds=remaining, total_seconds=elapsed + remaining,
+                   finish_at=datetime.fromtimestamp(now.timestamp() + remaining, start.tzinfo).isoformat())
+    return out
 
 
 def _public(item: dict[str, Any]) -> dict[str, Any]:
     request = json.loads(item["request_json"])
+    progress = _job_progress(item, request)
     return {
         "id": item["id"], "model": item["model"], "model_title": families.title(item["model"]),
         "name": item["name"], "dataset": item["dataset"], "state": item["state"],
         "stage": item["stage"], "created_at": item["created_at"], "started_at": item["started_at"],
         "completed_at": item["completed_at"], "error": item["error"],
         "request": request, "log": item["log_text"][-20000:],
-        "progress": _job_progress(item, request), "outputs": _job_outputs(item["id"]),
+        "progress": progress, "timing": _session_timing(item, progress), "outputs": _job_outputs(item),
+        "epoch_test": epoch_tests.summary(item["id"]) if epoch_tests.supported(item) else None,
+        "epoch_testable": epoch_tests.supported(item),
     }
 
 
@@ -594,7 +771,22 @@ BUILTIN_PRESETS["qwen_image_21"] = {
     "Fizgig: Qwen 2.1 Standard (rank 16, LR 1e-4…2e-4)": {"rank": 16, "epochs": 30, "max_pixels": 524288, "learning_rate": "1e-4"},
     "Fizgig: Qwen 2.1 Fast (rank 8, LR 2e-4…4e-4)": {"rank": 8, "epochs": 30, "max_pixels": 524288, "learning_rate": "2e-4"},
 }
-SETTING_FIELDS = {"rank", "epochs", "resolution", "frames", "steps", "max_pixels", "repeats", "learning_rate"}
+# Full fine-tunes (Fizgig's FINETUNE_HOWDOI: 1e-5, compare a checkpoint per rotation). 4 rotations instead of
+# Fizgig's 10 because every save is a 10-26 GB checkpoint on a shared disk.
+for _fam, _title in (("krea2", "Krea 2"), ("qwen_image_21", "Qwen 2.1"), ("moss_image", "MOSS-Image"), ("klein9b", "Klein 9B"),
+                     ("minimax_h3", "H3"), ("sdxl", "SDXL"), ("anima", "Anima")):
+    _ftlr = families.get(_fam).extra["finetune"]["lr"]
+    BUILTIN_PRESETS.setdefault(_fam, {})[f"Fizgig: {_title} fine-tune (whole model, {_ftlr}, 4 rotations)"] = {
+        "kind": "finetune", "learning_rate": _ftlr, "rotations": 4, "save_every": 1,
+        **({"max_pixels": BUILTIN_PRESETS["moss_image"]["Fizgig: MOSS-Image Standard (rank 32, 1 MP)"]["max_pixels"]} if _fam == "moss_image" else {}),
+        **({"max_pixels": 524288} if _fam == "qwen_image_21" else {})}
+BUILTIN_PRESETS["llm"] = {
+    "Style / persona chat (rank 16, 3 epochs, 2e-4)": {"rank": 16, "epochs": 3, "learning_rate": "2e-4", "max_length": 2048, "quant": "auto"},
+    "Large dataset, gentle (rank 32, 2 epochs, 1e-4)": {"rank": 32, "epochs": 2, "learning_rate": "1e-4", "max_length": 2048, "quant": "auto"},
+    "Small dataset (<200 chats; rank 8, 5 epochs)": {"rank": 8, "epochs": 5, "learning_rate": "2e-4", "max_length": 2048, "quant": "auto"},
+}
+SETTING_FIELDS = {"rank", "epochs", "resolution", "frames", "steps", "max_pixels", "repeats", "learning_rate",
+                  "base_model", "max_length", "quant", "kind", "rotations", "save_every"}
 # Model-file slots of every family (dit, vae, text_encoder, clip_l, t5xxl, ae, gemma2, ...).
 PRESET_FIELDS = SETTING_FIELDS | {slot.key for fam in families.FAMILIES for slot in fam.slots}
 PRESETS_FILE = DATA_DIR / "presets.json"
@@ -630,6 +822,26 @@ async def _lock_heartbeat(token: str, stop: asyncio.Event) -> None:
                 await _queue_request("/heartbeat", {"token": token}, timeout=6)
 
 
+DESKTOP_VRAM_RESERVE_GB = float(os.environ.get("TRAINER_DESKTOP_RESERVE_GB", "3.5") or 3.5)
+
+
+def _desktop_vram_cap() -> str:
+    """The card also drives the desktop: Fizgig-latest's Auto plan otherwise sizes the run to all free VRAM (Qwen
+    Image 2.1 bf16 on 23.4 GB hung the GPU and took Xorg down, 2026-10-24). FIZGIG_SIM_VRAM_GB makes it plan for,
+    and cap its allocations at, the card minus this reserve - an overrun is then a torch OOM, not a GPU reset."""
+    if DESKTOP_VRAM_RESERVE_GB <= 0:
+        return ""
+    totals = []
+    for f in Path("/sys/class/drm").glob("card*/device/mem_info_vram_total"):
+        try:
+            totals.append(int(f.read_text().strip()) / 1024 ** 3)
+        except (OSError, ValueError):
+            pass
+    if not totals:
+        return ""
+    return f" FIZGIG_SIM_VRAM_GB={max(totals) - DESKTOP_VRAM_RESERVE_GB:.1f}"
+
+
 def _fizgig_command(args: list[str]) -> list[str]:
     root = TRAINER_ROOT / "vendor" / "Fizgig"
     if args[0] != "__fizgig__":
@@ -648,7 +860,7 @@ def _fizgig_command(args: list[str]) -> list[str]:
     # Families that run from Fizgig-latest (MOSS-Image, Qwen Image 2.1) call plain SDPA; the shim's sitecustomize
     # routes it to flash_attn and keeps masked calls (the text encoders) off the broken AOTriton kernels.
     shim = (" FIZGIG_SDPA_FLASH=1 PYTHONPATH=/opt/trainers/vendor/sdpa_shim:/opt/trainers/vendor/attn_overlay"
-            if any(str(FIZGIG_LATEST) in v for v in raw) else "")
+            f"{_desktop_vram_cap()}" if any(str(FIZGIG_LATEST) in v for v in raw) else "")
     script = (
         f"cd {shlex.quote(str(root))} && source venv/bin/activate && "
         "export FIZGIG_GPU_BACKEND=rocm MIOPEN_FIND_MODE=2 "
@@ -744,14 +956,33 @@ async def _deliver_push(payload: dict[str, Any], event: str) -> None:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(NOTIFY_HUB_URL, headers={"x-internal-secret": QUEUE_SECRET},
-                                             json={"service": "Trainer", "event": event, "icon": f"{PREFIX}/static/icons/icon-192.png",
-                                                   "badge": f"{PREFIX}/static/icons/badge-96.png", **payload})
+                                             json={"service": "Trainer", "event": event, "icon": f"{PREFIX}/static/icons/trainer-192.png",
+                                                   "badge": f"{PREFIX}/static/icons/trainer-badge-96.png", **payload})
             if response.status_code == 200:
                 return
             log.warning("Notification hub refused %s (%s); pushing directly", event, response.status_code)
         except httpx.HTTPError:
             log.info("Notification hub unreachable; pushing directly")
     await asyncio.to_thread(push.broadcast, payload)
+
+
+async def _llm_vram_check(job_id: str) -> None:
+    """LLM runs need most of the card: ask ComfyUI to drop its models (like auto-tagging does) and say which
+    llama-swap models are loaded. Those are not unloaded here: one may be answering the Master Agent right now."""
+    from tagger import COMFY_URL, LLAMA_URL
+    async with httpx.AsyncClient(timeout=10) as client:
+        with suppress(httpx.HTTPError):
+            await client.post(COMFY_URL + "/free", json={"unload_models": True, "free_memory": True})
+            store.append_log(job_id, "[Trainer] Asked ComfyUI to unload its models.\n")
+        try:
+            key = os.getenv("LLAMA_API_KEY", "")
+            response = await client.get(LLAMA_URL + "/running", headers={"Authorization": f"Bearer {key}"} if key else {})
+            loaded = [r.get("model") for r in response.json().get("running", []) if isinstance(r, dict) and r.get("model")]
+        except (httpx.HTTPError, ValueError, AttributeError):
+            loaded = []
+    if loaded:
+        store.append_log(job_id, f"[Trainer] Note: llama-swap has {', '.join(loaded)} loaded; it holds VRAM this run may need. "
+                                 "If training runs out of memory, unload it in Llama and queue the run again.\n")
 
 
 async def _execute_job(job_id: str, token: str, spec: dict[str, Any]) -> None:
@@ -763,12 +994,16 @@ async def _execute_job(job_id: str, token: str, spec: dict[str, Any]) -> None:
         command = spec["command"]
         if spec.get("note"):
             store.append_log(job_id, spec["note"])
+        if spec["request"].get("model") == "llm":
+            await _llm_vram_check(job_id)
         if command and command[0] == "__fizgig__":
-            await _run_command(job_id, _fizgig_command(command), spec["env"], "Caching and training")
+            await _run_command(job_id, _fizgig_command(command), spec["env"],
+                               "Caching and fine-tuning" if spec["request"].get("kind") == "finetune" else "Caching and training")
         else:
             title = families.title(store.get(job_id)["model"])
-            await _run_command(job_id, command, spec["env"], f"Training {title}", spec.get("cwd"))
-        gallery_ready = store.get(job_id)["model"] in {"minimax_h3", "ltx25"}
+            stage = "Extracting LoRA" if spec["request"].get("kind") == "extract" else f"Training {title}"
+            await _run_command(job_id, command, spec["env"], stage, spec.get("cwd"))
+        gallery_ready = store.get(job_id)["model"] in {"minimax_h3", "ltx25"} and spec["request"].get("kind", "lora") == "lora"
         store.update(job_id, state="complete", stage="Complete · Gallery pending" if gallery_ready else "Complete",
                      completed_at=utc_now(), lock_token=None)
         completed = True
@@ -849,7 +1084,8 @@ def _refused_as_corrupt(job_id: str) -> bool:
 
 async def _publish_final_lora(job_id: str) -> bool:
     item = store.get(job_id)
-    if not item or item["model"] not in {"minimax_h3", "ltx25"} or item["state"] != "complete":
+    if not item or item["model"] not in {"minimax_h3", "ltx25"} or item["state"] != "complete" \
+            or json.loads(item["request_json"]).get("kind", "lora") != "lora":
         return False
     final = _final_lora(job_id, item["name"])
     if not final:
@@ -884,6 +1120,11 @@ async def _publish_final_lora(job_id: str) -> bool:
 # Image families the Image studio's custom LoRA gallery can use -> its model names there.
 IMAGE_GALLERY = {"krea2": "krea", "qwen_image_21": "qwen", "moss_image": "moss", "anima": "anima"}
 KREA_URL = os.getenv("TRAINER_KREA_URL", "http://127.0.0.1:8300/Image").rstrip("/")
+# "Test epochs" on a finished LoRA job: one agent-written prompt + seed rendered per saved epoch.
+epoch_tests = EpochTests(
+    data_dir=DATA_DIR, model_root=MODEL_ROOT, dataset_root=DATASET_ROOT, video_url=H3_GALLERY_URL, image_url=KREA_URL,
+    framework_url=os.getenv("BUNNY_FRAMEWORK_URL", "http://127.0.0.1:8700").rstrip("/"), headers=LOCK_HEADERS,
+    get_job=store.get, output_dir=_item_output_dir, log=store.append_log, queue_request=_queue_request)
 
 
 def _copy_for_gallery(source: Path, target: Path) -> None:
@@ -901,7 +1142,8 @@ async def _publish_image_lora(job_id: str, checkpoint: str = "") -> bool:
     Image studio's custom LoRA folder (the same ComfyUI models mount) and register it there.
     Publishing the same file again reuses its entry."""
     item = store.get(job_id)
-    if not item or item["model"] not in IMAGE_GALLERY or item["state"] != "complete":
+    if not item or item["model"] not in IMAGE_GALLERY or item["state"] != "complete" \
+            or json.loads(item["request_json"]).get("kind") == "finetune":
         return False
     folder = DATA_DIR / "output" / job_id
     if checkpoint:
@@ -919,8 +1161,10 @@ async def _publish_image_lora(job_id: str, checkpoint: str = "") -> bool:
             store.update(job_id, stage=CORRUPT_STAGE)
         return False
     epoch = re.search(r"-0*(\d+)$", final.stem) if checkpoint else None
-    target = MODEL_ROOT / "loras" / "KreaCustom" / (f"trainer-{job_id}-{final.stem[-6:]}.safetensors" if epoch else f"trainer-{job_id}.safetensors")
-    label = f"{item['name']} (epoch {epoch.group(1)})" if epoch else item["name"]
+    rank = re.search(r"_r(\d+)$", final.stem)   # a LoRA extracted from a fine-tune, one per rank
+    target = MODEL_ROOT / "loras" / "KreaCustom" / (f"trainer-{job_id}-{final.stem[-6:]}.safetensors" if epoch
+                                                    else f"trainer-{job_id}-r{rank.group(1)}.safetensors" if rank else f"trainer-{job_id}.safetensors")
+    label = f"{item['name']} (epoch {epoch.group(1)})" if epoch else f"{item['name']} (rank {rank.group(1)})" if rank else item["name"]
     trigger = str(json.loads(item["request_json"]).get("trigger") or "").strip()
     try:
         if not target.is_file() or target.stat().st_size != final.stat().st_size:
@@ -991,6 +1235,7 @@ async def lifespan(_: FastAPI):
     gallery_retry = asyncio.create_task(_retry_pending_gallery())
     job_tasks.add(gallery_retry)
     gallery_retry.add_done_callback(job_tasks.discard)
+    epoch_tests.resume_all()
     try:
         yield
     finally:
@@ -1278,9 +1523,9 @@ async def web_manifest() -> JSONResponse:
         "name": "BunnyBytes Trainer", "short_name": "Trainer", "id": f"{PREFIX}/", "start_url": f"{PREFIX}/", "scope": f"{PREFIX}/",
         "display": "standalone", "background_color": "#0f1418", "theme_color": "#101619",
         "icons": [
-            {"src": f"{PREFIX}/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
-            {"src": f"{PREFIX}/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
-            {"src": f"{PREFIX}/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+            {"src": f"{PREFIX}/static/icons/trainer-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": f"{PREFIX}/static/icons/trainer-512.png", "sizes": "512x512", "type": "image/png"},
+            {"src": f"{PREFIX}/static/icons/trainer-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
         ],
     }, media_type="application/manifest+json")
 
@@ -1458,7 +1703,8 @@ async def get_family_file(family_id: str, slot_key: str) -> dict[str, Any]:
     if src.get("manual"):
         raise HTTPException(409, f"Download this one by hand from {page}" + (f" and save it as models/{src['dest']}/{src['save_as']}" if src.get("save_as") else f" into models/{src['dest']}/")
                             + (" (accept the licence there first)" if src.get("gated") else "") + ".")
-    body = {"source": "hf", "model_id": src["repo"], "version_id": "", "variant": src["path"], "dest": src["dest"], "companions": False}
+    body = {"source": "hf", "model_id": src["repo"], "version_id": "", "variant": src["path"], "dest": src["dest"], "companions": False,
+            "via": "trainer"}  # listed under Models -> Installed -> Trainer models
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(f"{MODELHUB_URL}/api/download", json=body)
@@ -1475,7 +1721,7 @@ async def get_family_file(family_id: str, slot_key: str) -> dict[str, Any]:
 
 @app.post(p("/api/setup/{backend}"), status_code=202)
 async def setup_backend(backend: str) -> dict[str, str]:
-    if backend not in {"fizgig", "ltx"}:
+    if backend not in {"fizgig", "ltx", "llm"}:
         raise HTTPException(404, "Unknown trainer environment.")
     async with state_guard:
         task = setup_tasks.get(backend)
@@ -1485,6 +1731,10 @@ async def setup_backend(backend: str) -> dict[str, str]:
             command = ["bash", "./install_fizgig_rocm.sh"]
             cwd = TRAINER_ROOT / "vendor" / "Fizgig"
             env = {"ROCM_CHANNEL": "stable"}
+        elif backend == "llm":
+            families.LLM_DIR.mkdir(parents=True, exist_ok=True)
+            command = ["bash", str(BASE_DIR / "install_llm_trainer.sh"), str(families.LLM_DIR)]
+            cwd, env = families.LLM_DIR, {}
         else:
             cwd = TRAINER_ROOT / "vendor" / "ai-toolkit"
             command = ["python3", "-m", "manager", "install"]
@@ -1506,7 +1756,7 @@ async def create_job(request: JobRequest) -> dict[str, Any]:
     store.create(row)
     pending_specs[job_id] = spec
     try:
-        response = await _queue_request("/enqueue", {"app": "Trainer", "job_id": job_id, "label": f"LoRA: {families.title(request.model)} / {spec['name']}"})
+        response = await _queue_request("/enqueue", {"app": "Trainer", "job_id": job_id, "label": f"{'Fine-tune' if request.kind == 'finetune' else 'LoRA'}: {families.title(request.model)} / {spec['name']}"})
         response.raise_for_status()
         entry = response.json()
         store.update(job_id, queue_entry_id=entry["entry_id"])
@@ -1524,6 +1774,13 @@ async def queue_proceed(job_id: str, request: Request) -> dict[str, bool]:
         raise HTTPException(403, "This internal callback is only available to the local queue coordinator.")
     body = await request.json()
     token = body.get("token")
+    if job_id.startswith("erv"):
+        # An epoch test's agent review (epoch_tests.py) also runs in the Trainer's GPU-queue slot.
+        accepted = bool(token) and epoch_tests.review_proceed(job_id[3:], token)
+        if not accepted and token:
+            with suppress(Exception):
+                await _queue_request("/release", {"token": token})
+        return {"accepted": accepted}
     if job_id.startswith(("tag", "find")):
         # Auto-tagging (tagger.py) and clip-finder (finder.py) jobs share the Trainer's GPU-queue slot.
         accepted = bool(token) and (finder_proceed if job_id.startswith("find") else tagger_proceed)(job_id, token)
@@ -1562,6 +1819,185 @@ async def get_job(job_id: str) -> dict[str, Any]:
     return _public(item)
 
 
+class EpochTestRequest(BaseModel):
+    preset: str = Field(default="", max_length=120)          # a Video studio preset ("" = short test defaults)
+    strength: float = Field(default=1.0, ge=0.0, le=2.0)
+    prompt: str = Field(default="", max_length=4000)        # "" = the studio's agent writes it
+    seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    every: int = Field(default=1, ge=1, le=50)               # test every Nth saved epoch (the last one always)
+    runs: int = Field(default=1, ge=1, le=epoch_tests_mod.MAX_RUNS)   # prompts = pages; each renders on every epoch
+    prompts: list[str] = Field(default_factory=list, max_length=epoch_tests_mod.MAX_RUNS)   # your own (the agent writes the rest)
+    review: bool = False                                     # the agent reviews the renders when they finish
+    review_model: str = Field(default="", max_length=120)
+    teach: str = Field(default="", max_length=500)           # what the LoRA should teach (for the prompts + review)
+    guides: list[str] = Field(default_factory=list, max_length=epoch_tests_mod.MAX_RUNS)   # what each agent-written prompt should test
+    no_tags: bool = False                                    # agent prompts leave the training tags out (trigger word only)
+
+
+class EpochMoreRequest(BaseModel):
+    runs: int = Field(default=1, ge=1, le=epoch_tests_mod.MAX_RUNS)
+    prompts: list[str] = Field(default_factory=list, max_length=epoch_tests_mod.MAX_RUNS)
+    labels: list[str] = Field(default_factory=list, max_length=500)   # only these epochs (empty = all)
+    seed_from: int | None = Field(default=None, ge=0)                 # reuse that page's prompt under new seeds
+    seed: int | None = Field(default=None, ge=0, le=2_147_483_647)    # first new page's seed (others random)
+    guides: list[str] = Field(default_factory=list, max_length=epoch_tests_mod.MAX_RUNS)
+    no_tags: bool = False
+
+
+class EpochReviewRequest(BaseModel):
+    model: str = Field(default="", max_length=120)
+    teach: str = Field(default="", max_length=500)
+    redo: bool = False
+
+
+class EpochStarRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    starred: bool = True
+
+
+def _epoch_job(job_id: str) -> dict[str, Any]:
+    item = store.get(job_id) if re.fullmatch(r"[0-9a-f]{32}", job_id) else None
+    if not item:
+        raise HTTPException(404, "Training job not found.")
+    return item
+
+
+@app.get(p("/api/jobs/{job_id}/epoch-test"))
+async def get_epoch_test(job_id: str, log_after: int = 0) -> dict[str, Any]:
+    _epoch_job(job_id)
+    test = epoch_tests.public(job_id, PREFIX, log_after)
+    if not test:
+        raise HTTPException(404, "This job has no epoch test yet.")
+    return test
+
+
+@app.get(p("/api/jobs/{job_id}/epoch-test/options"))
+async def epoch_test_options(job_id: str) -> dict[str, Any]:
+    item = _epoch_job(job_id)
+    if not epoch_tests.supported(item):
+        raise HTTPException(422, "Epoch tests work for H3, LTX, Krea 2, Qwen Image 2.1, MOSS-Image and Anima LoRA jobs.")
+    studio = epoch_tests_mod.FAMILIES[item["model"]][0]
+    return {"studio": studio, "epochs": [label for label, _ in epoch_tests.epochs(item)], **await epoch_tests.presets(item["model"]),
+            "max_runs": epoch_tests_mod.MAX_RUNS, "vision_models": vision_models(), "review_model": epoch_tests.default_vision()}
+
+
+@app.post(p("/api/jobs/{job_id}/epoch-test"), status_code=202)
+async def start_epoch_test(job_id: str, body: EpochTestRequest) -> dict[str, Any]:
+    item = _epoch_job(job_id)
+    if item["state"] != "complete" or not epoch_tests.supported(item):
+        raise HTTPException(422, "Only completed H3, LTX, Krea 2, Qwen Image 2.1, MOSS-Image and Anima LoRA jobs can be tested.")
+    try:
+        epoch_tests.start(item, preset=body.preset, strength=body.strength, prompt=body.prompt, seed=body.seed, every=body.every,
+                          runs=body.runs, prompts=body.prompts, review=body.review, review_model=body.review_model, teach=body.teach,
+                          guides=body.guides, no_tags=body.no_tags)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return epoch_tests.public(job_id, PREFIX)
+
+
+@app.post(p("/api/jobs/{job_id}/epoch-test/more"), status_code=202)
+async def more_epoch_test(job_id: str, body: EpochMoreRequest) -> dict[str, Any]:
+    """More pages on the same test (new prompts or new seeds, all or some epochs); earlier renders are kept."""
+    _epoch_job(job_id)
+    try:
+        epoch_tests.extend(job_id, body.runs, body.prompts, body.labels, body.seed_from, body.seed, body.guides, body.no_tags)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return epoch_tests.public(job_id, PREFIX)
+
+
+@app.post(p("/api/jobs/{job_id}/epoch-test/review"), status_code=202)
+async def review_epoch_test(job_id: str, body: EpochReviewRequest) -> dict[str, Any]:
+    """The agent scores every render not reviewed yet (redo = all of them) and highlights the best epoch."""
+    _epoch_job(job_id)
+    try:
+        await epoch_tests.start_review(job_id, body.model, body.teach, body.redo)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return epoch_tests.public(job_id, PREFIX)
+
+
+@app.post(p("/api/jobs/{job_id}/epoch-test/review/cancel"))
+async def cancel_epoch_review(job_id: str) -> dict[str, Any]:
+    _epoch_job(job_id)
+    try:
+        await epoch_tests.cancel_review(job_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return epoch_tests.public(job_id, PREFIX)
+
+
+@app.post(p("/api/jobs/{job_id}/epoch-test/star"))
+async def star_epoch(job_id: str, body: EpochStarRequest) -> dict[str, list[str]]:
+    """Star / unstar one epoch (by label) to keep track of the ones worth using."""
+    _epoch_job(job_id)
+    try:
+        return {"starred": epoch_tests.star(job_id, body.label, body.starred)}
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.delete(p("/api/jobs/{job_id}/epoch-test/pages/{k}"))
+async def delete_epoch_page(job_id: str, k: int) -> dict[str, Any]:
+    """Delete one page (a prompt + seed) with its renders."""
+    _epoch_job(job_id)
+    try:
+        epoch_tests.delete_run(job_id, k)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return epoch_tests.public(job_id, PREFIX)
+
+
+@app.delete(p("/api/jobs/{job_id}/epoch-test/items/{n}"))
+async def delete_epoch_render(job_id: str, n: int) -> dict[str, Any]:
+    """Delete one render (its page goes too once it's empty)."""
+    _epoch_job(job_id)
+    try:
+        epoch_tests.delete_item(job_id, n)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return epoch_tests.public(job_id, PREFIX)
+
+
+@app.post(p("/api/jobs/{job_id}/epoch-test/retry"), status_code=202)
+async def retry_epoch_test(job_id: str) -> dict[str, Any]:
+    """Resume a failed / cancelled test: picks finished studio renders up again and re-queues the rest."""
+    _epoch_job(job_id)
+    try:
+        epoch_tests.retry(job_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return epoch_tests.public(job_id, PREFIX)
+
+
+@app.post(p("/api/jobs/{job_id}/epoch-test/cancel"))
+async def cancel_epoch_test(job_id: str) -> dict[str, Any]:
+    _epoch_job(job_id)
+    try:
+        await epoch_tests.cancel(job_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return epoch_tests.public(job_id, PREFIX)
+
+
+@app.delete(p("/api/jobs/{job_id}/epoch-test"))
+async def delete_epoch_test(job_id: str) -> dict[str, bool]:
+    _epoch_job(job_id)
+    await epoch_tests.delete(job_id)
+    return {"deleted": True}
+
+
+@app.get(p("/api/jobs/{job_id}/epoch-test/media/{filename}"))
+async def epoch_test_media(job_id: str, filename: str) -> FileResponse:
+    _epoch_job(job_id)
+    if not re.fullmatch(r"[a-z0-9_]{1,80}\.(mp4|png|webp|jpg)", filename):
+        raise HTTPException(404, "Render not found.")
+    path = epoch_tests.folder(job_id) / filename
+    if not path.is_file():
+        raise HTTPException(404, "Render not found.")
+    return FileResponse(path, headers={"Cache-Control": "private, max-age=86400"})
+
+
 @app.post(p("/api/jobs/{job_id}/publish-lora"))
 async def publish_job_lora(job_id: str, request: Request) -> dict[str, Any]:
     item = store.get(job_id)
@@ -1581,6 +2017,129 @@ async def publish_job_lora(job_id: str, request: Request) -> dict[str, Any]:
             raise HTTPException(422, "This LoRA has NaN/Inf weights (training diverged), so it wasn't published.")
         raise HTTPException(502, "Could not add the final LoRA to the video gallery; check the job log and retry.")
     return _public(store.get(job_id))
+
+
+class ExtractRequest(BaseModel):
+    checkpoint: str = Field(default="", max_length=200)   # a saved checkpoint's file name; empty = the final one
+    ranks: str = Field(default="32,64", pattern=r"^\d{1,3}(,\d{1,3}){0,5}$")
+
+
+@app.post(p("/api/jobs/{job_id}/extract"), status_code=202)
+async def extract_lora(job_id: str, body: ExtractRequest) -> dict[str, Any]:
+    """Fizgig's "From a fine-tune" extract: the difference between a fine-tune checkpoint and its base, as ordinary
+    LoRAs (one per rank, one SVD pass on the GPU). Runs as its own job in the shared GPU queue; the LoRAs land in
+    data/output/<new job> and publish to the Image studio like any trained LoRA."""
+    item = store.get(job_id)
+    if not item or item["state"] != "complete":
+        raise HTTPException(422, "Only a completed fine-tune can be extracted.")
+    request = json.loads(item["request_json"])
+    if request.get("kind") != "finetune":
+        raise HTTPException(422, "Only fine-tune jobs have a checkpoint to extract a LoRA from.")
+    folder = _item_output_dir(item)
+    tuned = folder / (body.checkpoint or f"{item['name']}.safetensors")
+    if body.checkpoint and (body.checkpoint != Path(body.checkpoint).name or not body.checkpoint.endswith(".safetensors")):
+        raise HTTPException(422, "Pick a checkpoint file from this job's outputs.")
+    if not tuned.is_file():
+        raise HTTPException(404, f"{tuned.name} is not in this fine-tune's outputs.")
+    base = _model_file(request.get("dit", ""), "base model")
+    new_id = uuid.uuid4().hex
+    name = _safe_name(f"{item['name']}_{tuned.stem.rsplit('-', 1)[-1] if body.checkpoint else 'final'}_lora")
+    out = DATA_DIR / "output" / new_id
+    out.mkdir(parents=True, exist_ok=True)
+    py = str(families.backend_python(families.FIZGIG))
+    spec = {
+        "request": {**request, "kind": "extract", "source_job": job_id, "checkpoint": tuned.name, "ranks": body.ranks},
+        "name": name, "cwd": str(FIZGIG_LATEST),
+        "command": [py, str(FIZGIG_LATEST / "src/fizgig/scripts/extract_finetune.py"), "--base", base, "--tuned", str(tuned),
+                    "--out-dir", str(out), "--name", name, "--ranks", body.ranks],
+        "env": {"PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1", "FIZGIG_GPU_BACKEND": "rocm"},
+        "note": f"[Trainer] Extracting rank {body.ranks.replace(',', ' / ')} LoRA(s) from {tuned.name} (difference to {Path(base).name}).\n",
+    }
+    store.create({"id": new_id, "model": item["model"], "name": name, "dataset": item["dataset"],
+                  "state": "waiting_for_gpu", "stage": "Waiting for GPU queue", "created_at": utc_now(), "request": spec["request"]})
+    pending_specs[new_id] = spec
+    try:
+        response = await _queue_request("/enqueue", {"app": "Trainer", "job_id": new_id, "label": f"Extract LoRA: {item['name']}"})
+        response.raise_for_status()
+        store.update(new_id, queue_entry_id=response.json()["entry_id"])
+    except Exception as exc:
+        pending_specs.pop(new_id, None)
+        store.update(new_id, state="failed", stage="Queue error", completed_at=utc_now(), error=f"Could not enqueue: {exc}")
+        raise HTTPException(503, "Could not reach the shared GPU queue.") from exc
+    return _public(store.get(new_id))
+
+
+LLM_LORA_DIR = MODEL_ROOT / "llm" / "loras"   # writable mount; llama-launch loads LoRAs from here (--lora)
+
+
+def _llama_models_for(base_model: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """llama-swap models (llama.cpp ones, not Strata) and which of them a LoRA trained on base_model fits:
+    "exact" when the model's GGUF was quantised from that repo (general.source.url), "base" when the GGUF
+    names it (or the same base) as its base model - a finetune of it, or a quant that only records its base."""
+    from tagger import LLAMA_CONFIG
+    try:
+        config = yaml.safe_load(LLAMA_CONFIG.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return [], []
+    want = base_model.strip().removeprefix("https://huggingface.co/").strip("/").casefold()
+    rows = []
+    for model_id, entry in (config.get("models") or {}).items():
+        cmd = str(entry.get("cmd", "")) if isinstance(entry, dict) else ""
+        if not cmd.lstrip().startswith("${llama_launch}"):
+            continue
+        source = base = ""
+        match = re.search(r"(?:--model|-m)\s+(\S+\.gguf)", cmd)
+        if match and "/models/llm/" in match.group(1):
+            meta = families.gguf_general(MODEL_ROOT / "llm" / match.group(1).split("/models/llm/", 1)[1])
+            source = families._hf_repo(meta.get("general.source.url", "")).casefold()
+            base = families._hf_repo(meta.get("general.base_model.0.repo_url", "")).casefold()
+        rows.append(({"id": model_id, "name": str(entry.get("name") or model_id)}, source, base))
+    # Trained on a finetune's source repo: its base model, so other finetunes of that base show up too.
+    family = {want} | {base for _, source, base in rows if want and source == want and base}
+    fits = []
+    for row, source, base in rows:
+        if want and want == source:
+            fits.append({**row, "fit": "exact"})
+        elif want and (base in family or source in family) and (base or source):
+            fits.append({**row, "fit": "base"})
+    return [row for row, _, _ in rows], sorted(fits, key=lambda r: r["fit"] != "exact")
+
+
+@app.post(p("/api/jobs/{job_id}/use-in-llama"))
+async def use_in_llama(job_id: str) -> dict[str, Any]:
+    """Copy an LLM job's GGUF LoRA into models/llm/loras (+ <name>.json with its base model) and say which
+    llama-swap models it fits; the Llama Parameters tab then turns it on for one."""
+    item = store.get(job_id)
+    if not item or item["model"] != "llm" or item["state"] != "complete":
+        raise HTTPException(422, "Only completed LLM training runs can be used in Llama.")
+    out = DATA_DIR / "output" / job_id
+    gguf = next((f for f in sorted(out.glob("*.gguf")) if not f.name.startswith(".")), None)
+    if not gguf:
+        raise HTTPException(422, "This run has no GGUF LoRA (the conversion failed; the job log says why). "
+                                 "The PEFT adapter in peft/ still works with transformers/vLLM.")
+    if not LLM_LORA_DIR.is_dir():
+        raise HTTPException(503, "models/llm/loras isn't mounted into the Trainer; rebuild it with the current docker-compose.yml.")
+    request = json.loads(item["request_json"])
+    target = LLM_LORA_DIR / gguf.name
+    sidecar = target.with_suffix(".json")
+    with suppress(OSError, ValueError):
+        if target.exists() and json.loads(sidecar.read_text()).get("job") != job_id:
+            target = LLM_LORA_DIR / f"{gguf.stem}-{job_id[:6]}.gguf"
+            sidecar = target.with_suffix(".json")
+    if target.exists() and not sidecar.exists():
+        target = LLM_LORA_DIR / f"{gguf.stem}-{job_id[:6]}.gguf"
+        sidecar = target.with_suffix(".json")
+    await asyncio.to_thread(shutil.copyfile, gguf, target)
+    sidecar.write_text(json.dumps({"base_model": request.get("base_model", ""), "job": job_id, "dataset": item["dataset"],
+                                   "rank": request.get("rank"), "epochs": request.get("epochs"), "trained": item["completed_at"]},
+                                  indent=2), encoding="utf-8")
+    for path in (target, sidecar):
+        with suppress(OSError):
+            st = LLM_LORA_DIR.stat()
+            os.chown(path, st.st_uid, st.st_gid)
+    store.update(job_id, stage="Complete · In Llama")
+    every, fits = await asyncio.to_thread(_llama_models_for, request.get("base_model", ""))
+    return {"file": target.name, "fits": fits, "models": every, "job": _public(store.get(job_id))}
 
 
 @app.post(p("/api/jobs/{job_id}/cancel"))
@@ -1620,6 +2179,7 @@ async def delete_job(job_id: str, delete_files: bool = False) -> dict[str, Any]:
         raise HTTPException(404, "Training job not found.")
     if item["state"] not in TERMINAL:
         raise HTTPException(409, "Cancel this job before removing it.")
+    await epoch_tests.delete(job_id)
     store.delete(job_id)
     _progress_cache.pop(job_id, None)
     (DATA_DIR / "configs" / f"{job_id}.toml").unlink(missing_ok=True)
@@ -1628,7 +2188,106 @@ async def delete_job(job_id: str, delete_files: bool = False) -> dict[str, Any]:
     shutil.rmtree(DATA_DIR / "train-sets" / job_id, ignore_errors=True)
     if delete_files:
         shutil.rmtree(DATA_DIR / "output" / job_id, ignore_errors=True)
+        folder = _item_output_dir(item)
+        if folder.is_relative_to(FT_ROOT) and folder != FT_ROOT:
+            shutil.rmtree(folder, ignore_errors=True)
     return {"deleted": job_id, "files_deleted": delete_files}
+
+
+# ---- every run's files, for Models -> Manager -> Installed (Trainer models / Trainer LoRAs & epochs) ----
+
+EPOCH_FILE = re.compile(r"-(\d{6})(-state)?$")
+
+
+def _fingerprint(path: Path, size: int) -> str:
+    """Cheap identity for spotting gallery copies elsewhere: size + the first and last 256 KB (the Models hub
+    computes the same over models/ files of a matching size)."""
+    digest = __import__("hashlib").sha1(str(size).encode())
+    with path.open("rb") as handle:
+        digest.update(handle.read(262144))
+        if size > 262144:
+            handle.seek(max(262144, size - 262144))
+            digest.update(handle.read(262144))
+    return digest.hexdigest()
+
+
+def _run_files(folder: Path) -> list[dict[str, Any]]:
+    out = []
+    for f in sorted([*folder.rglob("*.safetensors"), *folder.rglob("*.gguf")]):
+        parts = f.relative_to(folder).parts
+        if any(part == "peft" or part.startswith(".") for part in parts[:-1]):
+            continue
+        # <name>-00000N.safetensors = epoch N; <name>-00000N-state/ = resume state saved at epoch N.
+        stem = parts[0] if len(parts) > 1 else f.stem
+        match = EPOCH_FILE.search(stem)
+        try:
+            st = f.stat()
+            fp = _fingerprint(f, st.st_size)
+        except OSError:
+            continue
+        out.append({"rel": f.relative_to(folder).as_posix(), "name": f.name, "size": st.st_size, "mtime": st.st_mtime,
+                    "epoch": int(match.group(1)) if match else None, "resume_state": bool(match and match.group(2)),
+                    "final": not match and len(parts) == 1, "fp": fp})
+    return out
+
+
+def _list_run_files() -> dict[str, Any]:
+    runs, seen = [], set()
+    for item in store.list(limit=100000):
+        request = json.loads(item["request_json"])
+        folder = _item_output_dir(item)
+        seen.add(folder)
+        files = _run_files(folder) if folder.is_dir() else []
+        if not files:
+            continue
+        kind = "finetune" if request.get("kind") == "finetune" else "llm" if item["model"] == "llm" else "lora"
+        runs.append({"job": item["id"], "name": item["name"], "dataset": item["dataset"], "model": item["model"],
+                     "model_title": families.title(item["model"]), "kind": kind, "state": item["state"],
+                     "created_at": item["created_at"], "completed_at": item["completed_at"],
+                     "models_dir": folder.relative_to(MODEL_ROOT).as_posix() if folder.is_relative_to(MODEL_ROOT) else "",
+                     "host_dir": f"~/AI/Trainer/data/output/{item['id']}" if not folder.is_relative_to(MODEL_ROOT) else "",
+                     "files": files})
+    # Output folders whose job was removed from the list without "delete files".
+    for folder in sorted((DATA_DIR / "output").glob("*")):
+        if folder in seen or not folder.is_dir() or not re.fullmatch(r"[0-9a-f]{32}", folder.name):
+            continue
+        files = _run_files(folder)
+        if files:
+            stems = [f["name"].rsplit(".", 1)[0] for f in files if f["final"]] or [EPOCH_FILE.sub("", files[0]["rel"].split("/")[0].rsplit(".", 1)[0])]
+            runs.append({"job": folder.name, "name": stems[0], "dataset": "", "model": "", "model_title": "", "kind": "lora",
+                         "state": "removed", "created_at": "", "completed_at": "", "models_dir": "",
+                         "host_dir": f"~/AI/Trainer/data/output/{folder.name}", "files": files})
+    return {"runs": runs}
+
+
+@app.get(p("/api/files"))
+async def run_files() -> dict[str, Any]:
+    return await asyncio.to_thread(_list_run_files)
+
+
+@app.delete(p("/api/files"))
+async def delete_run_file(job: str, rel: str) -> dict[str, Any]:
+    """Delete one checkpoint of a run (Models -> Installed -> Uninstall)."""
+    if not re.fullmatch(r"[0-9a-f]{32}", job):
+        raise HTTPException(422, "Invalid job id.")
+    item = store.get(job)
+    if item and item["state"] not in TERMINAL:
+        raise HTTPException(409, "This run is still training; cancel it before deleting its files.")
+    folder = _item_output_dir(item) if item else DATA_DIR / "output" / job
+    target = (folder / rel).resolve()
+    if not target.is_relative_to(folder.resolve()) or target.suffix.lower() not in (".safetensors", ".gguf") or not target.is_file():
+        raise HTTPException(404, "That file is not one of this run's outputs.")
+    size = target.stat().st_size
+    target.unlink()
+    target.with_name(target.name + ".sha256").unlink(missing_ok=True)
+    # A resume-state folder or an emptied output folder goes with its last file.
+    parent = target.parent
+    while parent != folder.resolve() and parent.is_relative_to(folder.resolve()) and not any(parent.rglob("*.safetensors")):
+        shutil.rmtree(parent, ignore_errors=True)
+        parent = parent.parent
+    if not item and folder.is_dir() and not any(folder.rglob("*.safetensors")) and not any(folder.rglob("*.gguf")):
+        shutil.rmtree(folder, ignore_errors=True)
+    return {"deleted": rel, "freed": size}
 
 
 @app.exception_handler(Exception)

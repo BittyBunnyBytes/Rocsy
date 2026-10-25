@@ -110,3 +110,7 @@
 @media(max-width:620px){.bp-stats,.bp-charts{grid-template-columns:1fr}.bp-steps{flex-direction:column}.bp-stat.bp-tg>.bp-tip{left:0;right:auto}}
 @media(prefers-reduced-motion:reduce){.bp-bench *{animation:none!important;transition:none!important}}
 .bp-bench [data-slot=card]{overflow:visible}
+/* Draft model: why it's (not) recommended + Find drafter models */
+.bp .bp-draft-tools{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:space-between;margin-top:4px}
+.bp .bp-draft-why{color:var(--bp-muted);font-size:.72rem;flex:1 1 140px}
+.bp .bp-find-drafter{font-size:12px;padding:4px 10px;min-height:28px}

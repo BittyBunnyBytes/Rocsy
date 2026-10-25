@@ -110,13 +110,13 @@ def _voice_profiles() -> list[dict]:
             result.append({
                 "id": path.parent.name, "name": str(profile.get("name") or path.parent.name),
                 "category": str(profile.get("category") or "").strip()[:40],
-                "summary": str(profile.get("summary") or "").strip()[:400],
-                "icon": str(profile.get("icon") or "").strip()[:8],
-                "portrait": f"{PREFIX}/api/voices/{path.parent.name}/portrait?v={int(portrait.stat().st_mtime)}"
+                "summary": str(profile.get("summary") or "").strip()[:500],
+                "icon": str(profile.get("icon") or "").strip()[:12],
+                "portrait": f"{PREFIX}/api/voices/{path.parent.name}/portrait?v={portrait.stat().st_mtime_ns}"
                             if portrait else "",
                 "reference": f"{PREFIX}/api/voices/{path.parent.name}/reference",
                 "duration": float(profile.get("reference_duration") or 0) or None,
-                "transcript": bool(transcript), "transcript_text": transcript[:600],
+                "transcript": bool(transcript), "transcript_text": transcript,
                 "created": audio.stat().st_mtime,
             })
         except (OSError, ValueError, TypeError):
@@ -137,6 +137,18 @@ def _voice_dir(voice_id: str) -> Path:
     if not re.fullmatch(r"[\w-]+", voice_id) or voice_id not in {voice["id"] for voice in _voice_profiles()}:
         raise HTTPException(404, "Saved voice not found")
     return VOICES / voice_id
+
+
+async def _portrait_bytes(upload: UploadFile) -> tuple[str, bytes]:
+    suffix = Path(upload.filename or "").suffix.lower()
+    if suffix not in {".webp", ".png", ".jpg", ".jpeg"}:
+        raise HTTPException(422, "Portrait must be a WebP, PNG or JPEG image")
+    image = await upload.read(6 * 1024 * 1024 + 1)
+    if not image:
+        raise HTTPException(422, "Portrait image is empty")
+    if len(image) > 6 * 1024 * 1024:
+        raise HTTPException(413, "Portrait must be under 6 MB")
+    return suffix, image
 
 
 async def _worker_state() -> dict | None:
@@ -788,15 +800,9 @@ async def _save_character(clip: Path, name: str, transcript: str, category: str,
         shutil.copyfile(clip, folder / "reference.wav")
         icon_file = ""
         if icon_image and icon_image.filename:
-            suffix = Path(icon_image.filename).suffix.lower()
-            if suffix not in {".webp", ".png", ".jpg", ".jpeg"}:
-                raise HTTPException(422, "Portrait must be a WebP, PNG or JPEG image")
-            image = await icon_image.read(6 * 1024 * 1024 + 1)
-            if len(image) > 6 * 1024 * 1024:
-                raise HTTPException(413, "Portrait must be under 6 MB")
-            if image:
-                icon_file = f"icon{suffix}"
-                (folder / icon_file).write_bytes(image)
+            suffix, image = await _portrait_bytes(icon_image)
+            icon_file = f"icon{suffix}"
+            (folder / icon_file).write_bytes(image)
         profile = {"id": voice_id, "name": name, "transcript": transcript.strip(),
                    "category": category.strip() or "Uncategorized", "summary": summary.strip()[:500],
                    "icon": icon.strip()[:12] or "🎙️", "icon_file": icon_file,
@@ -845,6 +851,52 @@ async def voice_portrait(voice_id: str):
 async def voice_reference(voice_id: str):
     return FileResponse(_voice_dir(voice_id) / "reference.wav", media_type="audio/wav",
                         headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.get(f"{PREFIX}/api/voices/{{voice_id}}/reference/download")
+async def download_voice_reference(voice_id: str):
+    return FileResponse(_voice_dir(voice_id) / "reference.wav", media_type="audio/wav",
+                        filename=f"{voice_id}-sample.wav", headers={"Cache-Control": "private, no-store"})
+
+
+@app.patch(f"{PREFIX}/api/voices/{{voice_id}}")
+async def update_voice(voice_id: str, name: str = Form(...), transcript: str = Form(""),
+                       category: str = Form(""), summary: str = Form(""), icon: str = Form(""),
+                       remove_portrait: bool = Form(False), icon_image: UploadFile | None = File(None)):
+    folder = _voice_dir(voice_id)
+    name, category, summary, icon, transcript = (
+        value.strip() for value in (name, category, summary, icon, transcript))
+    if not name or len(name) > 100:
+        raise HTTPException(422, "Name must be 1–100 characters")
+    if len(category) > 40 or len(summary) > 500 or len(icon) > 12 or len(transcript) > 10000:
+        raise HTTPException(422, "Character settings exceed their length limits")
+    if remove_portrait and icon_image and icon_image.filename:
+        raise HTTPException(422, "Choose a new portrait or remove the old one")
+    profile_path = folder / "profile.json"
+    profile = json.loads(profile_path.read_text())
+    previous = _portrait_path(folder, profile)
+    replacement = None
+    if icon_image and icon_image.filename:
+        suffix, image = await _portrait_bytes(icon_image)
+        replacement = folder / f"icon-{uuid.uuid4().hex[:12]}{suffix}"
+        replacement.write_bytes(image)
+        profile["icon_file"] = replacement.name
+    elif remove_portrait:
+        profile["icon_file"] = ""
+    profile.update(name=name, category=category or "Uncategorized", summary=summary,
+                   icon=icon or "🎙️", transcript=transcript)
+    temporary = folder / f".profile-{uuid.uuid4().hex}.tmp"
+    try:
+        temporary.write_text(json.dumps(profile, ensure_ascii=False, indent=2) + "\n")
+        os.replace(temporary, profile_path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        if replacement:
+            replacement.unlink(missing_ok=True)
+        raise
+    if previous and (replacement or remove_portrait):
+        previous.unlink(missing_ok=True)
+    return {"voice": next(voice for voice in _voice_profiles() if voice["id"] == voice_id)}
 
 
 @app.delete(f"{PREFIX}/api/voices/{{voice_id}}")

@@ -79,6 +79,7 @@ class TunnelManager:
         self.existing_credential = existing_credential
         self.binary = binary
         self.processes: dict[str, subprocess.Popen] = {}
+        self.start_errors: dict[str, str] = {}  # why supervision could not start a tunnel
         self.task: asyncio.Task | None = None
         self.lock = asyncio.Lock()
         self.records = self._load()
@@ -131,10 +132,16 @@ class TunnelManager:
         process = self.processes.get(tunnel_id)
         return process is not None and process.poll() is None
 
-    def _start(self, record: dict) -> None:
+    async def _validated_config(self, record: dict) -> Path:
+        # cloudflared validation takes up to 10 s; keep it off the event loop.
+        return await asyncio.to_thread(self._write_config, record)
+
+    async def _start(self, record: dict, config: Path | None = None) -> None:
+        """Start a tunnel; `config` is a path _write_config just validated for this record."""
         if self._process_running(record["id"]):
             return
-        config = self._write_config(record)
+        if config is None:
+            config = await self._validated_config(record)
         log_path = self.data_dir / "tunnels" / f"{record['id']}.log"
         environment = {**os.environ, "TUNNEL_METRICS": f"127.0.0.1:{record['metrics_port']}"}
         with log_path.open("a", buffering=1) as logfile:
@@ -143,6 +150,7 @@ class TunnelManager:
                 stdout=logfile, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                 env=environment, close_fds=True,
             )
+        self.start_errors.pop(record["id"], None)
 
     async def _stop(self, tunnel_id: str) -> None:
         process = self.processes.pop(tunnel_id, None)
@@ -161,9 +169,10 @@ class TunnelManager:
                 for record in self.records.values():
                     if record.get("managed") and record.get("enabled") and not self._process_running(record["id"]):
                         try:
-                            self._start(record)
-                        except OSError:
-                            pass
+                            await self._start(record)
+                        except (OSError, TunnelError) as exc:
+                            # One rejected config must not stop supervising the other tunnels.
+                            self.start_errors[record["id"]] = str(exc) or type(exc).__name__
             await asyncio.sleep(10)
 
     async def shutdown(self) -> None:
@@ -184,7 +193,7 @@ class TunnelManager:
                 "metrics_port": record["metrics_port"],
                 "connected": metrics["connected"], "active_connections": metrics["active_connections"],
                 "total_requests": metrics["total_requests"], "request_errors": metrics["request_errors"],
-                "error": metrics["error"],
+                "error": self.start_errors.get(record["id"]) or metrics["error"],
             })
         return result
 
@@ -206,10 +215,10 @@ class TunnelManager:
             _write_private(cred_path, (json.dumps(data) + "\n").encode())
             record = {"id": tunnel_id, "name": clean_name, "routes": clean_routes,
                       "credential": str(cred_path), "enabled": True, "managed": True, "metrics_port": port}
-            self._write_config(record)
+            config = await self._validated_config(record)
             self.records[tunnel_id] = record
             self._save()
-            self._start(record)
+            await self._start(record, config)
             return record
 
     async def update_routes(self, tunnel_id: str, routes: object) -> None:
@@ -221,7 +230,7 @@ class TunnelManager:
             previous = record["routes"]
             record["routes"] = clean
             try:
-                self._write_config(record)
+                config = await self._validated_config(record)
             except (TunnelError, OSError):
                 record["routes"] = previous
                 raise
@@ -229,12 +238,12 @@ class TunnelManager:
             try:
                 if record["enabled"]:
                     await self._stop(tunnel_id)
-                    self._start(record)
+                    await self._start(record, config)
             except OSError:
                 record["routes"] = previous
-                self._write_config(record)
+                config = await self._validated_config(record)
                 self._save()
-                self._start(record)
+                await self._start(record, config)
                 raise
 
     async def set_enabled(self, tunnel_id: str, enabled: bool) -> None:
@@ -245,8 +254,9 @@ class TunnelManager:
             record["enabled"] = enabled
             self._save()
             if enabled:
-                self._start(record)
+                await self._start(record)
             else:
+                self.start_errors.pop(tunnel_id, None)
                 await self._stop(tunnel_id)
 
     async def restart(self, tunnel_id: str) -> None:
@@ -257,7 +267,7 @@ class TunnelManager:
             await self._stop(tunnel_id)
             record["enabled"] = True
             self._save()
-            self._start(record)
+            await self._start(record)
 
     async def adopt_existing(self, tunnel_id: str) -> None:
         async with self.lock:
@@ -266,6 +276,6 @@ class TunnelManager:
                 raise TunnelError("Existing tunnel is unavailable for management")
             record["managed"] = True
             record["enabled"] = True
-            self._write_config(record)
+            config = await self._validated_config(record)
             self._save()
-            self._start(record)
+            await self._start(record, config)

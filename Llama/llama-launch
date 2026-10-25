@@ -184,6 +184,11 @@ flash_attn=on
 # one "--flag value" per line. Appended last, so they win over config.yaml (llama.cpp
 # keeps the last value given for a flag). Only these value flags are accepted;
 # --multi-gpu was already applied to the device list above.
+lora_file=
+lora_scale=1
+draft_file=
+spec_type=
+mmproj_file=
 if [ -n "$model_id" ] && [ -r "$args_file" ]; then
   while IFS= read -r line || [ -n "$line" ]; do
     line=$(printf '%s' "$line" | tr -d '\r')
@@ -192,6 +197,44 @@ if [ -n "$model_id" ] && [ -r "$args_file" ]; then
     value=${line#* }
     case "$flag" in
       --multi-gpu|--backend|--build) continue ;;
+      # LoRA adapter (Parameters tab -> LoRA; the Trainer's "Use in Llama"): a file name in models/llm/loras.
+      --lora)
+        case "$value" in
+          .*|*[!A-Za-z0-9._-]*) echo "Ignoring invalid --lora $value in $args_file" >&2 ;;
+          *.gguf) lora_file=$value ;;
+          *) echo "Ignoring invalid --lora $value in $args_file" >&2 ;;
+        esac
+        continue ;;
+      # Draft type: replaces config.yaml's (llama-server ADDS every --spec-type it is given).
+      --spec-type)
+        case "$value" in
+          ''|*[!a-z0-9,-]*) echo "Ignoring invalid --spec-type in $args_file" >&2 ;;
+          *) spec_type=$value ;;
+        esac
+        continue ;;
+      # Draft model for speculative decoding (Parameters tab -> Draft model): a path under models/llm.
+      --spec-draft-model)
+        case "$value" in
+          /*|*..*|*[!A-Za-z0-9._+/-]*) echo "Ignoring invalid --spec-draft-model $value in $args_file" >&2 ;;
+          *.gguf) draft_file=$value ;;
+          *) echo "Ignoring invalid --spec-draft-model $value in $args_file" >&2 ;;
+        esac
+        continue ;;
+      # Vision head (Parameters tab -> Vision head): a path under models/llm, or none = text only.
+      --mmproj)
+        case "$value" in
+          none) mmproj_file=none ;;
+          /*|*..*|*[!A-Za-z0-9._+/-]*) echo "Ignoring invalid --mmproj $value in $args_file" >&2 ;;
+          *.gguf) mmproj_file=$value ;;
+          *) echo "Ignoring invalid --mmproj $value in $args_file" >&2 ;;
+        esac
+        continue ;;
+      --lora-scale)
+        case "$value" in
+          ''|*[!0-9.]*|*.*.*) echo "Ignoring invalid --lora-scale in $args_file" >&2 ;;
+          *) lora_scale=$value ;;
+        esac
+        continue ;;
       --flash-attn)
         case "$line" in
           '--flash-attn on'|'--flash-attn off'|'--flash-attn auto')
@@ -201,9 +244,10 @@ if [ -n "$model_id" ] && [ -r "$args_file" ]; then
         esac
         continue ;;
       --batch-size|--ubatch-size|--threads|--threads-batch|--gpu-layers|--parallel|\
-      --cache-type-k|--cache-type-v|--spec-type|--spec-draft-n-max|--spec-draft-n-min|\
+      --cache-type-k|--cache-type-v|--spec-draft-n-max|--spec-draft-n-min|\
       --n-cpu-moe|--fit-target|--temp|--top-p|--top-k|--min-p|--repeat-penalty|\
-      --presence-penalty|--reasoning-budget|--n-predict) ;;
+      --presence-penalty|--reasoning-budget|--n-predict|\
+      --spec-draft-n-min-adaptive|--spec-draft-p-min|--spec-draft-ngl|--spec-draft-type-k|--spec-draft-type-v) ;;
       *) echo "Ignoring unsupported parameter $flag in $args_file" >&2; continue ;;
     esac
     case "$value" in
@@ -212,6 +256,71 @@ if [ -n "$model_id" ] && [ -r "$args_file" ]; then
     set -- "$@" "$flag" "$value"
     echo "Parameter $flag $value from $args_file" >&2
   done < "$args_file"
+fi
+
+# models/llm as mounted here (same path as on the host): LoRAs and draft models live under it.
+llm_root=${LLAMA_LLM_DIR:-}
+if [ -z "$llm_root" ] && { [ -n "$lora_file" ] || [ -n "$draft_file" ] || [ -n "$mmproj_file" ]; }; then
+  llm_root=$(awk '$2 ~ /\/models\/llm$/ {print $2; exit}' /proc/mounts | sed 's|\\040| |g')
+fi
+
+# Draft model from the Parameters tab. A missing file also drops the Draft type chosen with it
+# (draft-simple/eagle3/dflash would stop llama-server from starting): config.yaml's type stays.
+if [ -n "$draft_file" ]; then
+  if [ -n "$llm_root" ] && [ -r "$llm_root/$draft_file" ]; then
+    set -- "$@" --spec-draft-model "$llm_root/$draft_file"
+    echo "Draft model $draft_file" >&2
+  else
+    echo "Draft model $draft_file is not in ${llm_root:-models/llm} - loading without it and its draft type" >&2
+    spec_type=
+  fi
+fi
+# Draft type from the Parameters tab replaces config.yaml's --spec-type instead of adding to it.
+if [ -n "$spec_type" ]; then
+  skip=0
+  for arg do
+    shift
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    if [ "$arg" = --spec-type ]; then skip=1; continue; fi
+    set -- "$@" "$arg"
+  done
+  set -- "$@" --spec-type "$spec_type"
+  echo "Draft type $spec_type from $args_file" >&2
+fi
+
+# Vision head from the Parameters tab replaces config.yaml's --mmproj (none = load text only).
+# A missing file keeps config.yaml's head.
+if [ -n "$mmproj_file" ]; then
+  if [ "$mmproj_file" = none ] || { [ -n "$llm_root" ] && [ -r "$llm_root/$mmproj_file" ]; }; then
+    skip=0
+    for arg do
+      shift
+      if [ "$skip" = 1 ]; then skip=0; continue; fi
+      if [ "$arg" = --mmproj ] || [ "$arg" = -mm ]; then skip=1; continue; fi
+      set -- "$@" "$arg"
+    done
+    if [ "$mmproj_file" = none ]; then
+      set -- "$@" --no-mmproj
+      echo "Vision head off (text only) from $args_file" >&2
+    else
+      set -- "$@" --mmproj "$llm_root/$mmproj_file"
+      echo "Vision head $mmproj_file" >&2
+    fi
+  else
+    echo "Vision head $mmproj_file is not in ${llm_root:-models/llm} - keeping config.yaml's" >&2
+  fi
+fi
+
+# LoRA from the model's Parameters tab: models/llm/loras/<file>, applied with its strength.
+if [ -n "$lora_file" ]; then
+  lora_dir=${LLAMA_LORA_DIR:-}
+  [ -z "$lora_dir" ] && [ -n "$llm_root" ] && lora_dir=$llm_root/loras
+  if [ -n "$lora_dir" ] && [ -r "$lora_dir/$lora_file" ]; then
+    set -- "$@" --lora-scaled "$lora_dir/$lora_file:$lora_scale"
+    echo "LoRA $lora_file at strength $lora_scale" >&2
+  else
+    echo "LoRA $lora_file is not in ${lora_dir:-models/llm/loras} - loading the model without it" >&2
+  fi
 fi
 
 # Attention type: flash attention unless the model's Parameters tab chose otherwise.

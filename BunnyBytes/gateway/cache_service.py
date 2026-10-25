@@ -65,6 +65,7 @@ class UploadCache:
         self.retention_seconds = retention_seconds
         self.thumbs_dir = metadata_path.with_name("upload-thumbs")
         self._lock = Lock()
+        self._name_lock = Lock()  # fallback when the upload root can't hard-link
         # One directory walk serves a whole gallery burst instead of one per image.
         self._scan_lock = Lock()
         self._scan: tuple[float, list[tuple[str, Path, os.stat_result]], dict[str, tuple[str, Path, os.stat_result]]] | None = None
@@ -343,10 +344,35 @@ class UploadCache:
         self.thumbs_dir.mkdir(parents=True, exist_ok=True)
         for stale in self.thumbs_dir.glob(f"{file_id}-*.webp"):
             stale.unlink(missing_ok=True)
-        tmp = target.with_suffix(".tmp")
+        tmp = self._temp_for(target, "tmp")
         tmp.write_bytes(out.getvalue())
         os.replace(tmp, target)
         return target
+
+    @staticmethod
+    def _temp_for(target: Path, tag: str) -> Path:
+        """A temp path next to `target` that no concurrent request shares."""
+        return target.with_name(f".{target.name}.{uuid.uuid4().hex[:12]}.{tag}")
+
+    def _commit_new(self, temp: Path, stem: str, suffix: str) -> Path:
+        """Move `temp` to `<stem><suffix>`, or `<stem> (N)<suffix>` if taken, without ever
+        replacing a file another upload (or Video) committed meanwhile."""
+        index = 1
+        while True:
+            target = self.root / (f"{stem}{suffix}" if index == 1 else f"{stem} ({index}){suffix}")
+            index += 1
+            try:
+                os.link(temp, target)  # fails if the name exists, atomically
+            except FileExistsError:
+                continue
+            except OSError:
+                with self._name_lock:  # no hard links on this filesystem
+                    if target.exists():
+                        continue
+                    os.replace(temp, target)
+                return target
+            temp.unlink(missing_ok=True)
+            return target
 
     def save_upload(self, upload) -> dict:
         filename = Path(str(upload.filename or "")).name.strip()
@@ -355,23 +381,17 @@ class UploadCache:
         if len(filename) > 180:
             filename = filename[-180:]
         self.root.mkdir(parents=True, exist_ok=True)
-        target = self.root / filename
-        if target.exists():
-            stem, suffix = target.stem, target.suffix
-            index = 2
-            while target.exists():
-                target = self.root / f"{stem} ({index}){suffix}"
-                index += 1
-        temp = target.with_name(f".{target.name}.uploading")
+        named = Path(filename)
+        temp = self._temp_for(self.root / filename, "uploading")
         total = 0
         try:
-            with temp.open("wb") as handle:
+            with temp.open("xb") as handle:
                 while chunk := upload.file.read(1024 * 1024):
                     total += len(chunk)
                     if total > MAX_UPLOAD_BYTES:
                         raise HTTPException(status_code=413, detail="Upload exceeds the 250 MB limit")
                     handle.write(chunk)
-            os.replace(temp, target)
+            target = self._commit_new(temp, named.stem, named.suffix)
             self._invalidate()
         except Exception:
             temp.unlink(missing_ok=True)
@@ -409,14 +429,13 @@ class UploadCache:
                 stem += ".md"
             self.root.mkdir(parents=True, exist_ok=True)
             target = self.root / stem
-            index = 2
-            while target.exists():
-                target = self.root / f"{Path(stem).stem} ({index}){Path(stem).suffix}"
-                index += 1
-        temp = target.with_name(f".{target.name}.saving")
+        temp = self._temp_for(target, "saving")
         try:
             temp.write_bytes(data)
-            os.replace(temp, target)
+            if file_id:
+                os.replace(temp, target)
+            else:
+                target = self._commit_new(temp, Path(stem).stem, Path(stem).suffix)
         finally:
             temp.unlink(missing_ok=True)
         self._invalidate()

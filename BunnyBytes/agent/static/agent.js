@@ -381,24 +381,32 @@
   }
   const answerOpenAsks = (text) => document.querySelectorAll('#a-log .a-ev[data-kind="ask"]:not(.is-answered)').forEach((n) => answerAsk(n, text));
 
-  // "Keep the model loaded after a question" with a timer: a countdown under the open question until it unloads.
+  // Countdowns under the open question: "Keep the model loaded after a question" (until it unloads)
+  // and "Answer its own questions" (until the Master Agent picks the answer itself).
   let parkTick = null;
-  function renderParked(p) {
+  function renderParked(snap) {
     clearInterval(parkTick); parkTick = null;
     document.querySelectorAll("#a-log .a-ask-timer").forEach((n) => n.remove());
-    const until = p?.until;
-    const card = until && [...document.querySelectorAll('#a-log .a-ev[data-kind="ask"]:not(.is-answered)')].pop();
+    const card = [...document.querySelectorAll('#a-log .a-ev[data-kind="ask"]:not(.is-answered)')].pop();
     if (!card) return;
-    const line = el("div", "a-ask-timer");
-    const text = el("span", "a-ask-timer-text"), bar = el("span", "a-ask-timer-bar"), fill = el("span");
-    bar.append(fill); line.append(text, bar); card.append(line);
-    const total = Math.max(1, until - Date.now() / 1000);
-    const tick = () => {
-      const left = Math.max(0, Math.round(until - Date.now() / 1000));
-      text.textContent = left ? `Model stays loaded for ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "Unloading the model…";
-      fill.style.width = `${Math.min(100, (left / total) * 100)}%`;
-      if (!left) { clearInterval(parkTick); parkTick = null; }
-    };
+    const timers = [
+      snap?.parked?.until && { until: snap.parked.until, text: (t) => `Model stays loaded for ${t}`, end: "Unloading the model…" },
+      snap?.auto_answer?.at && { until: snap.auto_answer.at, text: (t) => `No answer? The Master Agent picks the best one in ${t}`, end: "The Master Agent is picking the answer…" },
+    ].filter(Boolean);
+    const ticks = timers.map((x) => {
+      const line = el("div", "a-ask-timer");
+      const text = el("span", "a-ask-timer-text"), bar = el("span", "a-ask-timer-bar"), fill = el("span");
+      bar.append(fill); line.append(text, bar); card.append(line);
+      const total = Math.max(1, x.until - Date.now() / 1000);
+      return () => {
+        const left = Math.max(0, Math.round(x.until - Date.now() / 1000));
+        text.textContent = left ? x.text(`${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`) : x.end;
+        fill.style.width = `${Math.min(100, (left / total) * 100)}%`;
+        return left;
+      };
+    });
+    if (!ticks.length) return;
+    const tick = () => { if (!ticks.map((f) => f()).some(Boolean)) { clearInterval(parkTick); parkTick = null; } };
     tick(); parkTick = setInterval(tick, 1000);
   }
 
@@ -1386,7 +1394,7 @@
 
   function paint(entry, fresh) {
     if (fresh) { $("#a-log").replaceChildren(); cards.clear(); terminals.clear(); boards.clear(); appendEvents(entry.events); }
-    renderHead(entry.snap); renderJobs(entry.snap.jobs || []); renderBoards(entry.snap.boards || []); renderLive(entry.snap.live); renderMeters(entry.snap); renderParked(entry.snap.parked);
+    renderHead(entry.snap); renderJobs(entry.snap.jobs || []); renderBoards(entry.snap.boards || []); renderLive(entry.snap.live); renderMeters(entry.snap); renderParked(entry.snap);
   }
 
   /* ------------------------------------------------ open / stream -- */

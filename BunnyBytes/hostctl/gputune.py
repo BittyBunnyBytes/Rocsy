@@ -419,24 +419,29 @@ def _on_reset(state: dict, lines: list[str]) -> None:
 def tick() -> None:
     with _lock:
         state = _load()
-        try:
-            dev = _device(state)
-            stats = lact("device_stats", id=dev["id"])
-            _live.update(stats=stats, lact=True, error=None, device=dev)
-        except (LactError, ValueError) as exc:
+        reset_due = time.time() - state.get("reset_checked", 0) >= 15
+        reset_seen = state["reset_seen"]
+    try:
+        dev = _device(state)
+        stats = lact("device_stats", id=dev["id"])
+    except (LactError, ValueError) as exc:
+        with _lock:
             _live.update(lact=False, error=str(exc))
-            return
+        return
+    lines = _resets_since(reset_seen) if reset_due else []
+    workload, source = detect(state, dev["id"])
+    with _lock:
+        state = _load()  # preserve settings changed while device and queue calls ran
+        _live.update(stats=stats, lact=True, error=None, device=dev)
         changed = False
         now = time.time()
-        if now - state.get("reset_checked", 0) >= 15:
-            lines = _resets_since(state["reset_seen"])
+        if reset_due and now - state.get("reset_checked", 0) >= 15:
             state["reset_checked"] = now
             state["reset_seen"] = now
             if lines:
                 _finish_run(state)
                 _on_reset(state, lines)
             changed = True
-        workload, source = detect(state, dev["id"])
         if workload != _live["workload"]:
             _finish_run(state)
             _live.update(workload=workload, source=source, since=now)
@@ -485,29 +490,32 @@ def background_loop() -> None:
 def snapshot() -> dict:
     with _lock:
         state = _load()
-        lim = None
-        try:
-            dev = _device(state)
-            lim = limits(dev["id"], state)
-        except LactError as exc:
-            dev = None
+        live = copy.deepcopy(_live)
+    lim = None
+    try:
+        dev = _device(state)
+        lim = limits(dev["id"], state)
+    except LactError as exc:
+        dev = None
+        with _lock:
             _live["error"] = str(exc)
-        profiles = []
-        for key, p in state["profiles"].items():
-            item = {"id": key, **{k: v for k, v in p.items() if k != "tuning"}}
-            if not p.get("stock"):
-                t = _tuning(p)
-                item["tuning"] = {"settled": t["settled"], "steps": t["steps"][-12:], "stable": t["stable"]}
-                item["suggestion"] = suggestion(state, key, lim)
-                runs = [r for r in state["runs"] if r.get("profile") == key]
-                item["runs"] = runs[-8:]
-            profiles.append(item)
-    stats = _live.get("stats") or {}
-    return {"lact": _live.get("lact"), "error": _live.get("error"), "device": dev, "limits": lim,
+        live["error"] = str(exc)
+    profiles = []
+    for key, p in state["profiles"].items():
+        item = {"id": key, **{k: v for k, v in p.items() if k != "tuning"}}
+        if not p.get("stock"):
+            t = _tuning(p)
+            item["tuning"] = {"settled": t["settled"], "steps": t["steps"][-12:], "stable": t["stable"]}
+            item["suggestion"] = suggestion(state, key, lim)
+            runs = [r for r in state["runs"] if r.get("profile") == key]
+            item["runs"] = runs[-8:]
+        profiles.append(item)
+    stats = live.get("stats") or {}
+    return {"lact": live.get("lact"), "error": live.get("error"), "device": dev, "limits": lim,
             "fields": FIELDS, "workloads": WORKLOADS, "profiles": profiles, "auto": state["auto"],
             "active": state.get("active"), "hold": state.get("hold"), "applied_at": state.get("applied_at"),
-            "workload": _live.get("workload"), "source": _live.get("source"),
-            "idle_since": _live.get("idle_since"), "events": state["events"][-25:][::-1],
+            "workload": live.get("workload"), "source": live.get("source"),
+            "idle_since": live.get("idle_since"), "events": state["events"][-25:][::-1],
             "stock_runs": [r for r in state["runs"] if r.get("profile") == "stock"][-8:],
             "live": {"power": (stats.get("power") or {}).get("average"),
                      "cap": (stats.get("power") or {}).get("cap_current"),

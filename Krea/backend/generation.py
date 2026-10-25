@@ -202,6 +202,10 @@ def _build_krea_workflow(config: Settings, request: GenerationRequest, seed: int
             loader_inputs[f"lora_{index + 1}"] = {
                 "on": slot.enabled, "lora": LORA_SLOTS[index], "strength": slot.strength, "strengthTwo": None,
             }
+        if request.test_lora:   # the Trainer's epoch test: a row after the slots and the turbo LoRA
+            loader_inputs[f"lora_{max(len(LORA_SLOTS), len(request.loras)) + 2}"] = {
+                "on": True, "lora": request.test_lora, "strength": request.test_lora_strength, "strengthTwo": None,
+            }
         # Any LoRA slot the request didn't mention keeps the template's own
         # default (see LORA_SLOTS / DEFAULT_LORA_ENABLED in models.py).
 

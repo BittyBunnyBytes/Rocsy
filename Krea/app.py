@@ -1130,9 +1130,12 @@ async def create_generation(request: GenerationRequest, *, hidden: bool = False,
     selected_model_label = (f"Anima · {ANIMA_VERSIONS[request.anima_version][1]}" if request.model == MODEL_ANIMA
                             else f"{MODEL_LABELS[request.model]} · {Path(request.checkpoint).stem}")
     label = f"{selected_model_label}{f' x{request.count}' if request.count > 1 else ''}: {request.prompt[:60]}"
+    group = None
+    if request.test_lora:   # the Trainer's epoch tests: one card on the queue page, each entry named by its checkpoint
+        label, group = f"{Path(request.test_lora).stem} · seed {seed}: {request.prompt[:60]}", "IMAGE - EPOCH TESTING"
     entry = None
     if not under_lock:
-        entry = await lock.enqueue(app="Krea", job_id=job_id, label=label)
+        entry = await lock.enqueue(app="Krea", job_id=job_id, label=label, group=group)
         if entry is None:
             raise APIError(503, "queue_unavailable", "Could not reach the GPU queue coordinator. Try again shortly.")
     item = {
@@ -1342,13 +1345,12 @@ async def cancel_job(job_id: str) -> dict[str, Any]:
         for pending_id in pending:
             cancelled = await comfy.cancel(pending_id) or cancelled
     except ServiceError as exc:
-        store.update_job(job_id, state=previous_state)
-        await publish_jobs()
-        raise APIError(502, "cancel_failed", str(exc)) from exc
+        # ComfyUI unreachable: nothing will ever finish this job, so the cancel still ends it
+        # and hands back the GPU slot (it used to revert to rendering and hold the lock forever).
+        log.warning("Force-cancelling generation job %s: ComfyUI unreachable (%s)", job_id[:8], exc)
+        cancelled = False
     if not cancelled:
-        store.update_job(job_id, state=previous_state)
-        await publish_jobs()
-        raise APIError(409, "cancel_too_late", "ComfyUI no longer reports this generation as queued or rendering.")
+        log.warning("Force-cancelling generation job %s: ComfyUI no longer has it queued or rendering", job_id[:8])
     store.update_job(job_id, state="cancelled", completed_at=utc_now())
     await finalize_job_lock(job_id, item.get("lock_token"))
     log.info("Cancelled generation job %s (%s)", job_id[:8], prompt_id[:8])

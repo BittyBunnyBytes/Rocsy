@@ -37,6 +37,7 @@
     if (c.video) parts.push(`${c.video} clip${c.video > 1 ? "s" : ""}`);
     if (c.image) parts.push(`${c.image} image${c.image > 1 ? "s" : ""}`);
     if (c.audio) parts.push(`${c.audio} audio`);
+    if (c.text) parts.push(`${c.text} text file${c.text > 1 ? "s" : ""}`);
     return (parts.join(" · ") || "empty") + ` · ${d.size_mb} MB`;
   }
   async function loadList() {
@@ -135,10 +136,266 @@
     const filter = document.querySelector("input[name=ds-filter]:checked").value;
     const host = $("#ds-items"); host.replaceChildren();
     const items = data.items.filter((it) => filter === "all" || (filter === "nocap" ? !it.caption : (it.h3_issues || []).length));
-    if (!items.length) host.append(el("p", "muted", data.items.length ? "Nothing matches this filter." : "This dataset is empty. Add files above."));
+    renderTextFiles();
+    if (!items.length && !(data.text_files || []).length && !textOpen) host.append(el("p", "muted", data.items.length ? "Nothing matches this filter." : "This dataset is empty. Add files above."));
     for (const it of items) host.append(itemCard(it));
     if (term.job && !$("#ds-term").hidden) paintTerm();
     $("#ds-originals").textContent = data.originals?.length ? `${data.originals.length} original(s) kept in ${current}/_originals after conversion (not used for training).` : "";
+  }
+  // ---- LLM training text (.jsonl/.json): files with checks, an inline record editor, new files and imports ----
+  let textOpen = false;           // show the text panel even before the dataset has a text file
+  const textEd = {ds: null, file: null, offset: 0, q: "", node: null, mtime: null, page: null};
+  const TEXT_PAGE = 20;
+  const plural = (n, w) => `${Number(n).toLocaleString()} ${w}${n === 1 ? "" : "s"}`;
+  const textUrl = (file, rest = "") => `/api/datasets/${enc(current)}/text/${enc(file)}${rest}`;
+  function renderTextFiles() {
+    const box = $("#ds-text"), files = data.text_files || [];
+    if (textEd.ds !== current) { Object.assign(textEd, {ds: current, file: null, node: null, offset: 0, q: "", page: null}); textOpen = false; }
+    if (textEd.file && !files.some((f) => f.file === textEd.file)) Object.assign(textEd, {file: null, node: null});
+    $("#ds-textmode")?.setAttribute("aria-pressed", String(!!files.length || textOpen));
+    const keep = textEd.node; keep?.remove();     // the open editor survives re-renders (unsaved edits stay)
+    box.hidden = !files.length && !textOpen; box.replaceChildren();
+    if (box.hidden) return;
+    const total = files.reduce((n, f) => n + f.records, 0);
+    const head = el("div", "ds-text-head");
+    head.append(el("h3", null, `LLM training text · ${plural(total, "record")}`));
+    const add = el("button", "button secondary", "+ New file"); add.type = "button";
+    add.title = "An empty .jsonl to write chat examples into by hand";
+    add.addEventListener("click", newTextFile);
+    const imp = el("label", "button secondary");
+    imp.title = ".txt/.md become plain-text records; .csv/.tsv/.parquet/.jsonl/.json rows with messages, prompt/completion, question/answer, instruction/output or text columns become chat records. Everything is stored as a .jsonl you can edit.";
+    const inp = el("input"); inp.type = "file"; inp.multiple = true; inp.accept = ".txt,.md,.markdown,.csv,.tsv,.parquet,.jsonl,.json";
+    inp.addEventListener("change", (e) => { importText(e.target.files); e.target.value = ""; });
+    imp.append(inp, document.createTextNode("Import text…"));
+    const split = el("select"); split.id = "ds-text-split";
+    split.title = "How imported .txt/.md files are cut into records (the trainer still cuts long records into Max-length windows)";
+    for (const [v, t] of [["paragraphs", "Plain text: group paragraphs (~1.5k tokens)"], ["blank3", "Plain text: split at 2+ blank lines"], ["whole", "Plain text: one record per file"]]) {
+      const o = el("option", null, t); o.value = v; split.append(o);
+    }
+    try { split.value = localStorage.getItem("trainer-text-split") || "paragraphs"; } catch (_) {}
+    split.addEventListener("change", () => { try { localStorage.setItem("trainer-text-split", split.value); } catch (_) {} });
+    head.append(add, imp, split);
+    box.append(head, textGuide());
+    if (!files.length) box.append(el("p", "muted", "No text files yet: start a new file and write examples, or import text."));
+    for (const f of files) {
+      const row = el("div", "ds-text-row");
+      row.append(el("code", null, f.file), el("span", "muted", `${plural(f.records, "record")} · ${Object.entries(f.formats).map(([k, v]) => `${k} ${v}`).join(", ") || "no usable records"} · ${f.size_mb} MB`));
+      const open = textEd.file === f.file;
+      const view = el("button", "button secondary", open ? "Close" : (f.editable ? "Edit records" : "View records")); view.type = "button";
+      view.addEventListener("click", () => { Object.assign(textEd, open ? {file: null, node: null} : {file: f.file, node: null, offset: 0, q: ""}); renderTextFiles(); });
+      const btns = el("span", "ds-text-btns"); btns.append(view);
+      if (f.file.toLowerCase().endsWith(".json")) btns.append(textAction("To .jsonl", "Rewrite it as an editable .jsonl (one normalized record per line); the .json is replaced", () => api(textUrl(f.file, "/to-jsonl"), {method:"POST"}), (r) => `${f.file} → ${r.file} (${plural(r.records, "record")}).`));
+      if (f.duplicates && f.editable) btns.append(textAction("Remove duplicates", "Keep the first of each identical record", () => api(textUrl(f.file, "/dedupe"), {method:"POST"}), (r) => `Removed ${plural(r.removed, "duplicate")}.`));
+      const del = el("button", "button secondary danger icon", "✕"); del.title = "Delete this file"; del.type = "button";
+      del.addEventListener("click", async () => {
+        if (!confirm(`Delete ${f.file} from ${current}? This can't be undone.`)) return;
+        try { await api(`/api/datasets/${enc(current)}/items/${enc(f.file)}`, {method:"DELETE"}); await reload(); loadList(); changed(); }
+        catch (e) { note(e.message, true); }
+      });
+      btns.append(del); row.append(btns);
+      if (f.records) {
+        const st = el("div", "ds-text-stats");
+        st.append(el("span", "muted", `≈${f.tokens.toLocaleString()} tokens · longest ≈${f.longest.toLocaleString()}${f.turns ? ` · ${f.turns.toLocaleString()} repl${f.turns === 1 ? "y" : "ies"} to learn` : ""}${f.thinking ? ` · ${f.thinking} with thinking` : ""}${f.tool_calls ? ` · ${f.tool_calls} with tools` : ""}`));
+        if (f.over_limit) st.append(el("span", "warn", `${plural(f.over_limit, "chat")} over ${f.max_length} tokens: the end (often the reply) gets cut off — raise Max length or shorten them`));
+        if (f.duplicates) st.append(el("span", "warn", `${plural(f.duplicates, "duplicate")} (makes the LoRA parrot them)`));
+        if (f.order_warnings) st.append(el("span", "warn", `${plural(f.order_warnings, "chat")} with odd turn order, e.g. ${f.order_example}`));
+        row.append(st);
+      }
+      if (f.error || f.skipped) row.append(el("span", "bad", f.error || `${f.skipped} skipped: ${f.problems[0] || ""}`));
+      if (open) {
+        const node = keep || el("div", "ds-text-editor");
+        textEd.node = node; row.append(node);
+        if (!keep) { node.append(el("p", "muted", "Loading…")); loadTextPage(); }
+      } else {
+        const first = f.sample?.[0];
+        if (first) row.append(el("pre", "ds-text-sample", first.text ?? first.messages.map((m) => `${m.role}: ${m.content}`).join("\n")));
+      }
+      box.append(row);
+    }
+  }
+  function textAction(label, title, run, done) {
+    const b = el("button", "button secondary", label); b.type = "button"; b.title = title;
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      try { const r = await run(); note(done(r)); await reload(); loadList(); changed(); }
+      catch (e) { note(e.message, true); b.disabled = false; }
+    });
+    return b;
+  }
+  function textGuide() {
+    const d = el("details", "ds-text-guide");
+    d.append(el("summary", null, "What LLM LoRA data looks like"));
+    const ul = el("ul");
+    for (const t of [
+      "Chat examples teach behaviour, a persona, a format or a task: one JSON object per line, {\"messages\": [{\"role\": \"system\", …}, {\"role\": \"user\", …}, {\"role\": \"assistant\", …}]}. Only the assistant replies are learned; the rest is context.",
+      "Plain text ({\"text\": …}, or imported .txt/.md) teaches a writing style or knowledge: every token is learned, and long texts are cut into Max-length windows.",
+      "Also read: ShareGPT, prompt/completion, question/answer, Alpaca instruction/input/output, preference prompt/chosen/rejected (trains on chosen only), and CSV/TSV/Parquet tables with those columns.",
+      "Size: a few hundred consistent, well-written examples are enough for a style or format; a new skill wants 1–5k. Quality and variety beat volume; duplicates make it parrot.",
+      "Keep every example under Max length (default 2048 tokens) or its end, usually the reply, is cut off.",
+      "Write the system prompt you'll really use in chat, and replies exactly the way you want the model to answer.",
+      "Thinking models (Qwen3…): put the reasoning in the assistant's Thinking box (reasoning_content) in every example, or in none; mixing breaks the habit.",
+      "Tool use: assistant tool_calls, tool-role results, and a tools list on the record, in OpenAI format.",
+    ]) ul.append(el("li", null, t));
+    d.append(ul);
+    return d;
+  }
+  async function newTextFile() {
+    const name = prompt("Name for the new text file (saved as .jsonl):", "examples");
+    if (!name) return;
+    try {
+      const r = await api(`/api/datasets/${enc(current)}/text`, {method:"POST", body:JSON.stringify({file:name})});
+      textOpen = true; Object.assign(textEd, {file: r.file, node: null, offset: 0, q: ""});
+      await reload(); loadList(); changed();
+    } catch (e) { note(e.message, true); }
+  }
+  async function importText(files) {
+    if (!current || !files.length) return;
+    const mode = $("#ds-text-split")?.value || (() => { try { return localStorage.getItem("trainer-text-split"); } catch (_) { return null; } })() || "paragraphs";
+    const msgs = [];
+    textOpen = true;
+    for (const file of files) {
+      const r = await uploadFile(file, false, `/api/datasets/${enc(current)}/text-import?mode=${mode}&`);
+      if (r) msgs.push(`${file.name} → ${r.file}: ${plural(r.records, "record")}${r.skipped ? `, ${r.skipped} skipped (${r.problems[0] || ""})` : ""}`);
+    }
+    await reload(); loadList(); changed();
+    if (msgs.length) note(msgs.join(" · "));
+  }
+  async function loadTextPage() {
+    const node = textEd.node, file = textEd.file;
+    if (!node || !file) return;
+    try {
+      const page = await api(textUrl(file, `/records?offset=${textEd.offset}&limit=${TEXT_PAGE}&q=${enc(textEd.q)}`));
+      if (textEd.node !== node || textEd.file !== file) return;
+      textEd.page = page; textEd.mtime = page.mtime; paintTextPage();
+    } catch (e) { node.replaceChildren(el("p", "bad", e.message)); }
+  }
+  function paintTextPage() {
+    const node = textEd.node, page = textEd.page;
+    node.replaceChildren();
+    const bar = el("div", "ds-text-edbar");
+    const q = el("input"); q.type = "search"; q.placeholder = "Search records"; q.value = textEd.q;
+    let qt;
+    q.addEventListener("input", () => { clearTimeout(qt); qt = setTimeout(() => { textEd.q = q.value; textEd.offset = 0; loadTextPage(); }, 350); });
+    const prev = el("button", "button secondary", "‹"), next = el("button", "button secondary", "›");
+    prev.type = next.type = "button"; prev.disabled = textEd.offset <= 0; next.disabled = textEd.offset + TEXT_PAGE >= page.total;
+    prev.addEventListener("click", () => { textEd.offset = Math.max(0, textEd.offset - TEXT_PAGE); loadTextPage(); });
+    next.addEventListener("click", () => { textEd.offset += TEXT_PAGE; loadTextPage(); });
+    const shown = page.total ? `${textEd.offset + 1}–${Math.min(page.total, textEd.offset + TEXT_PAGE)} of ${page.total.toLocaleString()}` : "0";
+    textEd.countEl = el("span", "muted", shown);
+    bar.append(q, prev, textEd.countEl, next);
+    if (page.editable) {
+      const chat = el("button", "button secondary", "+ Chat example"), text = el("button", "button secondary", "+ Text record");
+      chat.type = text.type = "button";
+      chat.addEventListener("click", () => node.insertBefore(recordCard({index: null, record: {messages: [{role: "user", content: ""}, {role: "assistant", content: ""}]}}, true), bar.nextSibling));
+      text.addEventListener("click", () => node.insertBefore(recordCard({index: null, record: {text: ""}}, true), bar.nextSibling));
+      bar.append(chat, text);
+    } else bar.append(el("span", "muted", page.file.toLowerCase().endsWith(".json") ? "Read-only: convert it to .jsonl to edit" : "Read-only: over 64 MB"));
+    node.append(bar);
+    for (const item of page.records) node.append(recordCard(item, page.editable));
+    if (!page.records.length) node.append(el("p", "muted", textEd.q ? "No record matches." : "No records yet: add a chat example."));
+  }
+  const growArea = (ta) => { const fit = () => { ta.style.height = "auto"; ta.style.height = `${Math.min(ta.scrollHeight + 2, 480)}px`; }; ta.addEventListener("input", fit); requestAnimationFrame(fit); return ta; };
+  function jsonArea(value, placeholder) {
+    const ta = growArea(el("textarea", "ds-text-json")); ta.spellcheck = false; ta.placeholder = placeholder;
+    ta.value = value == null ? "" : JSON.stringify(value, null, 1); return ta;
+  }
+  function recordCard(item, editable) {
+    const card = el("article", "ds-rec" + (item.problem ? " bad-rec" : ""));
+    const meta = el("div", "ds-rec-meta");
+    const label = item.index == null ? "new" : `#${item.index + 1}`;
+    meta.append(el("strong", null, label));
+    if (item.problem) meta.append(el("span", "bad", `skipped by the trainer: ${item.problem}`));
+    else if (item.index != null) meta.append(el("span", "muted", `${item.format} · ≈${(item.tokens || 0).toLocaleString()} tokens`));
+    if (item.order) meta.append(el("span", "warn", item.order));
+    card.append(meta);
+    let collect;
+    if (item.problem) {
+      const ta = growArea(el("textarea", "ds-text-json")); ta.value = item.raw || ""; ta.spellcheck = false; ta.readOnly = !editable;
+      card.append(ta);
+      collect = () => JSON.parse(ta.value);
+    } else if ("text" in item.record) {
+      const ta = growArea(el("textarea")); ta.value = item.record.text; ta.readOnly = !editable; ta.placeholder = "Plain text: every token of it is learned";
+      card.append(ta);
+      collect = () => ({text: ta.value});
+    } else {
+      const turns = el("div", "ds-turns"), rows = [];
+      const addTurn = (m) => {
+        const t = el("div", "ds-turn"), role = el("select");
+        for (const r of ["system", "user", "assistant", "tool"]) { const o = el("option", null, r); o.value = r; role.append(o); }
+        role.value = m.role; role.disabled = !editable;
+        const content = growArea(el("textarea")); content.value = m.content || ""; content.readOnly = !editable;
+        const extra = el("div", "ds-turn-extra");
+        const think = growArea(el("textarea")); think.value = m.reasoning_content || ""; think.readOnly = !editable; think.placeholder = "Thinking (reasoning_content), for thinking models";
+        const thinkBox = el("details"); thinkBox.open = !!m.reasoning_content; thinkBox.append(el("summary", null, "Thinking"), think);
+        const calls = jsonArea(m.tool_calls, '[{"type": "function", "function": {"name": "…", "arguments": "{…}"}}]'); calls.readOnly = !editable;
+        const callBox = el("details"); callBox.open = !!m.tool_calls; callBox.append(el("summary", null, "Tool calls (JSON)"), calls);
+        const showExtra = () => { extra.hidden = role.value !== "assistant"; content.placeholder = {system: "System prompt", user: "What the user says", assistant: "The reply the model should learn", tool: "Tool result"}[role.value]; };
+        role.addEventListener("change", showExtra); showExtra();
+        extra.append(thinkBox, callBox);
+        const x = el("button", "button secondary icon", "✕"); x.type = "button"; x.title = "Remove this turn"; x.hidden = !editable;
+        const entry = {m, role, content, think, calls, node: t};
+        x.addEventListener("click", () => { t.remove(); rows.splice(rows.indexOf(entry), 1); });
+        const body = el("div", "ds-turn-body"); body.append(content, extra);
+        t.append(role, body, x); turns.append(t); rows.push(entry);
+        return content;
+      };
+      item.record.messages.forEach(addTurn);
+      card.append(turns);
+      const tools = jsonArea(item.record.tools, '[{"type": "function", "function": {"name": "…", "parameters": {…}}}]'); tools.readOnly = !editable;
+      const toolBox = el("details", "ds-rec-tools"); toolBox.open = !!item.record.tools; toolBox.append(el("summary", null, "Tools available in this chat (JSON)"), tools);
+      card.append(toolBox);
+      if (editable) {
+        const more = el("button", "button secondary", "+ Turn"); more.type = "button";
+        more.addEventListener("click", () => { const last = rows[rows.length - 1]?.role.value; addTurn({role: last === "user" ? "assistant" : "user", content: ""}).focus(); });
+        card.append(more);
+      }
+      collect = () => {
+        const parse = (ta, what) => { if (!ta.value.trim()) return undefined; try { return JSON.parse(ta.value); } catch (_) { throw new Error(`${what} is not valid JSON`); } };
+        const messages = [];
+        for (const r of rows) {
+          const m = {...r.m, role: r.role.value, content: r.content.value};
+          delete m.reasoning_content; delete m.tool_calls;
+          if (m.role === "assistant") {
+            if (r.think.value.trim()) m.reasoning_content = r.think.value;
+            const c = parse(r.calls, "Tool calls"); if (c) m.tool_calls = c;
+          }
+          if (m.content.trim() || m.reasoning_content || m.tool_calls) messages.push(m);   // empty turns are dropped
+        }
+        const rec = {messages}, t = parse(tools, "Tools"); if (t) rec.tools = t;
+        return rec;
+      };
+    }
+    if (editable) {
+      const acts = el("div", "ds-rec-acts");
+      const save = el("button", "button", item.index == null ? "Add" : "Save"), state = el("span", "muted");
+      save.type = "button";
+      card.addEventListener("input", () => { state.textContent = "unsaved"; });
+      save.addEventListener("click", async () => {
+        let record;
+        try { record = collect(); } catch (e) { state.textContent = e.message; return; }
+        save.disabled = true; state.textContent = "saving…";
+        try {
+          const r = item.index == null
+            ? await api(textUrl(textEd.file, "/records"), {method:"POST", body:JSON.stringify({record, mtime: textEd.mtime})})
+            : await api(textUrl(textEd.file, `/records/${item.index}`), {method:"PUT", body:JSON.stringify({record, mtime: textEd.mtime})});
+          textEd.mtime = r.mtime;
+          if (item.index == null && r.total != null && textEd.countEl) textEd.countEl.textContent = `${r.total.toLocaleString()} record${r.total === 1 ? "" : "s"} (new one added)`;
+          const fresh = recordCard({index: r.index, record: r.record, format: item.format || ("text" in r.record ? "text" : "chat"), tokens: r.tokens, order: r.order}, true);
+          card.replaceWith(fresh);
+          reload(); loadList();
+        } catch (e) { state.textContent = e.message; save.disabled = false; }
+      });
+      const del = el("button", "button secondary danger", item.index == null ? "Discard" : "Delete"); del.type = "button";
+      del.addEventListener("click", async () => {
+        if (item.index == null) { card.remove(); return; }
+        if (!confirm(`Delete record #${item.index + 1}?`)) return;
+        try { const r = await api(textUrl(textEd.file, `/records/${item.index}?mtime=${textEd.mtime}`), {method:"DELETE"}); textEd.mtime = r.mtime; await loadTextPage(); reload(); loadList(); }
+        catch (e) { state.textContent = e.message; }
+      });
+      acts.append(save, del, state);
+      card.append(acts);
+    }
+    return card;
   }
   // ---- captions: auto-save (debounced) shared by the card and the editor ----
   const saveTimers = new Map();
@@ -1935,9 +2192,21 @@
     catch (e) { note(e.message, true); }
   });
 
+  // ---- wipe every caption ----
+  $("#ds-wipe-tags").addEventListener("click", async () => {
+    if (!current) return;
+    const n = (data?.items || []).filter((x) => x.caption).length;
+    if (!n) { note("No captions to wipe in this dataset."); return; }
+    if (!confirm(`Wipe ALL tags in ${current}?\n\nThis deletes the caption of all ${n} captioned file(s). The files themselves stay.\nA backup copy is kept in the Trainer's data/caption-backups folder.`)) return;
+    try { const r = await api(`/api/datasets/${enc(current)}/wipe-captions`, {method:"POST"}); drafts.clear(); note(`Wiped ${r.wiped} caption(s).${r.backup ? ` Backup: ${r.backup}` : ""}`); await reload(); loadList(); }
+    catch (e) { note(e.message, true); }
+  });
+
   // ---- uploads ----
   const isVideo = (name) => /\.(mp4|mov|webm|mkv)$/i.test(name);
-  async function uploadFile(file, hold = false) {
+  // `endpoint` (ending in ? or &) sends the file to another chunked route, e.g. the text importer;
+  // then the whole final response comes back instead of just the stored file name.
+  async function uploadFile(file, hold = false, endpoint = null) {
     const row = el("div", "ds-upload");
     const bar = el("div", "pbar"), fill = el("div", "pbar-fill"), text = el("span", "pbar-text", `${file.name} · 0%`);
     bar.append(fill, text); row.append(bar); $("#ds-uploads").append(row);
@@ -1945,7 +2214,8 @@
       let offset = 0, last;
       do {
         const chunk = file.slice(offset, offset + CHUNK);
-        const r = await fetch(`${base}/api/datasets/${enc(current)}/upload?filename=${enc(file.name)}&offset=${offset}&total=${file.size}&staged=${hold && isVideo(file.name)}`,
+        const r = await fetch(endpoint ? `${base}${endpoint}filename=${enc(file.name)}&offset=${offset}&total=${file.size}`
+                                       : `${base}/api/datasets/${enc(current)}/upload?filename=${enc(file.name)}&offset=${offset}&total=${file.size}&staged=${hold && isVideo(file.name)}`,
           {method:"POST", credentials:"same-origin", headers:{"Content-Type":"application/octet-stream"}, body:chunk});
         last = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(last.detail || `Upload failed (${r.status})`);
@@ -1953,13 +2223,20 @@
         const f = file.size ? offset / file.size : 1;
         fill.style.width = `${Math.round(f * 100)}%`; text.textContent = `${file.name} · ${Math.round(f * 100)}%`;
       } while (offset < file.size);
-      text.textContent = `${last.file || file.name} · ${last.staged ? "waiting to be trimmed" : "added"}`; bar.classList.add("done");
+      text.textContent = `${last.file || file.name} · ${last.staged ? "waiting to be trimmed" : (endpoint && last.records != null ? `${plural(last.records, "record")}` : "added")}`; bar.classList.add("done");
       setTimeout(() => row.remove(), 4000);
-      return last.file || null;
+      return endpoint ? last : (last.file || null);
     } catch (e) { text.textContent = `${file.name} · ${e.message}`; bar.classList.add("failed"); return null; }
   }
   async function uploadAll(files) {
     if (!current || !files.length) return;
+    // Text-only formats go through the LLM text importer; .txt/.csv too in a dataset without media
+    // (there they can't be captions, so they're training text).
+    const textOnly = !data?.items?.length && !data?.staged?.length;
+    const toText = [...files].filter((f) => /\.(md|markdown|tsv|parquet)$/i.test(f.name) || (textOnly && /\.(txt|csv)$/i.test(f.name)));
+    if (toText.length) await importText(toText);
+    files = [...files].filter((f) => !toText.includes(f));
+    if (!files.length) return;
     const hold = $("#ds-autotrim").checked;
     // Media first, captions after, so a .txt never lands before its clip is listed.
     const list = [...files].sort((a, b) => (a.name.endsWith(".txt") ? 1 : 0) - (b.name.endsWith(".txt") ? 1 : 0));
@@ -1975,6 +2252,12 @@
   try { $("#ds-autotrim").checked = localStorage.getItem("trainer-autotrim") !== "0"; } catch (_) {}
   $("#ds-autotrim").addEventListener("change", (e) => { try { localStorage.setItem("trainer-autotrim", e.target.checked ? "1" : "0"); } catch (_) {} });
   $("#ds-files").addEventListener("change", (e) => { uploadAll(e.target.files); e.target.value = ""; });
+  $("#ds-textmode").addEventListener("click", () => {
+    if (!data) return;
+    if (!(data.text_files || []).length) textOpen = !textOpen;   // with text files the panel always shows
+    renderItems();
+    if (!$("#ds-text").hidden) $("#ds-text").scrollIntoView({block: "nearest", behavior: "smooth"});
+  });
   // Drag & drop anywhere on the Datasets tab, with a full-page overlay while dragging.
   const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
   const dropOverlay = $("#drop-overlay");

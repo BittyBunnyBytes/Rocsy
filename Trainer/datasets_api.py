@@ -24,11 +24,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import families
+import llm_data
 
 VIDEO = {".mp4", ".mov", ".webm", ".mkv"}
 IMAGE = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}   # what Fizgig trains on
 AUDIO = {".wav", ".flac", ".m4a", ".mp3", ".ogg"}
-UPLOAD_TYPES = VIDEO | IMAGE | AUDIO | {".txt", ".csv"}
+UPLOAD_TYPES = VIDEO | IMAGE | AUDIO | {".txt", ".csv"} | llm_data.TEXT_EXTS
 H3_FRAMES = [5 + 17 * n for n in range(8)]          # 5, 22, 39 … 124
 H3_AUDIO_SECONDS = [f / 24 for f in H3_FRAMES if f >= 22]   # voice clips must be one of these (±25 ms)
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}")
@@ -48,6 +49,15 @@ class TrimSegment(BaseModel):
 class TrimBody(BaseModel):
     segments: list[TrimSegment] = Field(min_length=1, max_length=50)
     h3_ready: bool = True
+
+
+class TextRecordBody(BaseModel):
+    record: dict[str, Any]
+    mtime: str | None = None       # mtime_ns the editor loaded (a string: 19 digits overflow JS numbers); newer on disk = 409
+
+
+class NewTextFile(BaseModel):
+    file: str = Field(min_length=1, max_length=120)
 
 
 class YoutubeBody(BaseModel):
@@ -250,7 +260,7 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
         return issues
 
     def summarize(ds: Path) -> dict[str, Any]:
-        counts = {"video": 0, "image": 0, "audio": 0}
+        counts = {"video": 0, "image": 0, "audio": 0, "text": 0}
         missing, size = 0, 0
         captions = {p.stem.casefold() for p in ds.iterdir() if p.suffix.lower() == ".txt"}
         for p in ds.iterdir():
@@ -262,6 +272,8 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
                 counts[k] += 1
                 if p.stem.casefold() not in captions:
                     missing += 1
+            elif llm_data.is_text_file(p):
+                counts["text"] += 1     # LLM training files (.jsonl/.json): no captions
         return {"name": ds.name, "counts": counts, "items": sum(counts.values()), "missing_captions": missing,
                 "size_mb": round(size / 1048576, 1), "has_metadata_csv": (ds / "metadata.csv").is_file()}
 
@@ -321,13 +333,51 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
             staged = [{"file": x.name, "info": probe(x), "mtime": int(x.stat().st_mtime), "size_mb": round(x.stat().st_size / 1048576, 1)}
                       for x in sorted(incoming.iterdir()) if x.is_file() and kind_of(x) == "video"] if incoming.is_dir() else []
             save_probes()
-            return {**summarize(ds), "items": items, "staged": staged,
+            text_files = [text_info(x) for x in sorted(ds.iterdir(), key=lambda x: x.name.casefold())
+                          if x.is_file() and llm_data.is_text_file(x)]
+            return {**summarize(ds), "items": items, "staged": staged, "text_files": text_files,
                     "originals": sorted(x.name for x in originals.iterdir()) if originals.is_dir() else []}
         result = await asyncio.to_thread(scan)
         if name not in warming:
             warming.add(name)
             asyncio.create_task(warm_thumbs(name, [it["file"] for it in result["items"] if it["kind"] == "video"]))
         return result
+
+    text_cache: dict[str, tuple[float, int, dict[str, Any]]] = {}
+
+    def text_info(path: Path) -> dict[str, Any]:
+        st = path.stat()
+        hit = text_cache.get(str(path))
+        if not hit or hit[:2] != (st.st_mtime, st.st_size):
+            hit = (st.st_mtime, st.st_size, llm_data.inspect(path))
+            text_cache[str(path)] = hit
+        return hit[2]
+
+    def text_plan(name: str, model: str) -> dict[str, Any]:
+        """LLM runs train on the dataset's .jsonl/.json files; media and captions in the folder are ignored."""
+        ds = ds_path(name)
+        included, excluded, warnings = [], [], []
+        records = 0
+        for p in sorted(ds.iterdir(), key=lambda x: x.name.casefold()):
+            if not (p.is_file() and llm_data.is_text_file(p)):
+                continue
+            info = text_info(p)
+            if info["error"] or not info["records"]:
+                why = info["error"] or ("no usable records: " + (info["problems"][0] if info["problems"] else "the file is empty"))
+                excluded.append({"file": p.name, "reason": why, "uncaptioned": False})
+                continue
+            included.append({"file": p.name, "kind": "text", "caption": "", "records": info["records"]})
+            records += info["records"]
+            if info["skipped"]:
+                warnings.append(f"{p.name}: {info['skipped']} record(s) skipped ({info['problems'][0]})")
+        media = sum(1 for p in ds.iterdir() if p.is_file() and kind_of(p))
+        if media:
+            warnings.append(f"{media} picture/clip/audio file(s) in this dataset are ignored: an LLM trains on .jsonl/.json text only.")
+        if not included and not excluded:
+            warnings.append("Add .jsonl or .json files: chat messages, ShareGPT, prompt/completion, Alpaca or {\"text\": …} records.")
+        return {"dataset": name, "model": model, "included": included, "excluded": excluded, "warnings": warnings,
+                "counts": {"video": 0, "image": 0, "audio": 0, "text": records}, "trigger_guess": "", "uncaptioned": 0,
+                "problems": excluded}
 
     def training_plan(name: str, model: str = "minimax_h3", trigger: str = "") -> dict[str, Any]:
         """What a training run on this dataset would actually use. Uncaptioned files and anything
@@ -341,6 +391,8 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
         leads: dict[str, int] = {}
         captioned = 0
         fam = families.get(model)
+        if fam and fam.media == frozenset({"text"}):
+            return text_plan(name, model)
         accepts = fam.media if fam else frozenset({"image", "video", "audio"})
         fam_title = fam.title if fam else model
         h3 = model == "minimax_h3"
@@ -414,7 +466,8 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
         dest.mkdir(parents=True)
         for it in plan["included"]:
             (dest / it["file"]).symlink_to(ds / it["file"])
-            (dest / f"{Path(it['file']).stem}.txt").write_text(it["caption"] + "\n", encoding="utf-8")
+            if it["kind"] != "text":
+                (dest / f"{Path(it['file']).stem}.txt").write_text(it["caption"] + "\n", encoding="utf-8")
         return len(plan["included"])
 
     router.training_plan = training_plan
@@ -562,6 +615,22 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
         give_back(ds)
         return {"changed": changed}
 
+    @router.post("/api/datasets/{name}/wipe-captions")
+    async def wipe_captions(name: str) -> dict[str, Any]:
+        """Delete every clip's caption. A copy goes to data/caption-backups/<dataset>-<time>/ first."""
+        ds = ds_path(name)
+        guard_busy(name)
+        guard_jobs(name, whole=True)
+        caps = {c for p in ds.iterdir() if p.is_file() and kind_of(p) and (c := caption_of(p)).is_file()}
+        backup = None
+        if caps:
+            backup = data_dir / "caption-backups" / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}"
+            backup.mkdir(parents=True, exist_ok=True)
+            for c in caps:
+                shutil.copy2(c, backup / c.name)
+                c.unlink(missing_ok=True)
+        return {"wiped": len(caps), "backup": str(backup.relative_to(data_dir)) if backup else None}
+
     @router.delete("/api/datasets/{name}/items/{filename}")
     async def delete_item(name: str, filename: str) -> dict[str, Any]:
         ds = ds_path(name)
@@ -584,7 +653,7 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
         guard_busy(name)
         safe = re.sub(r"[^A-Za-z0-9._ -]+", "_", Path(filename).name).strip(" .")
         if not safe or Path(safe).suffix.lower() not in UPLOAD_TYPES:
-            raise HTTPException(415, "Upload videos (.mp4 .mov .webm .mkv), images (.jpg .png .webp), audio, or .txt captions.")
+            raise HTTPException(415, "Upload videos (.mp4 .mov .webm .mkv), images (.jpg .png .webp), audio, .txt captions, or .jsonl/.json LLM data.")
         if not (0 <= offset <= total <= 8 * 1024**3):
             raise HTTPException(400, "Invalid upload range.")
         staged = staged and kind_of(Path(safe)) == "video"
@@ -620,6 +689,194 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
             give_back(ds)
             return {"done": True, "file": final.name, "staged": staged}
         return {"done": False, "received": size}
+
+    # ---- LLM text data: create, browse/edit records of a .jsonl, import other text formats ----
+    def text_file(ds: Path, filename: str, editable: bool = False) -> Path:
+        path = item_path(ds, filename)
+        if not (path.is_file() and llm_data.is_text_file(path)):
+            raise HTTPException(404, "Text file not found.")
+        if editable and path.suffix.lower() != ".jsonl":
+            raise HTTPException(409, "Only .jsonl files can be edited here; convert this .json to .jsonl first.")
+        return path
+
+    def free_text_name(ds: Path, stem: str) -> Path:
+        stem = re.sub(r"[^A-Za-z0-9._ -]+", "_", stem).strip(" ._") or "data"
+        cand, n = ds / f"{stem}.jsonl", 2
+        while cand.exists():
+            cand = ds / f"{stem}_{n}.jsonl"; n += 1
+        return cand
+
+    def stamp(path: Path) -> str:
+        return str(path.stat().st_mtime_ns)
+
+    def check_mtime(path: Path, mtime: str | None) -> None:
+        if mtime and stamp(path) != mtime:
+            raise HTTPException(409, "This file changed since you opened it (another tab or an import). Reload it and try again.")
+
+    def edit_lines(path: Path) -> list[Any]:
+        try:
+            return llm_data.load_lines(path)
+        except ValueError as exc:
+            raise HTTPException(413, f"{path.name}: {exc}.")
+
+    def clean_record(record: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return llm_data.clean_for_save(record)
+        except ValueError as exc:
+            raise HTTPException(422, f"The trainer would skip this record: {exc}.")
+
+    @router.post("/api/datasets/{name}/text", status_code=201)
+    async def new_text_file(name: str, body: NewTextFile) -> dict[str, Any]:
+        """An empty .jsonl to write examples into by hand."""
+        ds = ds_path(name)
+        guard_busy(name)
+        path = free_text_name(ds, Path(body.file).stem if body.file.lower().endswith((".jsonl", ".json")) else body.file)
+        path.write_text("", encoding="utf-8")
+        give_back(path)
+        return {"file": path.name}
+
+    @router.get("/api/datasets/{name}/text/{filename}/records")
+    async def text_records(name: str, filename: str, offset: int = 0, limit: int = 20, q: str = "") -> dict[str, Any]:
+        """One page of records, normalized for the editor; records the trainer skips come back raw with the reason."""
+        path = text_file(ds_path(name), filename)
+        limit = max(1, min(limit, 100))
+
+        editable = path.suffix.lower() == ".jsonl" and path.stat().st_size <= llm_data.EDIT_MAX_BYTES
+
+        def page():
+            if editable:
+                rows = list(enumerate(edit_lines(path)))
+            else:                                   # .json arrays and big .jsonl files: read-only view
+                rows = [(n - 1, raw) for n, raw in llm_data._raw_records(path)]
+            needle = q.casefold().strip()
+            if needle:
+                rows = [(i, r) for i, r in rows if needle in (r if isinstance(r, str) else json.dumps(r, ensure_ascii=False)).casefold()]
+            out = []
+            for i, raw in rows[max(0, offset):max(0, offset) + limit]:
+                rec, why = (None, "invalid JSON") if isinstance(raw, (str, Exception)) else llm_data.normalize(raw)
+                item: dict[str, Any] = {"index": i, "format": why if rec else "", "problem": "" if rec else why}
+                if rec:
+                    item.update(record=rec, tokens=llm_data.est_tokens(rec), order=llm_data.order_problem(rec))
+                else:
+                    item["raw"] = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, indent=1)[:20000]
+                out.append(item)
+            return {"file": path.name, "total": len(rows), "offset": offset, "records": out,
+                    "editable": editable, "mtime": stamp(path)}
+        return await asyncio.to_thread(page)
+
+    @router.put("/api/datasets/{name}/text/{filename}/records/{index}")
+    async def put_text_record(name: str, filename: str, index: int, body: TextRecordBody) -> dict[str, Any]:
+        guard_busy(name)
+        path = text_file(ds_path(name), filename, editable=True)
+        check_mtime(path, body.mtime)
+        rec = clean_record(body.record)
+        lines = edit_lines(path)
+        if not 0 <= index < len(lines):
+            raise HTTPException(404, "That record no longer exists; reload the file.")
+        lines[index] = rec
+        llm_data.write_lines(path, lines)
+        return {"index": index, "record": rec, "tokens": llm_data.est_tokens(rec), "order": llm_data.order_problem(rec),
+                "mtime": stamp(path)}
+
+    @router.post("/api/datasets/{name}/text/{filename}/records", status_code=201)
+    async def add_text_record(name: str, filename: str, body: TextRecordBody) -> dict[str, Any]:
+        guard_busy(name)
+        path = text_file(ds_path(name), filename, editable=True)
+        check_mtime(path, body.mtime)
+        rec = clean_record(body.record)
+        lines = edit_lines(path)
+        lines.append(rec)
+        llm_data.write_lines(path, lines)
+        return {"index": len(lines) - 1, "record": rec, "tokens": llm_data.est_tokens(rec), "order": llm_data.order_problem(rec),
+                "total": len(lines), "mtime": stamp(path)}
+
+    @router.delete("/api/datasets/{name}/text/{filename}/records/{index}")
+    async def delete_text_record(name: str, filename: str, index: int, mtime: str | None = None) -> dict[str, Any]:
+        guard_busy(name)
+        path = text_file(ds_path(name), filename, editable=True)
+        check_mtime(path, mtime)
+        lines = edit_lines(path)
+        if not 0 <= index < len(lines):
+            raise HTTPException(404, "That record no longer exists; reload the file.")
+        del lines[index]
+        llm_data.write_lines(path, lines)
+        return {"deleted": index, "total": len(lines), "mtime": stamp(path)}
+
+    @router.post("/api/datasets/{name}/text/{filename}/dedupe")
+    async def dedupe_text(name: str, filename: str) -> dict[str, Any]:
+        """Drop exact duplicate records (after normalizing), keeping the first of each."""
+        guard_busy(name)
+        path = text_file(ds_path(name), filename, editable=True)
+        lines, seen, keep = edit_lines(path), set(), []
+        for raw in lines:
+            rec = None if isinstance(raw, str) else llm_data.normalize(raw)[0]
+            key = llm_data._key(rec) if rec else None
+            if key and key in seen:
+                continue
+            seen.add(key)
+            keep.append(raw)
+        llm_data.write_lines(path, keep)
+        return {"removed": len(lines) - len(keep), "total": len(keep)}
+
+    @router.post("/api/datasets/{name}/text/{filename}/to-jsonl")
+    async def json_to_jsonl(name: str, filename: str) -> dict[str, Any]:
+        """Rewrite a .json array file as .jsonl (normalized records) so it can be edited; the .json is removed."""
+        guard_busy(name)
+        ds = ds_path(name)
+        src = text_file(ds, filename)
+        if src.suffix.lower() != ".json":
+            raise HTTPException(409, "Already a .jsonl file.")
+        recs, report = await asyncio.to_thread(llm_data.import_records, src)
+        if not recs:
+            raise HTTPException(422, "No usable records to keep: " + (report["problems"][0] if report["problems"] else "the file is empty"))
+        dest = free_text_name(ds, src.stem)
+        await asyncio.to_thread(llm_data.write_lines, dest, recs)
+        give_back(dest)
+        src.unlink()
+        return {"file": dest.name, **report}
+
+    @router.post("/api/datasets/{name}/text-import")
+    async def import_text_chunk(name: str, request: Request, filename: str, offset: int, total: int, mode: str = "paragraphs") -> dict[str, Any]:
+        """Chunked upload (same protocol as /upload) of .txt/.md/.csv/.tsv/.parquet/.jsonl/.json that is
+        converted to a normalized .jsonl when the last chunk arrives."""
+        ds = ds_path(name)
+        guard_busy(name)
+        safe = re.sub(r"[^A-Za-z0-9._ -]+", "_", Path(filename).name).strip(" .")
+        if not safe or Path(safe).suffix.lower() not in llm_data.IMPORT_EXTS:
+            raise HTTPException(415, "Import .txt/.md (plain text), .csv/.tsv/.parquet tables, or .jsonl/.json records.")
+        if mode not in ("paragraphs", "whole", "blank3"):
+            raise HTTPException(422, "Unknown split mode.")
+        if not (0 <= offset <= total <= llm_data.MAX_BYTES):
+            raise HTTPException(400, "Invalid upload range (text imports are limited to 2 GB).")
+        part = ds / ".uploads" / (safe + ".import.part")
+        part.parent.mkdir(exist_ok=True)
+        if offset == 0:
+            part.unlink(missing_ok=True)
+        elif not part.is_file() or part.stat().st_size != offset:
+            raise HTTPException(409, "Upload out of order; start the file again.")
+        with part.open("ab") as fh:
+            async for chunk in request.stream():
+                fh.write(chunk)
+        size = part.stat().st_size
+        if size > total:
+            part.unlink(missing_ok=True)
+            raise HTTPException(400, "Upload larger than declared.")
+        if size < total:
+            return {"done": False, "received": size}
+        src = part.with_name(safe)          # the importer picks the reader by extension
+        part.rename(src)
+        try:
+            recs, report = await asyncio.to_thread(llm_data.import_records, src, mode)
+        except (ValueError, OSError, UnicodeError) as exc:
+            raise HTTPException(422, f"Could not read {safe}: {exc}"[:300])
+        finally:
+            src.unlink(missing_ok=True)
+        if not recs:
+            raise HTTPException(422, f"No usable records in {safe}: " + (report["problems"][0] if report["problems"] else "it is empty"))
+        dest = free_text_name(ds, Path(safe).stem)
+        await asyncio.to_thread(llm_data.write_lines, dest, recs)
+        give_back(dest)
+        return {"done": True, "file": dest.name, **report}
 
     @router.post("/api/datasets/{name}/convert/{filename}")
     async def convert_h3(name: str, filename: str) -> dict[str, Any]:
@@ -660,7 +917,8 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
         keep = ds / ORIGINALS
         keep.mkdir(exist_ok=True)
         cap = caption_of(src)
-        shutil.move(str(src), keep / src.name)
+        archived = free_media_name(keep, src.name)    # never replace an earlier original of the same name
+        shutil.move(str(src), archived)
         dest = src.with_suffix(".mp4")
         if dest.exists() or any(p != src and p.is_file() and kind_of(p) and p.stem.casefold() == src.stem.casefold() for p in ds.iterdir()):
             dest = free_media_name(ds, dest.name)
@@ -668,7 +926,7 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
         if cap.is_file() and cap != dest.with_suffix(".txt"):
             cap.rename(dest.with_suffix(".txt"))
         give_back(ds)
-        return {"file": dest.name, "frames": n, "size": f"{tw}x{th}", "original": f"{ORIGINALS}/{src.name}"}
+        return {"file": dest.name, "frames": n, "size": f"{tw}x{th}", "original": f"{ORIGINALS}/{archived.name}"}
 
     def _stem(text: str) -> str:
         return (re.sub(r"[^A-Za-z0-9_-]+", "_", text).strip("_-") or "clip")[:60]

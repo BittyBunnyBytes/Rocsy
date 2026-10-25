@@ -130,6 +130,12 @@ class PreviewRequest(BaseModel):
     guide: str = Field(default="", max_length=4000)
 
 
+class PromptRequest(BaseModel):
+    brief: str = Field(min_length=1, max_length=12000)
+    settings: dict[str, Any] = Field(default_factory=dict)
+    purpose: str = Field(default="", max_length=60)
+
+
 # ── persistence ──────────────────────────────────────────────────────────────
 
 def load() -> None:
@@ -412,12 +418,13 @@ async def provider_is_local(model: str) -> bool:
 
 
 async def hermes(system: str, user: str, image_url: str = "", model: str = "", row: dict | None = None,
-                 purpose: str = "planning") -> dict[str, Any]:
-    """One Hermes call inside its own GPU turn, streamed into the session log."""
+                 purpose: str = "planning", hs: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One Hermes call inside its own GPU turn, streamed into the session log. `hs` overrides the
+    session's settings (calls without a session, e.g. write_prompt)."""
     content: Any = user
     if image_url:
         content = [{"type": "text", "text": user}, {"type": "image_url", "image_url": {"url": image_url}}]
-    hs = (row or {}).get("hermes") or default_settings((row or {}).get("studio") or "image")
+    hs = hs or (row or {}).get("hermes") or default_settings((row or {}).get("studio") or "image")
     model = model or hs.get("model") or MODEL
     payload = chat_payload(hs, [{"role": "system", "content": system}, {"role": "user", "content": content}], model)
     cli = model.startswith("cli:")
@@ -643,6 +650,27 @@ async def preview(studio: str, body: PreviewRequest) -> dict[str, Any]:
                 {"role": "user", "content": plan_input(row)}]
     return {"messages": messages, "characters": sum(len(m["content"]) for m in messages),
             "model": model_key(studio, settings)}
+
+
+WRITE_PROMPT_SYSTEM = (
+    "You write exactly ONE prompt for a single generation in this studio; another program runs it unchanged, "
+    "so do not plan several renders, ask questions or add commentary. Follow the model guide's prompt format. "
+    'Reply with JSON only: {"prompt": "<the prompt>"}.')
+
+
+async def write_prompt(studio: str, body: PromptRequest) -> dict[str, Any]:
+    """One prompt from the studio's agentic model and its model guide, for callers that run the render
+    themselves (the Trainer's epoch tests). Uses the studio's saved Hermes settings."""
+    hs = dict(SETTINGS[studio])
+    key = str(body.settings.get(MODEL_FIELD[studio]) or "")
+    system = WRITE_PROMPT_SYSTEM
+    if key in MODEL_LABELS[studio] and hs.get("use_model_guide", True) and (text := guide_text(studio, key)):
+        system += f"\n\nMODEL GUIDE — the studio has {MODEL_LABELS[studio][key]} loaded:\n<<<\n{text}\n>>>"
+    result = await hermes(system, body.brief, purpose=body.purpose or "prompt", hs=hs)
+    prompt = str(result.get("prompt") or "").strip()
+    if not prompt:
+        raise ValueError("Hermes returned no prompt")
+    return {"prompt": prompt, "model": hs.get("model") or MODEL, "guide": key if key in MODEL_LABELS[studio] else ""}
 
 
 async def studio_call(studio: str, method: str, path: str, payload: dict | None = None) -> dict:

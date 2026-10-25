@@ -327,6 +327,18 @@ function characterCard(voice) {
   const use = el('button', 'primary-button use-button', 'Use voice');
   use.type = 'button';
   use.addEventListener('click', () => useVoice(voice.id));
+  const download = el('a', 'secondary-button character-icon-action');
+  download.href = voice.reference + '/download';
+  download.download = `${voice.id}-sample.wav`;
+  download.title = `Download ${voice.name}'s reference sample`;
+  download.setAttribute('aria-label', download.title);
+  download.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 17v3h16v-3"/></svg>';
+  const edit = el('button', 'secondary-button character-icon-action');
+  edit.type = 'button';
+  edit.title = `Edit ${voice.name}`;
+  edit.setAttribute('aria-label', edit.title);
+  edit.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="m4 16 11-11 4 4L8 20H4zM13 7l4 4"/></svg>';
+  edit.addEventListener('click', () => openCharacterEditor(voice.id));
   const remove = el('button', 'secondary-button icon-danger');
   remove.type = 'button';
   remove.title = `Delete ${voice.name}`;
@@ -345,7 +357,7 @@ function characterCard(voice) {
       setStatus(error.message, 'error');
     }
   });
-  actions.append(play, use, remove);
+  actions.append(play, use, download, edit, remove);
   body.append(actions);
   card.append(art, body);
   return card;
@@ -375,6 +387,49 @@ function renderCharacters() {
   $('character-grid').replaceChildren(...shown.map(characterCard));
 }
 $('character-search').addEventListener('input', renderCharacters);
+
+function openCharacterEditor(id) {
+  const voice = voices.find(item => item.id === id);
+  if (!voice) return;
+  const form = $('character-edit-form');
+  form.reset();
+  form.dataset.voice = id;
+  $('edit-name').value = voice.name;
+  $('edit-category').value = voice.category || '';
+  $('edit-icon').value = voice.icon || '';
+  $('edit-summary').value = voice.summary || '';
+  $('edit-transcript').value = voice.transcript_text || '';
+  $('edit-remove-portrait').disabled = !voice.portrait;
+  $('character-edit-status').textContent = '';
+  $('character-editor').showModal();
+  $('edit-name').focus();
+}
+
+$('character-edit-cancel').addEventListener('click', () => $('character-editor').close());
+$('edit-portrait').addEventListener('change', () => {
+  if ($('edit-portrait').files.length) $('edit-remove-portrait').checked = false;
+});
+$('edit-remove-portrait').addEventListener('change', () => {
+  if ($('edit-remove-portrait').checked) $('edit-portrait').value = '';
+});
+$('character-edit-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const save = $('character-edit-save');
+  save.disabled = true;
+  $('character-edit-status').textContent = 'Saving…';
+  try {
+    const data = await api('voices/' + encodeURIComponent(form.dataset.voice),
+      {method: 'PATCH', body: new FormData(form)});
+    $('character-editor').close();
+    await refresh(false);
+    setStatus(`${data.voice.name} updated.`, 'success');
+  } catch (error) {
+    $('character-edit-status').textContent = error.message;
+  } finally {
+    save.disabled = false;
+  }
+});
 
 function update() {
   const selected = engines.find(item => item.id === $('engine').value);

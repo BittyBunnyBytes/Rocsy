@@ -573,8 +573,8 @@ function pushCompletionAlert(job) {
   const options = {
     body: `${job.model_label || "Video"} · ${job.mode_label || "Generation"}\n${String(job.prompt || "Completed successfully").slice(0, 140)}`,
     tag: `h3-job-${job.id}`,
-    icon: `${API_BASE}/static/icons/icon-192.png`,
-    badge: `${API_BASE}/static/icons/badge-96.png`,
+    icon: `${API_BASE}/static/icons/video-192.png`,
+    badge: `${API_BASE}/static/icons/video-badge-96.png`,
     data: { url: `${API_BASE}/?job=${job.id}` },
   };
   try {
@@ -6137,9 +6137,8 @@ async function refreshAgenticQueue() {
       const minutes = Math.max(0, Math.floor((Date.now() / 1000 - job.created_at) / 60));
       item.innerHTML = `<span class="agentic-queue-index">${index + 1}</span>`
         + `<span class="agentic-queue-main"><span class="agentic-queue-prompt"></span><small><span class="agentic-queue-state">${escapeHtml(AGENTIC_QUEUE_LABELS[job.state] || job.state.replaceAll("_", " "))}</span> · ${minutes ? `${minutes} min ago` : "just now"} · ${escapeHtml(job.session_id.slice(-8))}</small></span>`
-        + `<span class="agentic-queue-buttons"><button type="button" class="secondary-button" data-queue-action="watch">${job.id === activeAgenticRunJobId ? "Watching" : "Watch"}</button><button type="button" class="secondary-button danger" data-queue-action="stop">Stop</button></span>`;
+        + `<span class="agentic-queue-buttons"><button type="button" class="secondary-button" data-queue-action="watch" title="Open this run's live Hermes log">Watch</button><button type="button" class="secondary-button danger" data-queue-action="stop">Stop</button></span>`;
       $(".agentic-queue-prompt", item).textContent = job.prompt_preview || "(no prompt)";
-      $('[data-queue-action="watch"]', item).disabled = job.id === activeAgenticRunJobId;
       item.dataset.jobId = job.id;
       item.dataset.sessionId = job.session_id;
       return item;
@@ -6165,6 +6164,10 @@ $("#agentic-queue-list").addEventListener("click", async (event) => {
     await adoptAgenticSession({id: item.dataset.sessionId, kind: "resumed"});
     agenticFocusDismissed = false;
     showAgenticResume();
+    // Watch = see what Hermes is doing in that run: its live log, pinned until "Latest run" is picked again.
+    enhanceLogJobId = item.dataset.jobId; enhanceLogPinned = true; enhanceLogRenderedCount = -1; enhanceLogFollow = true;
+    setView("enhance");
+    refreshEnhancementLog();
   } else {
     try {
       await Api.request(`${API_BASE}/api/enhancement/jobs/${encodeURIComponent(item.dataset.jobId)}/cancel`, {method: "POST"});
@@ -8481,6 +8484,7 @@ function loadSettingsView() {
 let enhanceSaveTimer = null;
 let enhanceLoaded = false;
 let enhanceLogJobId = null;
+let enhanceLogPinned = false; // the reader picked a run (or pressed Watch); otherwise the log follows the run that's working
 let enhanceLogRenderedId = null;
 let enhanceLogRenderedCount = -1;
 let enhanceLogRenderedPhase = null;
@@ -8648,14 +8652,19 @@ async function refreshEnhancementLog() {
   try {
     const { jobs } = await Api.request(`${API_BASE}/api/enhancement/jobs`, { cache: "no-store" });
     const picker = $("#enhance-log-job");
-    const selected = enhanceLogJobId && jobs.some((job) => job.id === enhanceLogJobId)
-      ? enhanceLogJobId : (jobs[0]?.id || "");
-    if (picker.options.length !== jobs.length || picker.value !== selected) {
-      picker.replaceChildren(...(jobs.length ? jobs.map((job) => {
+    // Unpinned, show the run Hermes is working on right now (newest first), else the newest active one, else the newest:
+    // a finished or approval-waiting run used to stay on screen while a newer run logged out of sight.
+    const working = jobs.find((job) => AGENTIC_ACTIVE_STATES.has(job.state) && !["waiting_for_gpu", "awaiting_approval"].includes(job.state))
+      || jobs.find((job) => AGENTIC_ACTIVE_STATES.has(job.state)) || jobs[0];
+    if (enhanceLogPinned && !jobs.some((job) => job.id === enhanceLogJobId)) enhanceLogPinned = false;
+    const selected = enhanceLogPinned ? enhanceLogJobId : (working?.id || "");
+    const pickerValue = enhanceLogPinned ? selected : "auto";
+    if (picker.options.length !== jobs.length + 1 || picker.value !== pickerValue) {
+      picker.replaceChildren(new Option(jobs.length ? "Latest run (follows automatically)" : "No recent sessions", "auto"), ...jobs.map((job) => {
         const time = new Date(job.created_at * 1000).toLocaleTimeString();
         return new Option(`${time} · ${job.model} · ${job.prompt_preview}`, job.id);
-      }) : [new Option("No recent sessions", "")]));
-      picker.value = selected;
+      }));
+      picker.value = pickerValue;
     }
     enhanceLogJobId = selected;
     $("#enhance-steer-input").disabled = $("#enhance-steer-send").disabled = !selected;
@@ -8677,7 +8686,11 @@ async function refreshEnhancementLog() {
     $("#enhance-log-foot").textContent = `${job.model}  │  ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")} elapsed  │  ${["complete", "failed", "cancelled"].includes(job.state) ? job.state : job.phase || job.state.replaceAll("_", " ")}`;
     if (enhanceLogRenderedId === selected && enhanceLogRenderedCount === job.log.length &&
         enhanceLogRenderedState === job.state && enhanceLogRenderedRevision === (job.log_revision || 0) &&
-        enhanceLogRenderedPhase === job.phase) return;
+        enhanceLogRenderedPhase === job.phase) {
+      // Nothing new, but the panel may have been hidden (display:none drops its scroll position): back to the end.
+      if (enhanceLogFollow) $("#enhance-log-body").scrollTop = $("#enhance-log-body").scrollHeight;
+      return;
+    }
     const body = $("#enhance-log-body");
     if (enhanceLogRenderedId !== selected) { body.replaceChildren(); enhanceLogFollow = true; }
     // Update rows in place (streamed rows grow) and append new ones, so a reader scrolled
@@ -8827,7 +8840,9 @@ function bindEnhancement() {
     enhanceLogFollow = logBody.scrollTop + logBody.clientHeight >= logBody.scrollHeight - 8;
   }, { passive: true });
   $("#enhance-log-job").addEventListener("change", (event) => {
-    enhanceLogJobId = event.target.value; enhanceLogRenderedCount = -1; refreshEnhancementLog();
+    enhanceLogPinned = event.target.value !== "auto";
+    if (enhanceLogPinned) enhanceLogJobId = event.target.value;
+    enhanceLogRenderedCount = -1; refreshEnhancementLog();
   });
   setInterval(() => { if (document.body.dataset.view === "enhance") refreshEnhancementLog(); }, 2000);
   $("#enhance-log-cancel").addEventListener("click", async () => {

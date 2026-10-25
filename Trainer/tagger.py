@@ -265,6 +265,46 @@ def clean_caption(text: str, trigger: str, style: str) -> str:
     return text.strip()
 
 
+def frames_b64(path: Path, duration: float, count: int = 8) -> list[tuple[float, str]]:
+    """(timestamp, data URL) pairs. Videos: `count` frames evenly spaced from 4% to 96% of the clip,
+    so the model can follow motion; more frames are sent smaller to keep the prompt size steady."""
+    if path.suffix.lower() in IMAGE:
+        # Images: scaled on the GPU to at most 1280 px (never up) and sent as JPEG; the original
+        # bytes are the fallback for JPEG/PNG/WebP if VAAPI can't take the file.
+        cmd = ["ffmpeg", "-loglevel", "error", "-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-filter_hw_device", "va",
+               "-i", str(path), "-frames:v", "1",
+               "-vf", "format=nv12,hwupload,scale_vaapi=w=min(iw\\,1280):h=min(ih\\,1280):force_original_aspect_ratio=decrease,hwdownload,format=nv12",
+               "-f", "image2", "-c:v", "mjpeg", "-q:v", "3", "pipe:1"]
+        with suppress(Exception):
+            proc = subprocess.run(cmd, capture_output=True, timeout=60)
+            if proc.returncode == 0 and proc.stdout:
+                return [(0.0, "data:image/jpeg;base64," + base64.b64encode(proc.stdout).decode())]
+        mime = {".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png", ".webp": "webp"}.get(path.suffix.lower())
+        return [(0.0, f"data:image/{mime};base64," + base64.b64encode(path.read_bytes()).decode())] if mime else []
+    count = max(1, count) if duration else 1
+    times = [duration * (0.04 + 0.92 * i / (count - 1)) for i in range(count)] if count > 1 else [duration * 0.5]
+    width = 640 if count <= 8 else 512 if count <= 16 else 448
+
+    def grab(t: float) -> tuple[float, str] | None:
+        cmd = ["ffmpeg", "-loglevel", "error", *VAAPI, "-ss", f"{max(0.0, t):.3f}", "-i", str(path), "-frames:v", "1",
+               "-vf", f"scale_vaapi=w={width}:h=-2,hwdownload,format=nv12", "-f", "image2", "-c:v", "mjpeg", "-q:v", "4", "pipe:1"]
+        proc = subprocess.run(cmd, capture_output=True, timeout=60)
+        if proc.returncode == 0 and proc.stdout:
+            return (t, "data:image/jpeg;base64," + base64.b64encode(proc.stdout).decode())
+        return None
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        return [f for f in pool.map(grab, times) if f]
+
+
+def duration_of(path: Path) -> float:
+    with suppress(Exception):
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                             capture_output=True, text=True, timeout=20).stdout
+        return float(out.strip())
+    return 0.0
+
+
 def build_router(prefix: str, dataset_root: Path, data_dir: Path,
                  queue_request: Callable[..., Awaitable[httpx.Response]], give_back: Callable[[Path], None]):
     router = APIRouter(prefix=prefix)
@@ -279,44 +319,6 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path,
         with suppress(OSError, ValueError):
             base.update({k: v for k, v in json.loads(settings_file.read_text(encoding="utf-8")).items() if v})
         return base
-
-    def frames_b64(path: Path, duration: float, count: int = 8) -> list[tuple[float, str]]:
-        """(timestamp, data URL) pairs. Videos: `count` frames evenly spaced from 4% to 96% of the clip,
-        so the model can follow motion; more frames are sent smaller to keep the prompt size steady."""
-        if path.suffix.lower() in IMAGE:
-            # Images: scaled on the GPU to at most 1280 px (never up) and sent as JPEG; the original
-            # bytes are the fallback for JPEG/PNG/WebP if VAAPI can't take the file.
-            cmd = ["ffmpeg", "-loglevel", "error", "-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-filter_hw_device", "va",
-                   "-i", str(path), "-frames:v", "1",
-                   "-vf", "format=nv12,hwupload,scale_vaapi=w=min(iw\\,1280):h=min(ih\\,1280):force_original_aspect_ratio=decrease,hwdownload,format=nv12",
-                   "-f", "image2", "-c:v", "mjpeg", "-q:v", "3", "pipe:1"]
-            with suppress(Exception):
-                proc = subprocess.run(cmd, capture_output=True, timeout=60)
-                if proc.returncode == 0 and proc.stdout:
-                    return [(0.0, "data:image/jpeg;base64," + base64.b64encode(proc.stdout).decode())]
-            mime = {".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png", ".webp": "webp"}.get(path.suffix.lower())
-            return [(0.0, f"data:image/{mime};base64," + base64.b64encode(path.read_bytes()).decode())] if mime else []
-        count = max(1, count) if duration else 1
-        times = [duration * (0.04 + 0.92 * i / (count - 1)) for i in range(count)] if count > 1 else [duration * 0.5]
-        width = 640 if count <= 8 else 512 if count <= 16 else 448
-
-        def grab(t: float) -> tuple[float, str] | None:
-            cmd = ["ffmpeg", "-loglevel", "error", *VAAPI, "-ss", f"{max(0.0, t):.3f}", "-i", str(path), "-frames:v", "1",
-                   "-vf", f"scale_vaapi=w={width}:h=-2,hwdownload,format=nv12", "-f", "image2", "-c:v", "mjpeg", "-q:v", "4", "pipe:1"]
-            proc = subprocess.run(cmd, capture_output=True, timeout=60)
-            if proc.returncode == 0 and proc.stdout:
-                return (t, "data:image/jpeg;base64," + base64.b64encode(proc.stdout).decode())
-            return None
-
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            return [f for f in pool.map(grab, times) if f]
-
-    def duration_of(path: Path) -> float:
-        with suppress(Exception):
-            out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
-                                 capture_output=True, text=True, timeout=20).stdout
-            return float(out.strip())
-        return 0.0
 
     def ev(job: dict[str, Any], kind: str, text: str, **extra: Any) -> None:
         """Session log shown in the Hermes-style terminal pane (kinds: user, system, tool, assistant, ok, warn, error)."""

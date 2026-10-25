@@ -165,6 +165,18 @@
               <option value="-1">Until the GPU is needed</option>
             </select>
           </label>
+          <label class="bb-field" title="When a question from the Master Agent goes unanswered this long, it picks the answer it thinks is best, says which and why, and carries on">Answer its own questions if you don't
+            <select id="agent-auto-answer">
+              <option value="0">Never (wait for you)</option>
+              <option value="1">After 1 minute</option>
+              <option value="2">After 2 minutes</option>
+              <option value="5">After 5 minutes</option>
+              <option value="10">After 10 minutes</option>
+              <option value="15">After 15 minutes</option>
+              <option value="30">After 30 minutes</option>
+              <option value="60">After 1 hour</option>
+            </select>
+          </label>
         </div>
         <h3 class="bb-subhead">Defaults for new jobs</h3>
         <div class="bb-form-grid">

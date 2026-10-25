@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#0f1418">
   <title>Voice</title>
   <link rel="stylesheet" href="/Voice/static/h3-studio.css?v=7">
-  <link rel="stylesheet" href="/Voice/static/voice.css?v=11">
+  <link rel="stylesheet" href="/Voice/static/voice.css?v=13">
   <script defer src="/Voice/static/h3-studio.js?v=7"></script>
-  <script defer src="/Voice/static/voice.js?v=10"></script>
+  <script defer src="/Voice/static/voice.js?v=11"></script>
   <link rel="stylesheet" href="/Voice/static/agentic-ui.css?v=4">
   <script defer src="/Voice/static/agentic-ui.js?v=3"></script>
 </head>
@@ -239,5 +239,23 @@
       </form>
     </section>
   </main>
+
+  <dialog class="character-editor" id="character-editor" aria-labelledby="character-editor-title">
+    <form id="character-edit-form" class="character-edit-form">
+      <div class="character-editor-head"><h2 id="character-editor-title">Edit character</h2><button type="button" class="secondary-button" id="character-edit-cancel" aria-label="Close editor">Close</button></div>
+      <div class="field-pair">
+        <div class="field-row"><label for="edit-name">Name</label><input id="edit-name" name="name" required maxlength="100"></div>
+        <div class="field-row"><label for="edit-category">Category</label><input id="edit-category" name="category" maxlength="40" list="category-list"></div>
+      </div>
+      <div class="field-pair">
+        <div class="field-row"><label for="edit-icon">Emoji</label><input id="edit-icon" name="icon" maxlength="12"></div>
+        <div class="field-row"><label for="edit-portrait">Replace portrait</label><input id="edit-portrait" name="icon_image" type="file" accept="image/png,image/jpeg,image/webp"></div>
+      </div>
+      <label class="check"><input id="edit-remove-portrait" name="remove_portrait" type="checkbox" value="true"> Remove current portrait</label>
+      <div class="field-row"><label for="edit-summary">Summary</label><input id="edit-summary" name="summary" maxlength="500"></div>
+      <div class="field-row"><label for="edit-transcript">Exact words in the sample</label><textarea id="edit-transcript" name="transcript" rows="4" maxlength="10000"></textarea><span class="field-hint">Keep this matched to the saved recording for reliable voice cloning.</span></div>
+      <div class="character-editor-actions"><span id="character-edit-status" class="field-hint" role="status" aria-live="polite"></span><button type="submit" class="primary-button" id="character-edit-save">Save changes</button></div>
+    </form>
+  </dialog>
 </body>
 </html>

@@ -29,12 +29,13 @@ class LockClient:
         self.config = config
         self._headers = {"X-Queue-Internal-Secret": config.queue_internal_secret}
 
-    async def enqueue(self, app: str, job_id: str, label: str, is_continuous: bool = False) -> dict[str, Any] | None:
+    async def enqueue(self, app: str, job_id: str, label: str, is_continuous: bool = False,
+                      group: str | None = None) -> dict[str, Any] | None:
         try:
             async with httpx.AsyncClient(base_url=self.config.lock_url, timeout=ENQUEUE_REQUEST_TIMEOUT) as client:
                 response = await client.post(
                     "/enqueue",
-                    json={"app": app, "job_id": job_id, "label": label, "is_continuous": is_continuous},
+                    json={"app": app, "job_id": job_id, "label": label, "is_continuous": is_continuous, "group": group},
                     headers=self._headers,
                 )
                 if response.status_code >= 400:

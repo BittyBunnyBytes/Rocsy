@@ -78,6 +78,12 @@ KNOWN: dict[str, tuple[str, str, str, int, str]] = {
     'ltx-2.5-video-vae-conv-bf16.safetensors': ('Lightricks/LTX-2.5', 'vae/ltx-2.5-video-vae-conv-bf16.safetensors', 'vae', 1452269922, '****************************************************************'),
     'LTX23_audio_vae_bf16.safetensors': ('Kijai/LTX2.3_comfy', 'vae/LTX23_audio_vae_bf16.safetensors', 'vae', 364855188, '5bc10fa4adecf99dda132d916e23048cbd56797702c5fa50eb5d2079048a38c3'),
     'LTX23_video_vae_bf16.safetensors': ('Kijai/LTX2.3_comfy', 'vae/LTX23_video_vae_bf16.safetensors', 'vae', 1452258578, '01ea62d09bc139f95c5dee7b5c062ad6a3e6cd8be910a1983ac02e7eb5b8ee3b'),
+    # Video's H3 extras (2026-10-24): PDD Ref2V/FL2V 8-step LoRAs and the 3D latent upscaler
+    # (the H3 default name is LBH-123-AI's conv_v1 bf16 file, saved under that name).
+    'MiniMax-H3-FL2VA-Acc-8Step.safetensors': ('alibaba-pai/MiniMax-H3-Acc-LoRAs', 'MiniMax-H3-FL2VA-Acc-8Step.safetensors', 'loras', 1372450680, '0b29be7042d883970eb0c20774a9ba03d95669ed80a721bb4d21be8ea0d0a196'),
+    'MiniMax-H3-Ref2VA-Acc-8Step.safetensors': ('alibaba-pai/MiniMax-H3-Acc-LoRAs', 'MiniMax-H3-Ref2VA-Acc-8Step.safetensors', 'loras', 1372450680, '111c82e669f6e20e628228172edf39395f1a9fc3ad049793895e542c0f55b18c'),
+    'minimax_h3_latent_upscaler_3d_bf16.safetensors': ('LBH-123-AI/Minimax_h3_latent_Upscaler', 'minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors', 'latent_upscale_models', 690592992, '4f57821f5837f32f7142b67d815606dbd7550f194e5c769f7d6c3f83b146a5e6'),
+    'minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors': ('LBH-123-AI/Minimax_h3_latent_Upscaler', 'minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors', 'latent_upscale_models', 690592992, '4f57821f5837f32f7142b67d815606dbd7550f194e5c769f7d6c3f83b146a5e6'),
     'minimax_h3_audio_vae_fp32.safetensors': ('Comfy-Org/MiniMax-H3', 'vae/minimax_h3_audio_vae_fp32.safetensors', 'vae', 605254808, '8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48'),
     'minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors': ('Comfy-Org/MiniMax-H3', 'loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors', 'loras', 1956192992, 'c396a9a06f58399e9df9754b18299818d84a2ddd371724ba48fe4a41221437dc'),
     'minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors': ('Comfy-Org/MiniMax-H3', 'loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors', 'loras', 1956193000, '2339acdf19bfe123f46b971ea35d367a84adb85de43627e1eceafa5a5b2b111e'),

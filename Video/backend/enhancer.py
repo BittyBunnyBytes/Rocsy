@@ -1,6 +1,7 @@
 """Hermes prompt-refinement task sent to the local llama-swap service."""
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
@@ -368,3 +369,35 @@ async def unload() -> None:
             await client.get(LLAMA_URL + "/unload", headers=_headers())
     except httpx.HTTPError:
         pass
+
+
+async def loaded() -> list[str] | None:
+    """Models llama-swap has loaded right now; None when it can't be asked."""
+    try:
+        async with httpx.AsyncClient(timeout=6) as client:
+            response = await client.get(LLAMA_URL + "/running", headers=_headers())
+            response.raise_for_status()
+            return [str(m.get("model") or m.get("name") or "?") for m in response.json().get("running") or []]
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return None
+
+
+async def unload_settled(quiet: float = 4, limit: float = 90) -> tuple[bool, list[str]]:
+    """Unload and keep it unloaded for `quiet` seconds (a Master Agent's Hermes background review can
+    load it straight back). Returns (settled, every model that was found loaded)."""
+    seen: list[str] = []
+    await unload()
+    start = calm = time.monotonic()
+    while time.monotonic() - start < limit:
+        await asyncio.sleep(1)
+        models = await loaded()
+        if models is None:
+            return False, seen
+        if not models:
+            if time.monotonic() - calm >= quiet:
+                return True, seen
+            continue
+        seen += [m for m in models if m not in seen]
+        await unload()
+        calm = time.monotonic()
+    return False, seen

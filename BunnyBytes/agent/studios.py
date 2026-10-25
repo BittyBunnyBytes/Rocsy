@@ -44,7 +44,8 @@ class StudioError(Exception):
 async def _call(method: str, url: str, body: Any = None, timeout: float = 30) -> Any:
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.request(method, url, json=body)
+            # X-Rocsy-Agent: Vid keeps the chat model unloaded while the renders it queues for us run.
+            response = await client.request(method, url, json=body, headers={"X-Rocsy-Agent": "master"})
     except httpx.HTTPError as exc:
         raise StudioError(f"{url.split('/')[3]} is not reachable ({type(exc).__name__})") from exc
     try:
@@ -75,8 +76,12 @@ async def job(service: str, job_id: str) -> dict[str, Any]:
     return await _call("GET", f"{UP[service]}/api/jobs/{job_id}")
 
 
-async def cancel(service: str, job_id: str) -> Any:
-    return await _call("POST", f"{UP[service]}/api/jobs/{job_id}/cancel", {})
+async def cancel(service: str, job_id: str, timeout: float = 30) -> Any:
+    return await _call("POST", f"{UP[service]}/api/jobs/{job_id}/cancel", {}, timeout=timeout)
+
+
+async def queue_cancel(entry_id: str, timeout: float = 15) -> Any:
+    return await _call("POST", f"{UP['Queue']}/api/queue/{entry_id}/cancel", None, timeout=timeout)
 
 
 async def queue() -> list[dict[str, Any]]:
@@ -218,8 +223,8 @@ async def agentic_video(prompt: str, guide: str, duration: float | None, aspect:
     return await _call("POST", f"{UP['Vid']}/api/enhancement/agentic", body, timeout=90)
 
 
-async def agentic_cancel(run_id: str) -> Any:
-    return await _call("POST", f"{UP['Vid']}/api/enhancement/jobs/{run_id}/cancel", {})
+async def agentic_cancel(run_id: str, timeout: float = 30) -> Any:
+    return await _call("POST", f"{UP['Vid']}/api/enhancement/jobs/{run_id}/cancel", {}, timeout=timeout)
 
 
 async def agentic_stage_decision(session_id: str, run_id: str, action: str, notes: str = "") -> dict[str, Any]:

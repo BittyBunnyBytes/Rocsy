@@ -131,8 +131,9 @@ def _summary(version: dict[str, Any]) -> dict[str, Any]:
                                         "changed_files", "skipped")}
 
 
-def _snapshot(info: dict[str, Any], label: str, kind: str) -> tuple[dict[str, Any] | None, dict[str, list]]:
-    """Save the folder as a new version, unless it matches the newest one. Caller holds the lock."""
+def _snapshot(info: dict[str, Any], label: str, kind: str, prune: bool = True) -> tuple[dict[str, Any] | None, dict[str, list]]:
+    """Save the folder as a new version, unless it matches the newest one. Caller holds the lock.
+    prune=False keeps every version (and its objects) for now; the caller prunes later."""
     root = _root(info)
     home = _dir(info)
     index = _index(info)
@@ -165,7 +166,8 @@ def _snapshot(info: dict[str, Any], label: str, kind: str) -> tuple[dict[str, An
         version["id"] = f"{int(last['id'], 16) + 1:x}"
     _write_json(home / "versions" / f"{version['id']}.json", {"files": manifest})
     index["versions"].append(version)
-    _prune(home, index)
+    if prune:
+        _prune(home, index)
     _write_json(home / "index.json", index)
     return version, manifest
 
@@ -231,35 +233,47 @@ def restore(info: dict[str, Any], version_id: str) -> dict[str, Any]:
             raise HTTPException(404, "That version is gone (it was pruned or the history was reset)")
         wanted = _manifest(info, version_id)
         when = time.strftime("%b %d, %H:%M", time.localtime(target["t"]))
-        _, current = _snapshot(info, f"Before restoring “{target['label']}” ({when})", "safety")
-        root = _root(info).resolve()
-        objects = _dir(info) / "objects"
-        missing = [rel for rel, x in wanted.items() if not (objects / x[0][:2] / x[0]).exists()]
-        if missing:
-            raise HTTPException(409, f"This version can't be restored: {len(missing)} of its files are missing from the history store")
-        for rel in [*current, *wanted]:         # check every path first, so a refusal changes nothing
-            _safe_path(root, rel)
-        for rel in current:
-            if rel not in wanted:
-                _safe_path(root, rel).unlink(missing_ok=True)
-        for rel, (sha, _size, mtime) in wanted.items():
-            if current.get(rel, [None])[0] == sha:
-                continue
-            path = _safe_path(root, rel)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            _safe_path(root, rel)               # recheck: mkdir must not have followed a planted symlink
-            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".restore-")
-            os.close(fd)
-            try:
-                shutil.copyfile(objects / sha[:2] / sha, tmp)
-                os.replace(tmp, path)
-                os.utime(path, ns=(mtime, mtime))
-            except BaseException:
-                Path(tmp).unlink(missing_ok=True)
-                raise
-        _drop_empty_dirs(root, wanted)
-        _snapshot(info, f"Restored “{target['label']}” ({when})", "restored")
+        # Don't prune yet: at the version limit that would delete the very version being restored.
+        _, current = _snapshot(info, f"Before restoring “{target['label']}” ({when})", "safety", prune=False)
+        try:
+            _restore_files(info, wanted, current)
+            _snapshot(info, f"Restored “{target['label']}” ({when})", "restored")
+        finally:
+            index = _index(info)
+            if len(index["versions"]) > MAX_VERSIONS:
+                _prune(_dir(info), index)
+                _write_json(_dir(info) / "index.json", index)
     return {**state(info), "restored": version_id}
+
+
+def _restore_files(info: dict[str, Any], wanted: dict[str, list], current: dict[str, list]) -> None:
+    """Make the project folder match `wanted` (a version manifest). Caller holds the lock."""
+    root = _root(info).resolve()
+    objects = _dir(info) / "objects"
+    missing = [rel for rel, x in wanted.items() if not (objects / x[0][:2] / x[0]).exists()]
+    if missing:
+        raise HTTPException(409, f"This version can't be restored: {len(missing)} of its files are missing from the history store")
+    for rel in [*current, *wanted]:         # check every path first, so a refusal changes nothing
+        _safe_path(root, rel)
+    for rel in current:
+        if rel not in wanted:
+            _safe_path(root, rel).unlink(missing_ok=True)
+    for rel, (sha, _size, mtime) in wanted.items():
+        if current.get(rel, [None])[0] == sha:
+            continue
+        path = _safe_path(root, rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _safe_path(root, rel)               # recheck: mkdir must not have followed a planted symlink
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".restore-")
+        os.close(fd)
+        try:
+            shutil.copyfile(objects / sha[:2] / sha, tmp)
+            os.replace(tmp, path)
+            os.utime(path, ns=(mtime, mtime))
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+    _drop_empty_dirs(root, wanted)
 
 
 def _safe_path(root: Path, rel: str) -> Path:

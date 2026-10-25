@@ -5,6 +5,7 @@ import contextlib
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from events import EventBroker
 from store import QueueStore
@@ -73,6 +74,10 @@ HERMES_API_KEY = os.getenv("HERMES_API_KEY", "")
 LLAMA_URL = os.getenv("LLAMA_URL", "http://127.0.0.1:8400").rstrip("/")
 LLAMA_API_KEY = os.getenv("LLAMA_API_KEY", "")
 HERMES_CHECK_INTERVAL_SECONDS = 10.0
+# Apps whose GET /api/jobs/{job_id} reports a render's progress.
+PROGRESS_APPS = {"Vid", "Krea", "Mus", "Trainer", "Voice"}
+PROGRESS_INTERVAL_SECONDS = 2.0
+PROGRESS_REQUEST_TIMEOUT = 3.0
 
 PREFIX = os.getenv("QUEUE_MOUNT_PREFIX", "").rstrip("/")
 
@@ -84,10 +89,16 @@ def p(path: str) -> str:
 store = QueueStore(BASE_DIR / "data" / "queue.sqlite3")
 events = EventBroker()
 hermes_card: dict[str, Any] | None = None
+# Render progress of the active entry, read from its own app's job API:
+# entry_id -> {"percent", "remaining_seconds", "stage"}.
+progress_by_entry: dict[str, dict[str, Any]] = {}
+no_progress_entries: set[str] = set()   # the app doesn't know the job (Hermes turns etc.): stop asking
 
 
 def _public_entries() -> list[dict[str, Any]]:
     entries = store.public_list()
+    for entry in entries:
+        entry["progress"] = progress_by_entry.get(entry["entry_id"])
     if not hermes_card:
         return entries
     # The Master Agent's turns are Hermes runs, so both cards show up together:
@@ -150,12 +161,89 @@ async def _hermes_card_loop() -> None:
         await asyncio.sleep(HERMES_CHECK_INTERVAL_SECONDS)
 
 
+def _seconds_since(value: Any) -> float | None:
+    try:
+        started = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+
+
+def _job_progress(app_name: str, job: dict[str, Any], became_active_at: str | None) -> dict[str, Any] | None:
+    """Normalise each app's job JSON to a percent + time left. Apps that give an
+    estimate (Video's per-settings render average, the Trainer's epoch clock)
+    use it; otherwise time left is extrapolated from the progress so far."""
+    remaining = None
+    stage = job.get("stage") if isinstance(job.get("stage"), str) else None
+    raw = job.get("progress")
+    if app_name == "Trainer" and isinstance(raw, dict):
+        percent = float(raw.get("overall") or 0) * 100
+        stage = raw.get("phase_label") or stage
+        timing = job.get("timing") if isinstance(job.get("timing"), dict) else {}
+        remaining = timing.get("remaining_seconds", raw.get("eta_seconds"))
+    elif isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        percent = float(raw)
+    else:
+        return None
+    percent = max(0.0, min(100.0, percent))
+    elapsed = _seconds_since(job.get("started_at") or became_active_at)
+    estimate = job.get("estimate") if isinstance(job.get("estimate"), dict) else {}
+    if remaining is None and estimate.get("seconds") and elapsed is not None and elapsed < estimate["seconds"]:
+        remaining = estimate["seconds"] - elapsed
+    if remaining is None and elapsed is not None and 3 <= percent < 100:
+        remaining = elapsed * (100 - percent) / percent
+    return {
+        "percent": round(percent, 1),
+        "remaining_seconds": round(remaining) if isinstance(remaining, (int, float)) else None,
+        "stage": stage[:60] if stage else None,
+    }
+
+
+async def _progress_loop() -> None:
+    """Every couple of seconds, ask the active entry's app how far its job is,
+    and send changes as a small "progress" event (not the whole queue)."""
+    async with httpx.AsyncClient(timeout=PROGRESS_REQUEST_TIMEOUT) as client:
+        while True:
+            try:
+                active = next((e for e in store.list_all() if e.state == "active"), None)
+                current = {active.entry_id} if active else set()
+                stale = set(progress_by_entry) - current
+                for entry_id in stale:
+                    progress_by_entry.pop(entry_id, None)
+                no_progress_entries.intersection_update(current)
+                changed = bool(stale)
+                if active and active.app in PROGRESS_APPS and active.entry_id not in no_progress_entries:
+                    response = await client.get(f"{APP_BASE_URLS[active.app]}/api/jobs/{active.job_id}")
+                    if response.status_code == 404:
+                        no_progress_entries.add(active.entry_id)
+                    elif response.status_code == 200:
+                        value = _job_progress(active.app, response.json(), active.became_active_at)
+                        if value != progress_by_entry.get(active.entry_id):
+                            if value is None:
+                                progress_by_entry.pop(active.entry_id, None)
+                            else:
+                                progress_by_entry[active.entry_id] = value
+                            changed = True
+                if changed:
+                    await events.publish("progress", {"progress": dict(progress_by_entry)})
+            except asyncio.CancelledError:
+                raise
+            except (httpx.HTTPError, ValueError):
+                pass   # the app is busy or restarting: keep the last known value
+            except Exception:
+                log.exception("Queue progress check failed")
+            await asyncio.sleep(PROGRESS_INTERVAL_SECONDS)
+
+
 class EnqueueRequest(BaseModel):
     app: str
     job_id: str
     label: str
     is_continuous: bool = False
     priority: bool = False   # front of the line (the Master Agent); locked entries keep their slots
+    group: str | None = Field(default=None, max_length=60)   # entries sharing a group show as one card on the queue page
 
 
 class HeartbeatRequest(BaseModel):
@@ -265,11 +353,15 @@ async def _reap_loop() -> None:
 async def lifespan(_: FastAPI):
     reaper = asyncio.create_task(_reap_loop())
     hermes_monitor = asyncio.create_task(_hermes_card_loop())
+    progress_monitor = asyncio.create_task(_progress_loop())
     try:
         yield
     finally:
         reaper.cancel()
         hermes_monitor.cancel()
+        progress_monitor.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await progress_monitor
         with contextlib.suppress(asyncio.CancelledError):
             await reaper
         with contextlib.suppress(asyncio.CancelledError):
@@ -294,7 +386,7 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 async def enqueue(request: EnqueueRequest, http_request: Request, x_queue_internal_secret: str | None = Header(default=None)) -> JSONResponse:
     _require_internal(http_request, x_queue_internal_secret)
     entry, promoted, position = store.enqueue(
-        request.app, request.job_id, request.label, request.is_continuous, LOCK_TTL_SECONDS, priority=request.priority,
+        request.app, request.job_id, request.label, request.is_continuous, LOCK_TTL_SECONDS, priority=request.priority, group=request.group,
     )
     if promoted:
         log.info("Queue entry %s (%s/%s) active immediately", entry.entry_id[:8], entry.app, entry.job_id[:8])

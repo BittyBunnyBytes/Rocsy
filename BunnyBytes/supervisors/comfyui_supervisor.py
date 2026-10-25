@@ -297,6 +297,29 @@ def _profile_gpus(profile: str) -> str:
     return MULTI_GPUS if profile in MULTI_GPU_PROFILES else PRIMARY_GPUS
 
 
+_FLASH: dict = {}
+
+
+def _launch_args(args: list[str]) -> list[str]:
+    """ComfyUI exits at start-up on --use-flash-attention without the flash-attn package, which a
+    fresh install only gets from Models -> Core Backend's build: drop the flag until it's there."""
+    if "--use-flash-attention" not in args:
+        return args
+    # Only "found" is remembered: a missing one is looked for again at every launch (a second),
+    # so a finished build is used on ComfyUI's next start without restarting this supervisor.
+    if not _FLASH.get("found"):
+        try:
+            found = subprocess.run([COMFY_PYTHON, "-c", "import importlib.util as u; raise SystemExit(not u.find_spec('flash_attn'))"],
+                                   capture_output=True, timeout=30).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            found = True  # can't tell: keep the profile as it is
+        _FLASH["found"] = found
+        if not found:
+            log.warning("flash-attn isn't installed in %s; starting ComfyUI without --use-flash-attention "
+                        "(build it in Models -> Manager -> Core Backend)", COMFY_PYTHON)
+    return args if _FLASH["found"] else [a for a in args if a != "--use-flash-attention"]
+
+
 def _launch_key(profile: str | None) -> tuple[list[str], str] | None:
     """What actually distinguishes two profiles' processes: flags + visible GPUs."""
     return (COMFY_PROFILES[profile], _profile_gpus(profile)) if profile in COMFY_PROFILES else None
@@ -565,7 +588,7 @@ class ComfyProcess:
             env["ROCR_VISIBLE_DEVICES"] = gpus
             env.update(_gemm_env())
             process = subprocess.Popen(
-                [*_priority_prefix(), COMFY_PYTHON, "main.py", *args],
+                [*_priority_prefix(), COMFY_PYTHON, "main.py", *_launch_args(args)],
                 cwd=COMFY_DIR,
                 env=env,
                 start_new_session=True,  # detached - survives this supervisor being stopped/restarted
