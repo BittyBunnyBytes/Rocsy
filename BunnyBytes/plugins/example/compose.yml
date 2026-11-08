@@ -1,0 +1,23 @@
+# Example plugin: a no-dependency Python app (app.py in this folder) in a stock Python image.
+# Included from BunnyBytes/docker-compose.override.yml with project_directory "." so ${...}
+# values and relative paths resolve from BunnyBytes/.
+services:
+  rocsy-example-plugin:
+    image: python:3.12-slim
+    container_name: rocsy-example-plugin
+    restart: unless-stopped
+    # Host network + a 127.0.0.1 bind: only reachable through the Rocsy gateway (and its login).
+    network_mode: host
+    environment:
+      EXAMPLE_HOST: 127.0.0.1
+      EXAMPLE_PORT: ${EXAMPLE_PORT:-8130}
+      EXAMPLE_PREFIX: /Example
+    volumes:
+      - ../core-backend-extras/plugins/example/app.py:/app/app.py:ro
+    command: ["python3", "-u", "/app/app.py"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${EXAMPLE_PORT:-8130}/Example/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

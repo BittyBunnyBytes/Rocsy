@@ -37,7 +37,7 @@ A self-hosted, password-gated AI studio for one machine with an AMD GPU (ROCm). 
 serves video, image, music and voice generation, LoRA training, a local LLM server and an
 agent that drives all of them, and every GPU job goes through one shared queue.
 
-> **v1.1.** Built and run daily on a single Linux box (RX 7900 XTX, ROCm). The installer sets
+> **v1.4.1.** Built and run daily on a single Linux box (RX 7900 XTX, ROCm). The installer sets
 > it up on most Linux distros (APT, DNF, Zypper, pacman, APK, XBPS, eopkg, Portage; tested on Arch
 > Linux); immutable systems need a few manual steps. **Windows support is untested**
 > (see [Windows](#windows-untested)). See [Known limits](#known-limits).
@@ -50,14 +50,15 @@ agent that drives all of them, and every GPU job goes through one shared queue.
 | `/Agent` | Master Agent: a Hermes agent that plans and runs jobs across the studios | `BunnyBytes/agent` |
 | `/Video` | Video (MiniMax H3, LTX 2.5, Wan 2.2) with Agentic mode and Post-Edit | `Video` |
 | `/Image` | Image (Krea 2, MOSS-Image, Qwen Image 2.1) | `Krea` |
-| `/Music` | Music (YuE2, MiniMax Music 3) | `Music` |
+| `/Music` | Music (YuE2, MiniMax Music 3), covers and custom voices (RSP + Seed-VC) | `Music` |
 | `/Voice` | Text to speech with saved voices | `BunnyBytes/voice` |
-| `/Trainer` | LoRA training (ROCm) | `Trainer` |
+| `/Trainer` | LoRA training and fine-tunes (ROCm), epoch tests and cleanup | `Trainer` |
 | `/Queue` | Shared GPU queue | `BunnyBytes/lock` |
 | `/Models` | Model / LoRA downloads (Civitai, Hugging Face), hardware fit, llama.cpp builds | `BunnyBytes/modelhub` |
 | `/REA` | Reverse Engineer Anything *(experimental)* | `BunnyBytes/rea` |
 | `/Code` | Vibe Coding project library *(experimental)* | `BunnyBytes/gateway` |
 | `/Llama` | llama-swap LLM server (llama.cpp, RDNA builds) | `Llama` |
+| `/<Name>` | Your own plugins behind the Rocsy login (an example ships, turned off) | `BunnyBytes/plugins` |
 
 Supporting services: `BunnyBytes/shared` (Agentic framework for Image/Music/Voice),
 `BunnyBytes/motion` (Remotion renderer for the agent), `BunnyBytes/connections` (Telegram
@@ -80,15 +81,16 @@ Trainer/      LoRA trainer          Llama/  llama-swap config + launcher
   `BunnyBytes/supervisors/comfyui_supervisor.py`
 - The models each studio uses (download them in `/Models`)
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) checked out next to this repo as
-  `hermes-rocsy/`, with `BunnyBytes/hostctl/patches/hermes/rocsy-addons.patch` applied (compose
-  builds the `hermes-agent` image from it)
+  `hermes-rocsy/` at v0.23.0, with `BunnyBytes/hostctl/patches/hermes/rocsy-addons.patch` applied
+  (compose builds the `hermes-agent` image from it)
 
 ## Getting started
 
 The easiest way is the pre-compiled installer attached to each [GitHub release](../../releases): extract it and
 open `Install Rocsy.desktop` (or run `sh "Install Rocsy.sh"`). It sets everything below up on Arch Linux or Ubuntu. Its **What to install** section picks the optional
 services (Motion; REA and the Trainer are off by default) and the core backends it sets up for you:
-ComfyUI with PyTorch for ROCm and its supervisor, Hermes Agent, and yt-dlp. Anything skipped can be
+ComfyUI with PyTorch for ROCm and its supervisor, Hermes Agent, yt-dlp, and Music covers (the YuE2
+pack, RSP, Seed-VC and their models, about 15 GB; off by default). Anything skipped can be
 installed later in Models → Manager → Core Backend. No desktop, or prefer a terminal? Run the bundle's
 `sh "Install Rocsy.sh" --terminal` for the same questions in the terminal, or `--defaults` for the
 default install without questions; `--no-password` installs without a password (`--help` lists the options). By hand:
