@@ -274,8 +274,9 @@ body.h3-studio-ui .mobile-tabs { display: none; }
 /* Phone gallery controls shared by Video and Image. */
 .gallery-mobile-options-toggle { display: none !important; }
 @media (max-width: 700px) {
-  html:has(#lora-gallery:not([hidden])),
-  body:has(#lora-gallery:not([hidden])) { overflow: hidden; }
+  /* Only the popup gallery locks the page: Music's #lora-gallery is an always-visible inline list. */
+  html:has(#lora-gallery:not([hidden]) .lora-gallery-dialog),
+  body:has(#lora-gallery:not([hidden]) .lora-gallery-dialog) { overflow: hidden; }
   #lora-gallery .lora-gallery-dialog {
     width: 100vw; height: 100dvh; max-height: 100dvh;
     border-radius: 0; padding: max(12px,env(safe-area-inset-top)) 12px env(safe-area-inset-bottom);
@@ -426,3 +427,28 @@ body.h3-studio-ui .studio-prompt-heading .job-icon-button { width: 32px; height:
 @media (max-width: 760px) {
   body.h3-studio-ui .job-icon-button { width: 42px; height: 42px; }
 }
+
+/* @ calls to the RAG library in Agentic boxes (window.BunnyRag) */
+.rag-editor { position: relative; display: block; }
+.rag-editor > textarea { position: relative; display: block; width: 100%; box-sizing: border-box; }
+.rag-layer {
+  position: absolute; top: 0; left: 0; margin: 0; box-sizing: border-box; overflow: hidden; pointer-events: none;
+  user-select: none; white-space: pre-wrap; overflow-wrap: break-word; color: transparent; border: 0 solid transparent;
+}
+.hl-rag { border-radius: 3px; background: rgba(168, 140, 255, .3); box-shadow: inset 0 0 0 1px rgba(190, 168, 255, .75); }
+.hl-rag-unknown { text-decoration: underline wavy var(--red, #d86f6f); text-decoration-thickness: 1px; text-underline-offset: 3px; text-decoration-skip-ink: none; }
+.guide-editor .hl-rag { color: #cbbcff; }
+.guide-editor .hl-rag-unknown { color: var(--red, #d86f6f); }
+.rag-menu {
+  position: fixed; z-index: 1000; margin: 0; padding: 4px; list-style: none; overflow-y: auto; box-sizing: border-box;
+  background: var(--panel, #111920); color: var(--text, #d5dde2); border: 1px solid var(--border-strong, #354550);
+  border-radius: var(--radius-sm, 8px); box-shadow: 0 14px 32px rgba(0, 0, 0, .5);
+}
+.rag-menu[hidden] { display: none; }
+.rag-option { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.rag-option[aria-selected="true"], .rag-option:hover { background: rgba(168, 140, 255, .16); }
+.rag-option-tag { flex: none; width: 32px; color: #b9a6ff; font-size: .72rem; font-weight: 700; }
+.rag-option-main { display: block; min-width: 0; flex: 1; }
+.rag-option-main b, .rag-option-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rag-option-main b { font-weight: 600; font-size: .86rem; }
+.rag-option-main small { color: var(--muted, #86949e); font-size: .74rem; }

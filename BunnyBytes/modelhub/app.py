@@ -37,7 +37,7 @@ import comfysetup
 import required
 from comfysetup import Setup, hf_link
 from downloads import Downloads, _same_identity, check_comfy_gguf, check_llama_gguf, llama_gguf_architecture
-from library import BASE_PATTERNS, Library
+from library import BASE_PATTERNS, Library, _status as link_status
 from usage import Usage
 
 PREFIX = "/Models"
@@ -213,6 +213,18 @@ def scan_hardware() -> dict:
     return hw_cache
 
 
+# Fire-and-forget work: asyncio only keeps a weak reference to a task, so one nobody holds
+# can be garbage-collected mid-await and silently never finish.
+_spawned: set[asyncio.Task] = set()
+
+
+def spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _spawned.add(task)
+    task.add_done_callback(_spawned.discard)
+    return task
+
+
 @app.on_event("startup")
 async def startup() -> None:
     global downloads
@@ -220,16 +232,16 @@ async def startup() -> None:
     downloads.store_for = download_store
     downloads.concurrency = int(load_settings()["concurrency"])
     scan_hardware()
-    asyncio.create_task(downloads.run())
-    asyncio.create_task(asyncio.to_thread(library.scan))
-    asyncio.create_task(daily_check())
-    asyncio.create_task(restarter.loop())
-    asyncio.create_task(usage.loop())
-    asyncio.create_task(core_watch())
-    asyncio.create_task(comfy_nodes_watch())
-    asyncio.create_task(warm_searches())
-    asyncio.create_task(locations.loop())
-    asyncio.create_task(llama_autodetect_loop())
+    spawn(downloads.run())
+    spawn(asyncio.to_thread(library.scan))
+    spawn(daily_check())
+    spawn(restarter.loop())
+    spawn(usage.loop())
+    spawn(core_watch())
+    spawn(comfy_nodes_watch())
+    spawn(warm_searches())
+    spawn(locations.loop())
+    spawn(llama_autodetect_loop())
 
 
 def download_store(dest: str, link: Path) -> str:
@@ -288,7 +300,8 @@ async def state():
     return {"hardware": hw_cache, "downloads": downloads.list()[:60], "active": downloads.active_count(),
             "library_task": library.task, "last_check": library.last_check,
             "llama_restart": {"pending": restarter.pending, "reason": restarter.reason, "last": restarter.last},
-            "updates": sum(1 for link in library.links.values() if isinstance(link, dict) and (link.get("update") or {}).get("available")),
+            # Same rule as the Updates list (a link whose last check failed is shown as "Check failed", not counted).
+            "updates": sum(1 for link in library.links.values() if isinstance(link, dict) and link_status(link) == "update"),
             "node_updates": node_updates["count"],
             "settings": {"civitai_key": bool(values["civitai_key"]), "hf_token": bool(values["hf_token"]),
                          "auto_check": values["auto_check"], "concurrency": values["concurrency"],
@@ -422,7 +435,7 @@ async def search(source: str = "civitai", kind: str = "model", category: str = "
         # Answer instantly with the older page and refresh it for next time.
         if key not in search_refreshing:
             search_refreshing.add(key)
-            asyncio.create_task(_refresh_search(key))
+            spawn(_refresh_search(key))
         return _mark_installed(hit[1])
     return _mark_installed(await _fetch_search(key))
 
@@ -882,13 +895,14 @@ async def queue_download(body: DownloadBody, *, supersede: str = ""):
     after_for = {}
     if target and target["type"] == "gallery":
         gallery = target["gallery"]
-        strength, note = integrations.recommended_strength(detail.get("description", ""))
+        slider = integrations.is_slider(detail.get("name", ""), version.get("name", ""), " ".join(detail.get("tags") or []))
+        strength, note = integrations.recommended_strength(detail.get("description", ""), slider)
         page = detail["url"] + (f"?modelVersionId={version['id']}" if body.source != "hf" else "")
         label = detail["name"] if len(detail["versions"]) == 1 or body.source == "hf" else f"{detail['name']} ({version['name']})"
         after_for[0] = {"type": "gallery", "gallery": gallery, "label": label[:100], "triggers": version.get("triggers") or [],
                         "description": detail.get("description", "")[:10000], "creator": detail.get("author", ""),
                         "version": version.get("name", ""), "base_model": sources.base_name(version.get("base") or ""),
-                        "url": page, "default_strength": strength,
+                        "url": page, "default_strength": strength, "slider": slider,
                         "strength_note": note or "Default starting strength; adjust after testing",
                         "category": integrations.pick_category(await integrations.categories(gallery), detail.get("tags") or [],
                                                                bool(detail.get("nsfw") or version.get("nsfw"))),
@@ -1038,7 +1052,7 @@ async def hermes_addons_install(kind: str, identifier: str):
 
 @app.get(f"{PREFIX}/api/core/extras/log/{{job}}")
 async def core_extras_log(job: str):
-    if job not in {"comfy-download", "comfy-update", "comfy-supervisor", "trainer-install", "flash-install", "hermes-download", "hermes-update", "personal-hermes-update", "motion-install", "rea-install", "rea-update", "rea-godot-download", "rea-godotsteam-download", "rea-love2d-download", "rea-tic80-download", "rea-godotpcktool-download", "ytdlp-install"}:
+    if job not in {"comfy-download", "comfy-update", "comfy-supervisor", "trainer-install", "flash-install", "hermes-download", "hermes-update", "personal-hermes-update", "motion-install", "rea-install", "rea-update", "rea-godot-download", "rea-godotsteam-download", "rea-love2d-download", "rea-tic80-download", "rea-godotpcktool-download", "ytdlp-install", "rsp-install"}:
         raise HTTPException(404, "Unknown job")
     return await hostctl_extras("GET", f"/log/{job}")
 
@@ -1050,7 +1064,7 @@ async def core_extras_check():
 
 @app.post(f"{PREFIX}/api/core/extras/{{job}}")
 async def core_extras_action(job: str):
-    if job not in {"comfy-download", "comfy-update", "comfy-supervisor", "trainer-install", "flash-install", "hermes-download", "hermes-update", "personal-hermes-update", "motion-install", "rea-install", "rea-update", "rea-godotsteam-download", "rea-godotsteam-uninstall", "rea-godotsteam-cache-uninstall", "rea-love2d-download", "rea-love2d-uninstall", "rea-tic80-download", "rea-tic80-uninstall", "rea-godotpcktool-download", "rea-godotpcktool-uninstall", "ytdlp-install"}:
+    if job not in {"comfy-download", "comfy-update", "comfy-supervisor", "trainer-install", "flash-install", "hermes-download", "hermes-update", "personal-hermes-update", "motion-install", "rea-install", "rea-update", "rea-godotsteam-download", "rea-godotsteam-uninstall", "rea-godotsteam-cache-uninstall", "rea-love2d-download", "rea-love2d-uninstall", "rea-tic80-download", "rea-tic80-uninstall", "rea-godotpcktool-download", "rea-godotpcktool-uninstall", "ytdlp-install", "rsp-install"}:
         raise HTTPException(404, "Unknown job")
     return await hostctl_extras("POST", f"/{job}")
 
@@ -1161,18 +1175,20 @@ async def core_engines_action(action: str, body: dict):
     if action not in {"strata-source", "strata-install", "strata-start", "strata-stop", "rocmfpx-build", "rocmfpx-cancel", "hipblaslt-tune",
                       "strata-ngram", "strata-ngram-cancel"}:
         raise HTTPException(404, "Unknown action")
-    return await hostctl_core("POST", f"/{action}", body, base="/core/engines")
+    # a stop waits for Strata's running request (hostctl STOP_DRAIN_S)
+    return await hostctl_core("POST", f"/{action}", body, base="/core/engines", timeout=480 if action == "strata-stop" else 60)
 
 
 CORE_ACTIONS = {"fetch", "build", "cancel", "activate", "delete"}
 core_seen: dict[str, str] = {}  # build id -> last phase, for the "build finished" notification
 
 
-async def hostctl_core(method: str, path: str, body: dict | None = None, base: str = "/core/llamacpp") -> dict:
+async def hostctl_core(method: str, path: str, body: dict | None = None, base: str = "/core/llamacpp",
+                       timeout: float = 60) -> dict:
     if not integrations.HOSTCTL_SECRET:
         raise HTTPException(503, "The host helper (hostctl) isn't configured")
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.request(method, f"{integrations.HOSTCTL}{base}{path}", json=body,
                                             headers={"X-Hostctl-Secret": integrations.HOSTCTL_SECRET})
     except httpx.HTTPError as exc:
@@ -1532,7 +1548,7 @@ class PathsBody(BaseModel):
 async def library_identify(body: PathsBody):
     known = {i["path"] for i in library.items}
     paths = [p for p in (body.paths or [i["path"] for i in library.view() if i["status"] in ("unknown", "not_found")]) if p in known]
-    asyncio.create_task(library.identify(paths, body.compute))
+    spawn(library.identify(paths, body.compute))
     return {"started": len(paths)}
 
 
@@ -1559,13 +1575,13 @@ async def library_traces(body: TraceBody, request: Request):
                 "version_name", "base", "nsfw", "linked_by", "local_changes", "origin", "note", "derived_from")}
         library.link(rel, keep)
         applied.append(rel)
-    asyncio.create_task(library.check_updates(applied))
+    spawn(library.check_updates(applied))
     return {"applied": len(applied)}
 
 
 @app.post(f"{PREFIX}/api/library/check")
 async def library_check(body: PathsBody):
-    asyncio.create_task(library.check_updates(body.paths))
+    spawn(library.check_updates(body.paths))
     return {"started": True}
 
 
@@ -1599,7 +1615,7 @@ async def library_link(body: LinkBody):
     else:
         raise HTTPException(422, "Paste a Civitai or Hugging Face link")
     library.link(body.path, link)
-    asyncio.create_task(library.check_updates([body.path]))
+    spawn(library.check_updates([body.path]))
     return {"link": link}
 
 
@@ -2004,7 +2020,7 @@ async def storage_move(body: MoveBody):
     if any(job["state"] in ("queued", "downloading", "verifying") and job.get("path") == body.path for job in downloads.jobs.values()):
         raise HTTPException(409, "It is still downloading")
     job = await hostctl_core("POST", "/move", {"path": body.path, "to": body.to}, base="/storage")
-    asyncio.create_task(locations.refresh())
+    spawn(locations.refresh())
     return job
 
 

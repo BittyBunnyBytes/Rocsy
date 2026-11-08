@@ -165,6 +165,16 @@
               <option value="-1">Until the GPU is needed</option>
             </select>
           </label>
+          <label class="bb-field" title="A local model stays loaded after the Master Agent finishes a task, so your next message starts at once. It is unloaded as soon as anything else queues for the GPU">Keep the model loaded after a task is done
+            <select id="agent-keep-loaded-done">
+              <option value="0">Off (unload at once)</option>
+              <option value="5">For 5 minutes</option>
+              <option value="15">For 15 minutes</option>
+              <option value="30">For 30 minutes</option>
+              <option value="60">For 1 hour</option>
+              <option value="-1">Until the GPU is needed</option>
+            </select>
+          </label>
           <label class="bb-field" title="When a question from the Master Agent goes unanswered this long, it picks the answer it thinks is best, says which and why, and carries on">Answer its own questions if you don't
             <select id="agent-auto-answer">
               <option value="0">Never (wait for you)</option>
@@ -495,6 +505,10 @@
       <header class="bb-panel-head"><h2 class="bb-panel-title">Services</h2><p class="bb-panel-lead">Supervisors, ComfyUI and containers on this machine. Busy apps can't be stopped mid-job.</p></header>
       <p class="bb-section-note bb-center"><span class="bb-status" id="services-status" role="status" aria-live="polite"></span></p>
       <div id="service-groups"><p class="bb-section-note bb-center">Loading…</p></div>
+      <section class="bb-section" aria-labelledby="plugins-heading">
+        <div class="bb-section-head"><h2 id="plugins-heading">Plugins</h2></div>
+        <p class="bb-section-note">Plugins now have their own page in <a href="/Models/#core-plugins">Models → Manager → Core Backend → Plugins</a>: status, open, start/stop and the add-a-plugin guide. Their containers are also listed above under Plugins.</p>
+      </section>
       <section class="bb-section" aria-labelledby="comfy-profiles-heading">
         <div class="bb-section-head">
           <h2 id="comfy-profiles-heading">ComfyUI profiles</h2>
@@ -522,6 +536,16 @@
         <div id="load-priority-list" class="bb-profile-list"><p class="bb-section-note">Loading…</p></div>
         <div class="bb-rules-actions">
           <button type="button" class="bb-button bb-button-primary" id="load-priority-save">Save priority</button>
+        </div>
+      </section>
+      <section class="bb-section" aria-labelledby="gpu-queue-heading">
+        <div class="bb-section-head">
+          <h2 id="gpu-queue-heading">GPU queue</h2>
+          <span class="bb-status" id="gpu-queue-status" role="status" aria-live="polite"></span>
+        </div>
+        <div class="bb-priority-row">
+          <div class="bb-svc-text"><span class="bb-svc-name">Prepare the next job early</span><span class="bb-svc-note">While a job renders, the next one in the queue gets its settings and files ready, so it starts sooner. Uses a little CPU, never the GPU.</span></div>
+          <input type="checkbox" class="bb-switch" id="gpu-queue-prepare" aria-label="Prepare the next job early" disabled>
         </div>
       </section>
     </div>

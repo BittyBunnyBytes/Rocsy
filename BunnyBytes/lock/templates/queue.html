@@ -3,19 +3,92 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>GPU Queue - BunnyBytes</title>
-  <link rel="stylesheet" href="{{ mount_prefix }}/static/css/queue.css?v={{ app_version }}">
+  <title>GPU Queue · Rocsy</title>
+  <link rel="stylesheet" href="{{ mount_prefix }}/static/css/queue.css?v={{ app_version }}-ui4">
 </head>
 <body data-mount-prefix="{{ mount_prefix }}">
   <div class="topbar">
-    <div class="brand"><span class="brand-mark">Q</span> GPU Queue</div>
+    <div class="brand"><span class="brand-mark">Q</span><span class="brand-text">GPU Queue<small>Shared GPU scheduler</small></span></div>
+    <span id="mode-indicator" class="live-indicator"><i></i> Live updates</span>
   </div>
   <main>
-    <div class="page-heading"><div><p class="eyebrow">Shared GPU scheduler</p><h1>Active &amp; Waiting Jobs</h1><p class="intro">Drag waiting cards to reorder them. Lock position to keep a card in its slot.</p></div><div class="heading-actions"><span id="mode-indicator" class="live-indicator"><i></i> Live updates</span><button id="restart-comfyui" class="restart-comfyui" type="button">Restart ComfyUI + supervisor</button><button id="demo-toggle" class="demo-toggle" type="button">Load test jobs</button></div></div>
+    <header class="page-heading">
+      <div>
+        <h1>Active &amp; Waiting Jobs</h1>
+        <p class="intro">Drag waiting jobs to reorder them. Lock a job to keep it in its slot.</p>
+      </div>
+      <dl id="stats" class="stats" aria-label="Queue summary"></dl>
+    </header>
+
+    <section id="gpu-panel" class="gpu-panel" aria-label="GPU memory" hidden>
+      <div class="gpu-head">
+        <div><strong>GPU memory</strong> <span id="gpu-mode" class="badge"></span></div>
+        <span id="gpu-numbers" class="gpu-numbers"></span>
+      </div>
+      <div id="gpu-bar" class="gpu-bar" role="img"></div>
+      <div id="gpu-legend" class="gpu-legend"></div>
+    </section>
+
     <p id="queue-message" class="queue-message" role="status" hidden></p>
-    <div id="entries" class="queue-grid" aria-live="polite"></div>
-    <div id="empty" class="empty" hidden>Nothing queued right now.</div>
+
+    <section class="queue-section" aria-labelledby="running-title">
+      <div class="section-head"><h2 id="running-title"><span class="dot dot-live"></span>Running now</h2><span id="running-count" class="section-count"></span></div>
+      <div id="active-entries" class="active-list" aria-live="polite"></div>
+      <div id="active-empty" class="empty empty-small" hidden>GPU is idle.</div>
+    </section>
+
+    <section class="queue-section" aria-labelledby="waiting-title">
+      <div class="section-head"><h2 id="waiting-title"><span class="dot"></span>Up next</h2><span id="waiting-count" class="section-count"></span></div>
+      <div id="entries" class="queue-list" aria-live="polite"></div>
+      <div id="empty" class="empty" hidden>Nothing waiting.</div>
+    </section>
+
+    <details id="settings" class="tools">
+      <summary>Queue settings</summary>
+      <div class="tools-body">
+        <label class="tool">
+          <div><strong>Run jobs together when they fit</strong><p>The next job starts next to the running ones when the recorded VRAM peaks of all of them, plus the reserve, fit on the card. A job type that has never been measured always runs alone first. One LLM job and one job per app at a time.</p></div>
+          <input id="set-concurrent" type="checkbox" class="switch">
+        </label>
+        <label class="tool">
+          <div><strong>Prepare the next job early</strong><p>The next job's app does its CPU-side setup while the current job still renders.</p></div>
+          <input id="set-prepare" type="checkbox" class="switch">
+        </label>
+        <label class="tool">
+          <div><strong>Always keep free</strong><p>Headroom that is never planned for jobs sharing the GPU.</p></div>
+          <span class="num-field"><input id="set-reserve" type="number" min="0" max="64" step="0.5" inputmode="decimal"> GB</span>
+        </label>
+        <label class="tool">
+          <div><strong>Card size</strong><p id="set-total-help">Leave at 0 to use the size the card reports.</p></div>
+          <span class="num-field"><input id="set-total" type="number" min="0" max="512" step="0.5" inputmode="decimal"> GB</span>
+        </label>
+        <div class="tool tool-stack">
+          <div><strong>Recorded VRAM peaks</strong><p>The most VRAM each service, model and config has used, measured every second while it runs. A job that uses more than planned raises its peak at once. Set a value to replace a peak; Forget makes that job type run alone until it is measured again.</p></div>
+          <div class="table-wrap">
+            <table class="peaks">
+              <thead><tr><th>Job type</th><th>Peak</th><th>Recent runs</th><th>Use instead</th><th></th></tr></thead>
+              <tbody id="peaks-body"></tbody>
+            </table>
+          </div>
+          <p id="peaks-empty" class="peaks-empty">Nothing measured yet. Peaks appear here after the first jobs finish.</p>
+        </div>
+      </div>
+    </details>
+
+    <details class="tools">
+      <summary>Maintenance &amp; testing</summary>
+      <div class="tools-body">
+        <div class="tool">
+          <div><strong>Restart ComfyUI</strong><p>Restarts ComfyUI and its supervisor. Any running generation is interrupted.</p></div>
+          <button id="restart-comfyui" class="restart-comfyui" type="button">Restart ComfyUI + supervisor</button>
+        </div>
+        <div class="tool">
+          <div><strong>Test jobs</strong><p>Shows example jobs that never use the GPU, for trying out reordering and locking.</p></div>
+          <button id="demo-toggle" class="demo-toggle" type="button">Load test jobs</button>
+        </div>
+      </div>
+    </details>
   </main>
-  <script src="{{ mount_prefix }}/static/js/queue.js?v={{ app_version }}"></script>
+  <script src="{{ mount_prefix }}/static/js/queue.js?v={{ app_version }}-ui4"></script>
 </body>
 </html>

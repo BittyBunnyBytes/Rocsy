@@ -18,12 +18,14 @@
   "Cache": {"href": "/Cache/", "color": "var(--bb-purple)", "icon": "<ellipse cx=\"10\" cy=\"5.5\" rx=\"6.5\" ry=\"2.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/><path d=\"M3.5 5.5v12c0 1.4 2.9 2.5 6.5 2.5M16.5 5.5V10M3.5 11.5c0 1.4 2.9 2.5 6.5 2.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/><path d=\"M18 13l1 2.4 2.4 1-2.4 1-1 2.4-1-2.4-2.4-1 2.4-1z\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/>", "name": "RAG & Cache", "live": false, "desc": "Files the Master Agent pulls in by trigger term, plus the 7-day upload cache", "status": "RAG library and upload cache"},
   "Hermes": {"href": "/Hermes/", "color": "var(--bb-blue)", "icon": "<path d=\"M5 18.5V8.5L12 4L19 8.5V18.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linejoin=\"round\"/><path d=\"M8.5 18.5V12H15.5V18.5M3.5 18.5H20.5\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/><circle cx=\"12\" cy=\"8.5\" r=\"1.5\" fill=\"currentColor\"/>", "name": "Hermes", "live": false, "desc": "Remote agent desktop and chat", "status": "Remote agent desktop and chat"}
 } %}
+{# Plugins with a home card (plugins.py, core-backend-extras/plugins/) #}
+{% set _ = modules.update(plugin_cards) %}
 {% macro studio_card(id) %}{% set m = modules[id] %}{% set tag = 'div' if m.placeholder else 'a' %}
 <{{ tag }} class="h-studio{% if m.placeholder %} h-placeholder{% endif %}"{% if not m.placeholder %} href="{{ m.href }}"{% endif %}{% if m.live %} data-studio="{{ id }}"{% endif %} data-card="{{ id }}" style="--c: {{ m.color }}">
   <span class="h-studio-art" aria-hidden="true"></span>
   <span class="h-studio-body">
     <span class="h-studio-top">
-      <span class="h-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24" fill="none">{{ m.icon | safe }}</svg></span>
+      <span class="h-icon{% if m.icon_img %} h-icon-img{% endif %}" aria-hidden="true">{% if m.icon_img %}<img src="{{ m.icon_img }}" width="28" height="28" alt="" decoding="async">{% else %}<svg viewBox="0 0 24 24" width="24" height="24" fill="none">{{ m.icon | safe }}</svg>{% endif %}</span>
       {% if m.live %}<span class="h-live" data-live><span class="h-dot"></span><span data-live-text>…</span></span>{% endif %}
       {% if m.placeholder %}<span class="h-live">Coming soon</span>{% endif %}
       {% if m.experimental %}<span class="h-exp">Experimental</span>{% endif %}
@@ -36,7 +38,7 @@
 {% endmacro %}
 {% macro tool_card(id) %}{% set m = modules[id] %}{% set tag = 'div' if m.placeholder else 'a' %}
 <{{ tag }} class="h-tool{% if id == 'Agent' %} h-tool-agent{% endif %}{% if m.placeholder %} h-placeholder{% endif %}"{% if not m.placeholder %} href="{{ m.href }}"{% endif %}{% if m.live %} data-studio="{{ id }}"{% endif %} style="--c: {{ m.color }}">
-  <span class="h-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none">{{ m.icon | safe }}</svg></span>
+  <span class="h-icon{% if m.icon_img %} h-icon-img{% endif %}" aria-hidden="true">{% if m.icon_img %}<img src="{{ m.icon_img }}" width="26" height="26" alt="" decoding="async">{% else %}<svg viewBox="0 0 24 24" width="22" height="22" fill="none">{{ m.icon | safe }}</svg>{% endif %}</span>
   <span class="h-tool-text"><span class="h-tool-name">{{ m.name }}{% if m.experimental %} <span class="h-exp">Experimental</span>{% endif %}</span><span class="h-tool-status"{% if m.live %} data-live-text{% endif %}>{{ m.status }}</span></span>
 </{{ tag }}>
 {% endmacro %}

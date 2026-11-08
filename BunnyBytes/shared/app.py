@@ -12,10 +12,12 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from operations import MediaError, probe, transform
 import agentic
+import rag
 
 SECRET = os.environ.get("QUEUE_INTERNAL_SECRET", "")
 if not SECRET:
@@ -33,7 +35,7 @@ CAPABILITIES = {
     "upload_limit_bytes": MAX_UPLOAD_BYTES,
     "services": {
         "queue": {"base_url": os.environ.get("LOCK_UPSTREAM", "http://127.0.0.1:8600"),
-                  "purpose": "GPU job coordination", "entrypoints": ["/enqueue", "/heartbeat", "/release", "/dequeue/{entry_id}"]},
+                  "purpose": "GPU job coordination (protocol v2: use bunnylock.py)", "entrypoints": ["/v2/stream", "/v2/enqueue", "/v2/release", "/v2/dequeue"]},
         "video": {"base_url": os.environ.get("VID_UPSTREAM", "http://127.0.0.1:8000") + "/Video",
                   "purpose": "H3 video generation, specialized post-edit and reference tools", "entrypoints": ["/api/health", "/api/status"]},
         "music": {"base_url": os.environ.get("MUS_UPSTREAM", "http://127.0.0.1:8200") + "/Music",
@@ -110,20 +112,6 @@ def require_internal(x_queue_internal_secret: str = Header(default="")) -> None:
         raise HTTPException(status_code=403, detail="Invalid internal secret")
 
 
-@app.post("/api/internal/queue/proceed/{turn_id}", dependencies=[Depends(require_internal)])
-async def proceed_hermes_turn(turn_id: str, request: Request):
-    turn = agentic.TURNS.get(turn_id)
-    if not turn:
-        raise HTTPException(404, "Unknown Hermes turn")
-    body = await request.json()
-    token = body.get("token") if isinstance(body, dict) else None
-    if not isinstance(token, str) or not token:
-        raise HTTPException(422, "Missing queue token")
-    if not turn.done():
-        turn.set_result(token)
-    return {"ok": True}
-
-
 @app.post("/v1/agentic/{studio}/sessions", dependencies=[Depends(require_internal)], status_code=202)
 async def start_agentic(studio: str, body: agentic.AgenticRequest):
     if studio not in agentic.STUDIOS:
@@ -135,6 +123,17 @@ async def start_agentic(studio: str, body: agentic.AgenticRequest):
         raise HTTPException(422, "Settings are too large")
     try:
         return agentic.summary(agentic.start(studio, body))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/v1/agentic/{studio}/attachments", dependencies=[Depends(require_internal)])
+async def agentic_attachment(studio: str, body: agentic.AttachmentRead):
+    """A document attached to the Agentic instructions -> its text (txt/md/srt/json/html/docx/odt/rtf/pdf)."""
+    if studio not in agentic.STUDIOS:
+        raise HTTPException(404, "Unknown studio")
+    try:
+        return await asyncio.to_thread(agentic.read_attachment, body)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -157,6 +156,24 @@ def _session(studio: str, session_id: str) -> dict:
     if not item or item["studio"] != studio:
         raise HTTPException(404, "Session not found")
     return item
+
+
+class RagResolve(BaseModel):
+    text: str = Field(default="", max_length=40000)
+
+
+@app.get("/v1/agentic/{studio}/rag", dependencies=[Depends(require_internal)])
+async def agentic_rag(studio: str):
+    """The RAG library for a studio's @ menu (Video included: it isn't a framework studio)."""
+    if studio != "video":
+        _studio(studio)
+    return await asyncio.to_thread(rag.catalog)
+
+
+@app.post("/v1/agentic/video/rag/resolve", dependencies=[Depends(require_internal)])
+async def agentic_rag_resolve(body: RagResolve):
+    """Video runs its own Agentic sessions; it resolves @ calls here and renders the media itself."""
+    return await asyncio.to_thread(rag.resolve, body.text)
 
 
 @app.get("/v1/agentic/{studio}/settings", dependencies=[Depends(require_internal)])
@@ -199,6 +216,14 @@ async def agentic_write_prompt(studio: str, body: agentic.PromptRequest):
         raise HTTPException(502, f"Could not write a prompt: {exc}"[:400]) from exc
 
 
+@app.get("/v1/agentic/live/{live_id}", dependencies=[Depends(require_internal)])
+async def agentic_live(live_id: str):
+    """What a write-prompt call with this live_id has streamed so far (its thinking and output)."""
+    if (item := agentic.LIVE.get(live_id)) is None:
+        raise HTTPException(404, "Not streaming")
+    return item
+
+
 @app.get("/v1/agentic/models", dependencies=[Depends(require_internal)])
 async def agentic_models():
     try:
@@ -237,12 +262,40 @@ async def _voice_cancel_guard(item: dict) -> None:
             raise HTTPException(409, "Running voice jobs cannot be stopped; wait for this render to finish")
 
 
+@app.post("/v1/agentic/{studio}/sessions/{session_id}/pause", dependencies=[Depends(require_internal)])
+async def pause_agentic(studio: str, session_id: str):
+    """Stop the run now and free the GPU; the session is kept exactly as it is for Resume."""
+    item = _session(studio, session_id)
+    try:
+        agentic.pause(item)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    task = agentic.TASKS.get(session_id)
+    if task:  # let the cancel land, so the reply already says "paused"
+        await asyncio.wait({task}, timeout=30)
+    return agentic.summary(item)
+
+
+@app.post("/v1/agentic/{studio}/sessions/{session_id}/resume", dependencies=[Depends(require_internal)], status_code=202)
+async def resume_agentic(studio: str, session_id: str):
+    """Reload a paused session onto Hermes; whatever the pause interrupted is generated again."""
+    item = _session(studio, session_id)
+    try:
+        return agentic.summary(await agentic.resume(item))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @app.post("/v1/agentic/{studio}/sessions/{session_id}/steer", dependencies=[Depends(require_internal)])
 async def steer_agentic(studio: str, session_id: str, body: agentic.Steer):
     item = _session(studio, session_id)
     if body.text.strip().lower() == "/stop":
         await _voice_cancel_guard(item)
     try:
+        if body.text.strip().lower() in {"/resume", "/unpause"}:
+            agentic.log(item, "user", body.text.strip(), persist=False)
+            await agentic.resume(item)
+            return {"ok": True, "session_id": item["id"]}
         return agentic.steer(item, body.text)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc

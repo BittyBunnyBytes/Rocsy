@@ -24,7 +24,6 @@ class Settings:
     # BunnyBytes/supervisors/comfyui_supervisor.py.
     comfyui_supervisor_url: str = field(default_factory=lambda: os.getenv("MUS_COMFYUI_SUPERVISOR_URL", "http://127.0.0.1:8083").rstrip("/"))
     lock_url: str = field(default_factory=lambda: os.getenv("MUS_LOCK_URL", "http://127.0.0.1:8600").rstrip("/"))
-    lock_heartbeat_interval: float = field(default_factory=lambda: float(os.getenv("MUS_LOCK_HEARTBEAT_INTERVAL", "20")))
     queue_internal_secret: str = field(default_factory=lambda: os.getenv("MUS_QUEUE_INTERNAL_SECRET", ""))
     workflow_path: Path = field(default_factory=lambda: _path("MUS_WORKFLOW_PATH", BASE_DIR / "workflows" / "YuE2-INT8.json"))
     minimax_workflow_path: Path = field(default_factory=lambda: _path("MUS_MINIMAX_WORKFLOW_PATH", BASE_DIR / "workflows" / "MiniMax-Music3-INT8.json"))

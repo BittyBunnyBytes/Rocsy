@@ -19,11 +19,24 @@ ACTIVE = {"waiting_for_gpu", "preparing", "queued", "rendering", "running", "fin
 WAITING = {"waiting_for_gpu", "queued", "preparing"}
 
 
+# url -> (ETag, parsed body): an upstream that sends an ETag (the GPU queue)
+# answers 304 when nothing changed and the cached body is reused.
+_etag_cache: dict[str, tuple[str, Any]] = {}
+
+
 async def _get(client: httpx.AsyncClient, url: str, headers: dict[str, str] | None = None) -> Any:
     try:
+        cached = _etag_cache.get(url)
+        if cached:
+            headers = {**(headers or {}), "if-none-match": cached[0]}
         response = await client.get(url, headers=headers)
+        if response.status_code == 304 and cached:
+            return cached[1]
         response.raise_for_status()
-        return json.loads(response.content, strict=False)  # prompts can hold raw control chars
+        data = json.loads(response.content, strict=False)  # prompts can hold raw control chars
+        if etag := response.headers.get("etag"):
+            _etag_cache[url] = (etag, data)
+        return data
     except Exception:  # noqa: BLE001 - offline is a normal state here
         return None
 
@@ -100,6 +113,37 @@ def _activity(jobs: list[dict[str, Any]] | None, noun: str) -> dict[str, Any]:
             "current": _short(running[0].get("prompt") or running[0].get("style") or running[0].get("name")) if running else ""}
 
 
+# Plugin home-card backdrops (app.py fills this from each plugin.json "home.background"):
+# id -> {"background": image|video|recent|plugin, "path": "/Name", "slideshow": bool, "url": upstream art URL}.
+PLUGIN_ART: dict[str, dict[str, Any]] = {}
+
+
+async def _plugin_art(latest: dict[str, Any], recent: list[dict[str, Any]], hidden: set[str]) -> dict[str, Any]:
+    import plugins  # noqa: PLC0415  (gateway module; imported here to keep home.py standalone-testable)
+    wanted = {pid: spec for pid, spec in PLUGIN_ART.items() if pid not in hidden}
+    own = {pid: spec for pid, spec in wanted.items() if spec["background"] == "plugin" and spec["url"]}
+    replies: dict[str, Any] = {}
+    if own:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            got = await asyncio.gather(*(_get(client, spec["url"]) for spec in own.values()))
+        replies = dict(zip(own, got))
+    art: dict[str, Any] = {}
+    for pid, spec in wanted.items():
+        kind, slideshow = spec["background"], spec["slideshow"]
+        if kind == "plugin":
+            pictures, asked = plugins.art_pictures(spec["path"], replies.get(pid))
+            slideshow = slideshow or asked
+        elif kind == "recent":
+            pictures = [item["thumb"] for item in recent[:8] if item.get("thumb")] if slideshow else \
+                       [next((item["thumb"] for item in recent if item.get("thumb")), None)]
+        else:
+            pictures = [latest.get("Krea" if kind == "image" else "Vid")]
+        pictures = [src for src in pictures if src]
+        if pictures:
+            art[pid] = {"pictures": pictures, "slideshow": slideshow and len(pictures) > 1}
+    return art
+
+
 async def _snapshot(upstreams: dict[str, str], llama_key: str, hidden: set[str] = frozenset(),
                     art_exclude: frozenset[str] = frozenset()) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=3.0) as client:
@@ -148,10 +192,13 @@ async def _snapshot(upstreams: dict[str, str], llama_key: str, hidden: set[str] 
     portraits = [thumb_url(src) for src in (voice_show or {}).get("pictures") or [] if isinstance(src, str)]
     studios["Voice"]["art"] = {"pictures": [src for src in portraits if src.startswith("/api/home/thumb")]}
     if isinstance(models, dict):
-        active, updates = int(models.get("active") or 0), int(models.get("updates") or 0)
+        # One number everywhere: model/LoRA updates + ComfyUI node pack updates (the Models → Manager badge).
+        files, nodes = int(models.get("updates") or 0), int(models.get("node_updates") or 0)
+        active, updates = int(models.get("active") or 0), files + nodes
         text = " · ".join(x for x in (f"{active} downloading" if active else "",
                                       f"{updates} update{'s' if updates != 1 else ''} available" if updates else "") if x) or "Up to date"
         studios["Models"] = {"online": True, "active": active, "waiting": 0, "text": text, "updates": updates,
+                             "update_detail": f"{files} model/LoRA · {nodes} ComfyUI node pack{'s' if nodes != 1 else ''}",
                              "href": "/Models/#updates" if updates else "/Models/#installed"}
     else:
         studios["Models"] = {"online": False, "active": 0, "waiting": 0, "text": "Offline", "updates": 0, "href": "/Models/"}
@@ -213,6 +260,7 @@ async def _snapshot(upstreams: dict[str, str], llama_key: str, hidden: set[str] 
 
     busy = [name for name, info in studios.items() if info.get("active") and name not in ("Queue", "Llama") and name not in hidden]
     return {"studios": studios, "recent": recent[:8], "latest": latest, "busy": busy, "hidden": sorted(hidden),
+            "plugin_art": await _plugin_art(latest, recent, hidden) if PLUGIN_ART else {},
             "code_activity": [] if "Code" in hidden else await _code_activity()}
 
 

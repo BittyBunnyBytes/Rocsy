@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc f309185fa52747d1c307d8b643dddb7bd9c8d50a4b71e77f19e9c1c3ca4b1e7b # shrinks to ops = [ReleaseActive]
+cc 3023b265c6246edeb8a9818f7dda9100b142260b52027ddde23a8132a53dc05e # shrinks to ops = [Enqueue { app: 1, priority: false }, Enqueue { app: 0, priority: false }, Enqueue { app: 1, priority: false }, DropInstance(0), Enqueue { app: 0, priority: false }, Prioritize(1), Lock(0, true), Enqueue { app: 0, priority: true }], concurrent = true

@@ -249,3 +249,201 @@
 
   window.BunnyReferences = {rowHtml, render, renderTotals, insertToken, bindList, bindDropZone};
 })();
+
+/* @ calls to the RAG library in an Agentic box: suggestions plus highlighting. The syntax matches
+   shared/rag.py and the Master Agent composer. Only names in the library are highlighted, because a
+   bare @word can be something else (Anima's @artist); @{...} that names nothing is marked as a mistake. */
+(() => {
+  const MENTION = /(?<![\w@])@(?:\{([^{}\n]{1,200})\}|([\w.-]+))(\s+(?:all|random\s+\d+)\b)?/gi;
+  const TAG = {text: 'TXT', image: 'IMG', video: '▶', audio: '♪', file: 'FILE'};
+  const size = (bytes) => bytes < 1048576 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
+  let library = {files: [], groups: []}, loadedAt = 0, request = null;
+  const watchers = new Set();
+
+  function load(url, force = false) {
+    if (request) return request;
+    if (!force && Date.now() - loadedAt < 30000) return Promise.resolve(library);
+    request = fetch(url, {credentials: 'same-origin', cache: 'no-store'})
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+      .then((data) => {
+        library = {files: data.files || [], groups: data.groups || []};
+        loadedAt = Date.now();
+        watchers.forEach((watcher) => watcher());
+        return library;
+      })
+      .catch(() => library)     // no library = no menu; typing is never interrupted
+      .finally(() => { request = null; });
+    return request;
+  }
+  const findGroup = (name) => library.groups.find((group) => group.name.toLowerCase() === name);
+  const findFile = (name) => library.files.some((file) => file.alias.toLowerCase() === name || file.name.toLowerCase() === name);
+
+  /* Text as pieces: {text} or {text, rag: 'known' | 'unknown'}. */
+  function split(text) {
+    const pieces = [];
+    let cursor = 0;
+    for (const match of text.matchAll(MENTION)) {
+      const braced = match[1], bare = match[2];
+      const name = (braced || bare.replace(/[.-]+$/, '') || bare).trim().toLowerCase();
+      const group = findGroup(name);
+      const known = Boolean(group) || findFile(name);
+      if (!known && !braced) continue;
+      // A trailing "." and a following "all" belong to the sentence unless this really is a group call.
+      let token = group ? match[0] : match[0].slice(0, match[0].length - (match[3] || '').length);
+      if (bare && !match[3]) token = token.replace(/[.-]+$/, '') || token;
+      if (match.index > cursor) pieces.push({text: text.slice(cursor, match.index)});
+      pieces.push({text: token, rag: known ? 'known' : 'unknown'});
+      cursor = match.index + token.length;
+    }
+    if (cursor < text.length) pieces.push({text: text.slice(cursor)});
+    return pieces;
+  }
+
+  function attach(textarea, {url, layer: wantLayer = true, onUpdate = null}) {
+    const menu = document.createElement('ul');
+    menu.className = 'rag-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.setAttribute('aria-label', 'RAG library');
+    menu.hidden = true;
+    document.body.append(menu);
+    let shown = [], pick = 0, revision = 0, layer = null;
+
+    function query() {
+      if (textarea.selectionStart !== textarea.selectionEnd) return null;
+      const end = textarea.selectionStart, line = textarea.value.lastIndexOf('\n', end - 1) + 1;
+      const start = end ? textarea.value.lastIndexOf('@', end - 1) : -1;
+      if (start < line || (start && /[\w@]/.test(textarea.value[start - 1]))) return null;
+      let typed = textarea.value.slice(start + 1, end);
+      if (typed.startsWith('{')) typed = typed.slice(1);
+      if (typed.includes('}') || typed.length > 80) return null;
+      return {start, end, typed: typed.toLowerCase().trim()};
+    }
+    function hide() {
+      revision++;
+      menu.hidden = true;
+      shown = [];
+      textarea.removeAttribute('aria-activedescendant');
+    }
+    function place() {
+      const box = textarea.getBoundingClientRect();
+      menu.style.left = `${Math.max(8, box.left)}px`;
+      menu.style.width = `${Math.max(240, Math.min(box.width, 460))}px`;
+      const below = innerHeight - box.bottom - 12, above = box.top - 12;
+      const room = Math.min(280, below >= 160 || below >= above ? below : above);
+      menu.style.maxHeight = `${Math.max(120, room)}px`;
+      if (below >= 160 || below >= above) { menu.style.top = `${box.bottom + 4}px`; menu.style.bottom = 'auto'; }
+      else { menu.style.top = 'auto'; menu.style.bottom = `${innerHeight - box.top + 4}px`; }
+    }
+    function draw() {
+      menu.replaceChildren(...shown.map((entry, index) => {
+        const row = document.createElement('li');
+        row.className = 'rag-option';
+        row.id = `rag-option-${index}`;
+        row.setAttribute('role', 'option');
+        row.setAttribute('aria-selected', String(index === pick));
+        const tag = document.createElement('span');
+        tag.className = 'rag-option-tag';
+        tag.textContent = entry.group ? 'GRP' : TAG[entry.kind] || 'FILE';
+        const main = document.createElement('span');
+        main.className = 'rag-option-main';
+        const name = document.createElement('b');
+        name.textContent = `@${entry.label}`;
+        const detail = document.createElement('small');
+        detail.textContent = entry.detail;
+        main.append(name, detail);
+        row.append(tag, main);
+        row.addEventListener('mousedown', (event) => { event.preventDefault(); choose(index); });
+        return row;
+      }));
+      menu.hidden = false;
+      place();
+      textarea.setAttribute('aria-activedescendant', `rag-option-${pick}`);
+      menu.children[pick]?.scrollIntoView({block: 'nearest'});
+    }
+    async function show() {
+      if (!query()) return hide();
+      const mine = ++revision;
+      await load(url);
+      const current = query();
+      if (mine !== revision || !current) return;
+      const hit = (text) => !current.typed || text.toLowerCase().includes(current.typed);
+      shown = [
+        ...library.groups.filter((group) => hit(group.name)).map((group) => ({group: true, label: group.name,
+          insert: `@{${group.name}} all `, detail: `Group · ${group.count} file${group.count === 1 ? '' : 's'} · all or random N`})),
+        ...library.files.filter((file) => hit(`${file.alias} ${file.name}`)).map((file) => ({kind: file.kind, label: file.alias || file.name,
+          insert: `@{${file.alias || file.name}} `, detail: `${file.alias ? `${file.name} · ` : ''}${size(file.size)}`})),
+      ].slice(0, 8);
+      if (!shown.length) return hide();
+      pick = Math.min(pick, shown.length - 1);
+      draw();
+    }
+    function choose(index) {
+      const current = query(), entry = shown[index];
+      if (!current || !entry) return;
+      textarea.focus();
+      textarea.setRangeText(entry.insert, current.start, current.end, 'end');
+      hide();
+      textarea.dispatchEvent(new Event('input', {bubbles: true}));
+    }
+    function paint() {
+      if (!layer) return;
+      layer.replaceChildren(...split(textarea.value).map((piece) => {
+        if (!piece.rag) return document.createTextNode(piece.text);
+        const span = document.createElement('span');
+        span.className = piece.rag === 'known' ? 'hl-rag' : 'hl-rag-unknown';
+        span.textContent = piece.text;
+        return span;
+      }), document.createTextNode('​'));
+      // The layer starts at the textarea's outer corner and copies its top/left border, so add those back.
+      layer.style.height = `${textarea.clientHeight + textarea.clientTop}px`;
+      layer.style.width = `${textarea.clientWidth + textarea.clientLeft}px`;
+      layer.scrollTop = textarea.scrollTop;
+    }
+    if (wantLayer) {
+      const wrap = document.createElement('div');
+      wrap.className = 'rag-editor';
+      layer = document.createElement('pre');
+      layer.className = 'rag-layer';
+      layer.setAttribute('aria-hidden', 'true');
+      textarea.before(wrap);
+      wrap.append(layer, textarea);
+      const style = getComputedStyle(textarea);
+      for (const key of ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing', 'wordSpacing', 'tabSize',
+        'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'borderTopWidth', 'borderLeftWidth']) layer.style[key] = style[key];
+      wrap.style.background = style.backgroundColor;
+      wrap.style.borderRadius = style.borderRadius;
+      textarea.style.background = 'transparent';
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+      Object.defineProperty(textarea, 'value', {configurable: true,
+        get() { return descriptor.get.call(this); },
+        set(next) { descriptor.set.call(this, next); paint(); }});
+      textarea.addEventListener('scroll', () => { layer.scrollTop = textarea.scrollTop; });
+      new ResizeObserver(paint).observe(textarea);
+    }
+    const update = () => { paint(); onUpdate?.(); };
+    watchers.add(update);
+    textarea.addEventListener('input', () => { pick = 0; paint(); show(); });
+    textarea.addEventListener('click', show);
+    textarea.addEventListener('focus', () => load(url));
+    textarea.addEventListener('blur', () => setTimeout(hide, 120));
+    // Capture: an open menu owns these keys, before Video's own guide menu or a form sees them.
+    textarea.addEventListener('keydown', (event) => {
+      if (menu.hidden || event.isComposing) return;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') pick = (pick + (event.key === 'ArrowDown' ? 1 : -1) + shown.length) % shown.length;
+      else if (event.key !== 'Tab' && event.key !== 'Enter' && event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.key === 'Escape') hide();
+      else if (event.key === 'Tab' || event.key === 'Enter') choose(pick);
+      else draw();
+    }, true);
+    textarea.addEventListener('keyup', (event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') show(); });
+    addEventListener('resize', () => { if (!menu.hidden) place(); });
+    addEventListener('scroll', (event) => { if (!menu.hidden && !menu.contains(event.target)) hide(); }, true);
+    load(url);
+    paint();
+    return {paint};
+  }
+
+  window.BunnyRag = {attach, split};
+})();

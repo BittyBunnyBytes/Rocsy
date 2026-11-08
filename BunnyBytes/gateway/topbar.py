@@ -40,12 +40,19 @@ APPS: dict[str, tuple[str, str]] = {
 }
 
 
+# Apps that bring their own icon picture (plugins with "icon_file"): app -> picture URL.
+IMAGES: dict[str, str] = {}
+
+
 def crumb(app: str) -> str:
     """The "Rocsy / <App>" breadcrumb; Rocsy is the way back to the home page."""
     label, icon = APPS.get(app, (app, ""))
     icon_html = ('<span class="rb-app-icon"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" '
                  f'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{icon}</svg></span>'
                  if icon else "")
+    if app in IMAGES:
+        icon_html = (f'<span class="rb-app-icon rb-app-icon-img"><img src="{escape(IMAGES[app])}" width="20" height="20" '
+                     'alt="" decoding="async"></span>')
     return (
         '<div class="rb-crumb">'
         f'<a class="rb-home" href="/" title="Back to the Rocsy home page" aria-label="Rocsy home">{ROCSY_MARK}'

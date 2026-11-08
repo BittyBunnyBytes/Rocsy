@@ -125,10 +125,14 @@ def edit(model: str, filename: str, body: dict[str, Any]) -> dict[str, Any]:
             if key == "url" and value and (urlsplit(value).scheme not in {"http", "https"} or not urlsplit(value).netloc):
                 raise ValueError("Source URL must be HTTP(S)")
             metadata[key] = value.strip() if key != "description" else value
+        slider = bool(body.get("slider"))
+        low, high = (-10, 10) if slider else (0, 2)
         strength = body.get("default_strength")
-        if isinstance(strength, bool) or not isinstance(strength, (int, float)) or not 0 <= strength <= 2:
-            raise ValueError("Recommended strength must be between 0 and 2")
+        if isinstance(strength, bool) or not isinstance(strength, (int, float)) or not low <= strength <= high:
+            raise ValueError(f"Recommended strength must be between {low} and {high}"
+                             + ("" if slider else " (mark it as a slider for negative values)"))
         metadata["strength"] = float(strength)
+        metadata["slider"] = slider
         triggers = body.get("triggers")
         if not isinstance(triggers, list) or len(triggers) > 30 or any(not isinstance(word, str) or len(word) > 100 for word in triggers):
             raise ValueError("Invalid trigger words")

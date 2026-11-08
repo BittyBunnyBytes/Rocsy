@@ -35,7 +35,6 @@ class Settings:
     # BunnyBytes/supervisors/comfyui_supervisor.py.
     comfyui_supervisor_url: str = field(default_factory=lambda: os.getenv("KREA_COMFYUI_SUPERVISOR_URL", "http://127.0.0.1:8083").rstrip("/"))
     lock_url: str = field(default_factory=lambda: os.getenv("KREA_LOCK_URL", "http://127.0.0.1:8600").rstrip("/"))
-    lock_heartbeat_interval: float = field(default_factory=lambda: float(os.getenv("KREA_LOCK_HEARTBEAT_INTERVAL", "20")))
     queue_internal_secret: str = field(default_factory=lambda: os.getenv("KREA_QUEUE_INTERNAL_SECRET", ""))
     workflow_path: Path = field(default_factory=lambda: _workflow("KREA_WORKFLOW_PATH", BASE_DIR / "workflows" / "Krea2-Advanced-LoRA-API.json"))
     moss_workflow_path: Path = field(default_factory=lambda: _path("KREA_MOSS_WORKFLOW_PATH", BASE_DIR / "workflows" / "MOSS-Image-INT8-API.json"))

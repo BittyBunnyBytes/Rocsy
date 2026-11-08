@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gzip
+import hashlib
 from html import escape as html_escape
 import logging
 from http.cookiejar import CookieJar, DefaultCookiePolicy
@@ -90,6 +92,37 @@ def _set_header_ci(headers: dict[str, str], key: str, value: str) -> None:
         if existing.lower() == key.lower():
             del headers[existing]
     headers[key] = value
+
+
+# Bodies the gateway rewrites (themed HTML pages, restyled CSS) are decoded to edit them; without this they went
+# out uncompressed - a studio page ~5x its gzip size on every load, through the tunnel's home upload too.
+GZIP_MIN_BYTES = 1024
+_gzip_cache: dict[str, bytes] = {}
+
+
+def _gzip_for(request: Request, body: bytes, headers: dict[str, str], cache: bool = False) -> bytes:
+    """gzip a rewritten body when the client takes it (sets Content-Encoding + Vary). cache=True for bodies that
+    repeat byte for byte (restyled CSS), so each version is compressed once."""
+    vary = _header_ci(headers, "Vary", "")
+    if "accept-encoding" not in vary.lower():
+        _set_header_ci(headers, "Vary", f"{vary}, Accept-Encoding" if vary else "Accept-Encoding")
+    if len(body) < GZIP_MIN_BYTES or "gzip" not in request.headers.get("accept-encoding", "").lower():
+        return body
+    _set_header_ci(headers, "Content-Encoding", "gzip")
+    if not cache:
+        return gzip.compress(body, compresslevel=6)
+    key = hashlib.sha256(body).hexdigest()
+    if key not in _gzip_cache:
+        if len(_gzip_cache) > 64:
+            _gzip_cache.clear()
+        _gzip_cache[key] = gzip.compress(body, compresslevel=9)
+    return _gzip_cache[key]
+
+
+def _drop_headers_ci(headers: dict[str, str], *names: str) -> None:
+    lowered = {name.lower() for name in names}
+    for key in [key for key in headers if key.lower() in lowered]:
+        del headers[key]
 
 
 def _header_ci(headers: dict[str, str], key: str, default: str = "") -> str:
@@ -229,8 +262,7 @@ async def proxy_request(
     if head_inject and request.method == "GET" and "text/html" in request.headers.get("accept", ""):
         # Page loads must come back as a full 200 so the injected (versioned)
         # theme link is current - a 304 would reuse the cached page and its old link.
-        for name in ("if-none-match", "if-modified-since"):
-            forward_headers.pop(next((key for key in forward_headers if key.lower() == name), name), None)
+        _drop_headers_ci(forward_headers, "if-none-match", "if-modified-since")
     if extra_headers:
         # Case-insensitive set, not a plain dict.update -- a caller-supplied
         # header with different casing (e.g. client sent "Authorization",
@@ -322,8 +354,7 @@ async def proxy_request(
     if buffered_error is not None:
         # Already read (decoded) to check for an effort rejection; not retried.
         await upstream_response.aclose()
-        for name in ("content-encoding", "content-length"):
-            response_headers.pop(next((key for key in response_headers if key.lower() == name), name), None)
+        _drop_headers_ci(response_headers, "content-encoding", "content-length")
         return Response(buffered_error, status_code=upstream_response.status_code,
                         headers=response_headers, media_type=content_type or None)
 
@@ -332,24 +363,22 @@ async def proxy_request(
         css = await _read_body(upstream_response)
         if css is None:
             return _upstream_broke()
-        for name in ("content-encoding", "content-length"):
-            response_headers.pop(next((key for key in response_headers if key.lower() == name), name), None)
-        return Response(restyle.rewrite_cached(css), status_code=200, headers=response_headers, media_type=content_type)
+        _drop_headers_ci(response_headers, "content-encoding", "content-length")
+        body = _gzip_for(request, restyle.rewrite_cached(css), response_headers, cache=True)
+        return Response(body, status_code=200, headers=response_headers, media_type=content_type)
 
     if (lite_images and request.method == "GET" and upstream_response.status_code == 200
             and datasaver.shrinkable(request.headers, content_type, _header_ci(response_headers, "content-length"))):
         raw = await _read_body(upstream_response)
         if raw is None:
             return _upstream_broke()
-        for name in ("content-encoding", "content-length"):
-            response_headers.pop(next((key for key in response_headers if key.lower() == name), name), None)
+        _drop_headers_ci(response_headers, "content-encoding", "content-length")
         validator = _header_ci(response_headers, "etag") or _header_ci(response_headers, "last-modified") or str(len(raw))
         lite = await datasaver.lite_copy(f"{target_url}|{validator}", raw) if len(raw) >= datasaver.MIN_BYTES else None
         if lite is None:
             return Response(raw, status_code=200, headers=response_headers, media_type=content_type)
         # No validators: a later full-size request must never get a 304 for this copy.
-        for name in ("etag", "last-modified", "content-type"):
-            response_headers.pop(next((key for key in response_headers if key.lower() == name), name), None)
+        _drop_headers_ci(response_headers, "etag", "last-modified", "content-type")
         _set_header_ci(response_headers, "Vary", "Cookie, Save-Data")
         response_headers["X-Rocsy-Lite"] = "1"
         return Response(lite, status_code=200, headers=response_headers, media_type="image/webp")
@@ -366,8 +395,8 @@ async def proxy_request(
             html = restyle.tag_stylesheets(html)
         if html_transform:
             html = html_transform(html)
-        for name in ("content-encoding", "content-length", "etag", "last-modified"):
-            response_headers.pop(next((key for key in response_headers if key.lower() == name), name), None)
+        _drop_headers_ci(response_headers, "content-encoding", "content-length", "etag", "last-modified")
+        html = _gzip_for(request, html, response_headers)
         return Response(html, status_code=200, headers=response_headers, media_type=content_type)
 
     async def body_iterator() -> AsyncIterator[bytes]:

@@ -44,6 +44,8 @@ GALLERIES = {
     "Wan Video 14B i2v 720p": ("Vid", "wan_2_2", "loras/H3MachineCustom", "Video LoRA gallery (Wan 2.2)"),
     "Krea 2": ("Krea", "krea", "loras/KreaCustom", "Image LoRA gallery (Krea 2)"),
     "Qwen 2.1": ("Krea", "qwen", "loras/KreaCustom", "Image LoRA gallery (Qwen Image 2.1)"),
+    "Anima": ("Krea", "anima", "loras/KreaCustom", "Image LoRA gallery (Anima)"),
+    "MOSS Image": ("Krea", "moss", "loras/KreaCustom", "Image LoRA gallery (MOSS-Image)"),
 }
 STUDIO_URL = {"Vid": VID, "Krea": KREA}
 STUDIO_NAME = {"Vid": "Video", "Krea": "Image"}
@@ -71,12 +73,33 @@ def storage_name(name: str, folder: Path) -> str:
 
 
 STRENGTH = re.compile(r"(?:strength|weight)[^0-9\n]{0,24}?([0-2](?:\.\d{1,2})?)(?:\s*(?:-|to|~)\s*([0-2](?:\.\d{1,2})?))?", re.I)
+# Slider LoRAs: "try -0.5 to -1", "as low as -8 lora weight", "from -3 to 3".
+SIGNED = re.compile(r"(?<![\w.])([-−+]?\d{1,2}(?:\.\d{1,2})?)\s*(?:to|~|and|-|–)\s*([-−+]?\d{1,2}(?:\.\d{1,2})?)(?![\w.])")
+NEGATIVE = re.compile(r"(?<![\w.])[-−]\d{1,2}(?:\.\d{1,2})?(?![\w.])")
+SLIDER = re.compile(r"\bsliders?\b", re.I)
+SLIDER_LIMIT = 10.0
 
 
-def recommended_strength(text: str) -> tuple[float | None, str]:
-    """A strength the author states ("weight 0.6-0.8"), else None."""
+def is_slider(*texts: str) -> bool:
+    """A slider LoRA dials one concept both ways, so negative weights are valid."""
+    return any(SLIDER.search(text or "") for text in texts)
+
+
+def recommended_strength(text: str, slider: bool = False) -> tuple[float | None, str]:
+    """A strength the author states ("weight 0.6-0.8"; for sliders also "-0.5 to -1"), else None."""
+    if slider:
+        for match in SIGNED.finditer(text or ""):
+            low, high = (float(group.replace("−", "-")) for group in match.groups())
+            if (low < 0 or high < 0) and abs(low) <= SLIDER_LIMIT and abs(high) <= SLIDER_LIMIT:
+                note = f"Slider · author suggests {match.group(1)} to {match.group(2)}"
+                if min(low, high) < 0 < max(low, high):
+                    # A range across zero ("-5 to 5") is the usable span, not a starting point: its middle (0) does nothing.
+                    return min(1.0, max(low, high)), note + " (negative reverses it)"
+                return round((low + high) / 2, 2), note
     match = STRENGTH.search(text or "")
     if not match:
+        if slider:
+            return 1.0, "Slider · negative values reverse the effect"
         return None, ""
     low = float(match.group(1))
     high = float(match.group(2)) if match.group(2) else low
@@ -84,14 +107,14 @@ def recommended_strength(text: str) -> tuple[float | None, str]:
     if not 0 < value <= 2:
         return None, ""
     span = f"{low}-{high}" if high != low else f"{low}"
-    return value, f"Author suggests {span}"
+    return value, ("Slider · " if slider else "") + f"Author suggests {span}"
 
 
 async def register_lora(job: dict, after: dict) -> str:
     """Tell the studio about a LoRA that just finished downloading into its folder."""
     gallery = after["gallery"]
     body = {key: after.get(key) for key in ("label", "triggers", "description", "creator", "version", "base_model",
-                                             "url", "strength_note", "default_strength", "category", "previews")}
+                                             "url", "strength_note", "default_strength", "category", "previews", "slider")}
     body.update(model=gallery["model"], storage_name=job["name"], source_key=f"models:{job['group']}")
     async with httpx.AsyncClient(timeout=300) as client:
         response = await client.post(f"{STUDIO_URL[gallery['studio']]}/api/internal/lora-gallery/register",

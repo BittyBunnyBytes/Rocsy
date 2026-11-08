@@ -18,6 +18,7 @@ GRAPH = {
     "6": {"class_type": "KSampler", "inputs": {"model": ["4", 0]}},
 }
 OBJECT_INFO = {
+    "SaveVideo": {"input": {"required": {}}, "output_node": True},
     "VAELoader": {"input": {"required": {"vae_name": [["video_vae.safetensors", "audio_vae.safetensors", "fast_vae.safetensors"]]}}},
     "CLIPLoader": {"input": {"required": {"clip_name": ["COMBO", {"options": ["te.safetensors", "te_alt.safetensors"]}]}}},
 }
@@ -122,6 +123,14 @@ class WorkflowModelsTest(unittest.IsolatedAsyncioTestCase):
         self.online = False
         graph["1"]["inputs"]["vae_name"] = "gone.safetensors"
         self.assertEqual(await wm.missing_files("http://comfy", [graph]), {"files": [], "nodes": []})
+
+    async def test_missing_files_ignores_nodes_no_output_needs(self):
+        graph = {"1": {"class_type": "VAELoader", "inputs": {"vae_name": "video_vae.safetensors"}},
+                 "2": {"class_type": "SaveVideo", "inputs": {"vae": ["1", 0]}},
+                 "3": {"class_type": "VAELoader", "inputs": {"vae_name": "gone.safetensors"}}}
+        self.assertEqual((await wm.missing_files("http://comfy", [graph]))["files"], [])
+        graph["2"]["inputs"]["vae"] = ["3", 0]
+        self.assertEqual([item["name"] for item in (await wm.missing_files("http://comfy", [graph]))["files"]], ["gone.safetensors"])
 
 
 if __name__ == "__main__":

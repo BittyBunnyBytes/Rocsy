@@ -23,6 +23,7 @@
   let listTimer = null;
   let refreshing = false;
   let sessions = [];
+  let attachments = [];   // files attached to the Agentic instructions: {kind:'text', name, text, chars, truncated} | {kind:'image', name, data_url}
 
   function h(tag, props = {}, ...children) {
     const node = document.createElement(tag);
@@ -51,7 +52,8 @@
 
   // ── which generation model the studio has loaded ──────────────────────────
   function currentModel() {
-    if (studio === 'image') return document.querySelector('input[name="model"]:checked')?.value || 'krea2';
+    // Image's model picker is a <select id="model"> now (older builds used radio buttons).
+    if (studio === 'image') return document.querySelector('input[name="model"]:checked')?.value || value('model') || 'krea2';
     if (studio === 'music') return value('model') || 'yue2';
     return value('engine') || 'qwen3';
   }
@@ -59,7 +61,8 @@
 
   // ── request payload from the Studio form ─────────────────────────────────
   function payload() {
-    const common = { guide: value('agentic-guide').trim(), approve_plan: Boolean(el('agentic-approve-plan')?.checked) };
+    const common = { guide: value('agentic-guide').trim(), approve_plan: Boolean(el('agentic-approve-plan')?.checked),
+      attachments: attachments.map(({ kind, name, text, data_url }) => kind === 'image' ? { kind, name, data_url } : { kind, name, text }) };
     if (studio === 'image') {
       const model = currentModel();
       const form = { model, checkpoint: model === 'anima' ? undefined : value('checkpoint') || undefined, width: Number(value('width')) || 1024, height: Number(value('height')) || 1024,
@@ -101,6 +104,7 @@
         } else form[field.name] = field.value;
       });
       delete form.style; delete form.lyrics;
+      Object.assign(form, window.MusicStudio?.agenticSettings?.());   // the chosen voice and cover aren't form fields
       const direction = value('style').trim() || common.guide;
       return { ...common, request: direction + (value('lyrics').trim() ? '\n\nExact lyrics:\n' + value('lyrics').trim() : ''),
         settings: form, locked_lyrics: value('lyrics').trim() };
@@ -261,12 +265,28 @@
     }
     item.append(...outputsOf(row));
     if (row.state === 'awaiting_feedback') item.append(feedbackControls(row, refresh));
+    if (ACTIVE.has(row.state) || row.state === 'paused') item.append(pauseButton(row, refresh));
     if (!FINISHED.has(row.state) && row.state !== 'awaiting_feedback') {
-      item.append(h('button', { type: 'button', class: 'secondary-button agentic-cancel', text: 'Cancel', onclick: async () => {
+      item.append(h('button', { type: 'button', class: 'secondary-button agentic-cancel', text: row.state === 'paused' ? 'End' : 'Cancel', onclick: async () => {
         try { await send('POST', `/sessions/${row.id}/cancel`, {}); await refresh(); } catch (error) { setStatus(error.message); }
       } }));
     }
     return item;
+  }
+  // Pause stops Hermes or the render now and frees the GPU; Resume reloads the same session and generates
+  // again whatever the pause interrupted (2026-11-04).
+  async function setPaused(row, pause) {
+    try {
+      await send('POST', `/sessions/${row.id}/${pause ? 'pause' : 'resume'}`, {});
+      setStatus(pause ? 'Paused. Resume continues this same session.' : 'Resuming the paused session.');
+    } catch (error) { setStatus(error.message); }
+  }
+  function pauseButton(row, after) {
+    const paused = row.state === 'paused';
+    return h('button', { type: 'button', class: 'secondary-button agentic-cancel agentic-pause',
+      text: paused ? 'Resume' : 'Pause',
+      title: paused ? 'Reload this session and continue; anything the pause interrupted is generated again' : 'Pause now and free the GPU',
+      onclick: async event => { event.currentTarget.disabled = true; await setPaused(row, !paused); await after(); } });
   }
   async function refresh() {
     if (refreshing) return;
@@ -274,7 +294,7 @@
     try {
       sessions = await call('/sessions');
       renderList();
-      if (sessions.some(row => !FINISHED.has(row.state) )) {
+      if (sessions.some(row => !FINISHED.has(row.state) && row.state !== 'paused')) {
         if (!listTimer) listTimer = setInterval(refresh, 3000);
       } else if (listTimer) { clearInterval(listTimer); listTimer = null; }
       refreshPicker();
@@ -283,6 +303,7 @@
   }
   async function start() {
     const body = payload();
+    if (!body.request && attachments.length) body.request = 'Use the attached files as the request.';
     if (!body.request) { setStatus(studio === 'music' ? 'Enter a music direction or Hermes guide first.' : 'Enter a request or Hermes guide first.'); return; }
     setStatus('Starting Agentic session…');
     try {
@@ -318,7 +339,16 @@
         h('textarea', { id: 'agentic-guide', rows: 4, maxLength: 4000, placeholder: {
           image: 'A warm editorial portrait; keep the same character and lighting.',
           music: 'Keep the chorus uplifting and preserve my lyrics exactly.',
-          voice: 'Warm, calm delivery with natural pauses.' }[studio] }),
+          voice: 'Warm, calm delivery with natural pauses.' }[studio] + ' (@ calls your RAG library)' }),
+        h('div', { class: 'agentic-attach-row' },
+          h('button', { type: 'button', class: 'secondary-button agentic-attach-button', text: '📎 Attach files',
+            title: 'Documents (txt, md, srt, json, html, docx, odt, rtf, pdf) and pictures. You can also drop or paste them here.',
+            onclick: () => el('agentic-attach-input').click() }),
+          h('span', { class: 'agentic-hint', text: 'Hermes reads documents and sees pictures while planning. Pictures are not render inputs.' }),
+          h('input', { type: 'file', id: 'agentic-attach-input', multiple: true, hidden: true,
+            accept: 'image/*,.txt,.md,.markdown,.srt,.vtt,.ass,.json,.csv,.tsv,.yaml,.yml,.xml,.html,.htm,.log,.fountain,.fdx,.tex,.docx,.odt,.rtf,.pdf,text/*,application/pdf',
+            onchange: event => { addFiles(event.target.files); event.target.value = ''; } })),
+        h('ul', { id: 'agentic-attachments', class: 'agentic-attachments', hidden: true }),
         h('span', { class: 'agentic-loaded-wrap' }, 'Model guide: ', h('b', { id: 'agentic-loaded', text: modelLabel(loadedModel) })),
         h('label', { class: 'agentic-extra' }, h('input', { type: 'checkbox', id: 'agentic-approve-plan' }),
           h('span', { text: 'Wait for my approval before rendering' })),
@@ -328,11 +358,98 @@
             onclick: () => openView() })),
         h('div', { id: 'agentic-status', role: 'status', 'aria-live': 'polite', text: 'Ready' })));
     target.insertAdjacentElement('afterend', panel);
+    window.BunnyRag?.attach(el('agentic-guide'), { url: `${API}/rag` });
+    bindAttachDrop(panel);
+    renderAttachments();
     try { panel.open = localStorage.getItem(`agentic.card.open.${studio}`) !== '0'; }
     catch { panel.open = true; }
     panel.addEventListener('toggle', () => {
       try { localStorage.setItem(`agentic.card.open.${studio}`, panel.open ? '1' : '0'); }
       catch { /* storage blocked */ }
+    });
+  }
+
+  // ── files attached to the instructions ───────────────────────────────────
+  const ATTACH_KEY = `agentic.attachments.${studio}`;
+  const MAX_FILES = 12, MAX_PICTURES = 6, MAX_DOC_BYTES = 25 * 1024 * 1024, PICTURE_EDGE = 1536;
+  function loadAttachments() {
+    try { const saved = JSON.parse(localStorage.getItem(ATTACH_KEY) || '[]'); if (Array.isArray(saved)) attachments = saved.filter(a => a && (a.kind === 'text' || a.kind === 'image')); }
+    catch { attachments = []; }
+  }
+  function saveAttachments() {
+    try { localStorage.setItem(ATTACH_KEY, JSON.stringify(attachments)); }
+    catch { /* storage full or blocked: they stay for this page only */ }
+  }
+  function renderAttachments() {
+    const list = el('agentic-attachments');
+    if (!list) return;
+    list.hidden = !attachments.length;
+    list.replaceChildren(...attachments.map((item, index) => h('li', { class: 'agentic-attachment', title: item.name },
+      item.kind === 'image' ? h('img', { src: item.data_url, alt: '' }) : h('span', { class: 'agentic-attachment-icon', 'aria-hidden': 'true', text: '📄' }),
+      h('span', { class: 'agentic-attachment-name', text: item.name }),
+      item.kind === 'text' ? h('small', { text: `${Number(item.chars || item.text.length).toLocaleString()} chars${item.truncated ? ' (cut)' : ''}` }) : null,
+      h('button', { type: 'button', class: 'agentic-attachment-remove', 'aria-label': `Remove ${item.name}`, text: '×',
+        onclick: () => { attachments.splice(index, 1); saveAttachments(); renderAttachments(); } }))));
+  }
+  const readAs = (file, how) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error(`Couldn't read ${file.name}`));
+    reader[how](file);
+  });
+  async function pictureUrl(file) {
+    // Scaled down so the page, the saved session and Hermes's context stay small.
+    const source = await readAs(file, 'readAsDataURL');
+    const image = await new Promise((resolve, reject) => {
+      const img = new Image(); img.onload = () => resolve(img); img.onerror = () => reject(new Error(`${file.name} isn't a picture this browser can open`)); img.src = source;
+    });
+    const scale = Math.min(1, PICTURE_EDGE / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale)); canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#fff'; context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.88);
+  }
+  async function addFiles(fileList) {
+    const files = [...(fileList || [])];
+    if (!files.length) return;
+    const problems = [];
+    for (const [index, file] of files.entries()) {
+      if (attachments.length >= MAX_FILES) { problems.push(`at most ${MAX_FILES} files`); break; }
+      setStatus(`Reading ${file.name} (${index + 1}/${files.length})…`);
+      try {
+        if (file.type.startsWith('image/')) {
+          if (attachments.filter(a => a.kind === 'image').length >= MAX_PICTURES) throw new Error(`at most ${MAX_PICTURES} pictures`);
+          attachments.push({ kind: 'image', name: file.name || 'picture.jpg', data_url: await pictureUrl(file) });
+        } else if (file.type.startsWith('video/') || file.type.startsWith('audio/')) {
+          throw new Error(`${file.name}: ${LABEL} Agentic reads documents and pictures; video and audio can't be attached here`);
+        } else {
+          if (file.size > MAX_DOC_BYTES) throw new Error(`${file.name}: documents may be at most 25 MB`);
+          const read = await send('POST', '/attachments', { name: file.name || 'document.txt', data: await readAs(file, 'readAsDataURL') });
+          attachments.push(read);
+        }
+        saveAttachments(); renderAttachments();
+      } catch (error) { problems.push(error.message); }
+    }
+    setStatus(problems.length ? `Not attached: ${problems.join(' · ')}` : `${attachments.length} file${attachments.length === 1 ? '' : 's'} attached`);
+  }
+  function bindAttachDrop(panel) {
+    const guide = el('agentic-guide');
+    panel.addEventListener('dragover', event => {
+      if (![...(event.dataTransfer?.types || [])].includes('Files')) return;
+      event.preventDefault(); panel.classList.add('is-dropping');
+    });
+    panel.addEventListener('dragleave', event => { if (!panel.contains(event.relatedTarget)) panel.classList.remove('is-dropping'); });
+    panel.addEventListener('drop', event => {
+      if (!event.dataTransfer?.files?.length) return;
+      event.preventDefault(); event.stopPropagation(); panel.classList.remove('is-dropping');
+      addFiles(event.dataTransfer.files);
+    });
+    guide?.addEventListener('paste', event => {
+      const files = [...(event.clipboardData?.files || [])];
+      if (!files.length) return;
+      event.preventDefault(); addFiles(files);
     });
   }
 
@@ -402,6 +519,12 @@
             h('pre', { class: 'agentic-preview', id: 'ag-preview' }))),
         h('aside', { class: 'agentic-term', 'aria-label': 'Hermes terminal' },
           h('div', { class: 'agentic-term-head' }, h('strong', { text: '☤ Hermes Agent' }), h('span', { id: 'ag-term-state', text: 'Idle' }),
+            h('button', { type: 'button', id: 'ag-term-pause', hidden: true, text: 'Pause', onclick: async event => {
+              if (!terminal.session) return;
+              event.currentTarget.disabled = true;
+              try { await setPaused({ id: terminal.session }, event.currentTarget.dataset.action !== 'resume'); await refresh(); await refreshTerminal(); }
+              finally { event.currentTarget.disabled = false; }
+            } }),
             h('button', { type: 'button', id: 'ag-term-cancel', hidden: true, text: 'Cancel', onclick: () => steerSend('/stop') })),
           h('div', { class: 'agentic-term-picker' }, h('label', { for: 'ag-term-session', text: 'Session' }),
             h('select', { id: 'ag-term-session', onchange: event => { terminal.session = event.target.value; terminal.renderedRevision = -1; refreshTerminal(); } }),
@@ -505,7 +628,7 @@
   async function loadPreview() {
     try {
       const body = payload();
-        const preview = await send('POST', '/preview', { request: body.request, guide: body.guide, settings: body.settings });
+        const preview = await send('POST', '/preview', { request: body.request, guide: body.guide, settings: body.settings, attachments: body.attachments });
       el('ag-preview').textContent = preview.messages.map(message => `── ${message.role.toUpperCase()} ──\n${message.content}`).join('\n\n');
       el('ag-preview-size').textContent = `${preview.characters.toLocaleString()} characters · about ${Math.round(preview.characters / 3.5).toLocaleString()} input tokens · ${modelLabel(preview.model)} guide`;
     } catch (error) { el('ag-preview').textContent = error.message; }
@@ -560,14 +683,18 @@
       const disabled = !terminal.session;
       el('ag-steer-input').disabled = el('ag-steer-send').disabled = disabled;
       if (disabled) {
-        el('ag-term-state').textContent = 'Idle'; el('ag-term-cancel').hidden = true; el('ag-term-delete').hidden = true;
+        el('ag-term-state').textContent = 'Idle'; el('ag-term-cancel').hidden = true; el('ag-term-delete').hidden = true; el('ag-term-pause').hidden = true;
         el('ag-term-foot').textContent = 'Waiting for a session';
         body.replaceChildren(h('p', { class: 'agentic-term-empty', text: `Turn on Agentic mode in the ${LABEL} studio and press Generate to see Hermes work here.` }));
         terminal.renderedId = ''; return;
       }
       const row = await call(`/sessions/${terminal.session}`);
       const active = ACTIVE.has(row.state);
-      el('ag-term-cancel').hidden = !active && row.state !== 'awaiting_approval';
+      el('ag-term-cancel').hidden = !active && row.state !== 'awaiting_approval' && row.state !== 'paused';
+      const pauseNode = el('ag-term-pause');
+      pauseNode.hidden = !active && row.state !== 'paused';
+      pauseNode.textContent = row.state === 'paused' ? 'Resume' : 'Pause';
+      pauseNode.dataset.action = row.state === 'paused' ? 'resume' : 'pause';
       el('ag-term-delete').hidden = active || row.state === 'awaiting_approval' || row.state === 'awaiting_feedback';
       const state = el('ag-term-state'); state.textContent = stateText(row.state); state.dataset.state = row.state;
       const elapsed = Math.max(0, Math.floor((FINISHED.has(row.state) ? row.updated : Date.now() / 1000) - row.created));
@@ -682,6 +809,7 @@
   // ── start ────────────────────────────────────────────────────────────────
   async function setup() {
     loadedModel = currentModel();
+    loadAttachments();
     try { [settings, guides] = await Promise.all([call('/settings'), call('/guides')]); }
     catch (error) { guides = null; }
     setupPanel();

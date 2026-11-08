@@ -4,7 +4,7 @@
 // when a run finishes, so they arrive even when the tab is closed or the phone is
 // locked. iOS only allows this for the app added to the Home Screen.
 (() => {
-  const base = window.TRAINER_BASE || "/Trainer";
+  const base = window.TRAINER_BASE || document.body?.dataset.base || "/Trainer";
   const $ = (s) => document.querySelector(s);
   // Opened from a notification (?job=...): remember it before the tab code rewrites the URL.
   const openJob = new URLSearchParams(location.search).get("job");

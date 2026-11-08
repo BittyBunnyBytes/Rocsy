@@ -264,6 +264,7 @@
             <label class="option"><input type="checkbox" data-component="comfyui" checked><span class="body"><strong>ComfyUI</strong><span class="desc">Every studio renders through it. <span id="comfy-plan">Downloads ComfyUI and PyTorch for ROCm into the Rocsy folder</span>, then sets up the supervisor that starts it on demand.</span></span><span class="badge big" id="comfy-size">several GB</span></label>
             <label class="option"><input type="checkbox" data-component="hermes" checked><span class="body"><strong>Hermes Agent</strong><span class="desc">Runs the Master Agent and Agentic modes. Installs Personal Hermes (the <code>hermes</code> command) and Rocsy’s patched copy, then builds its container.</span></span></label>
             <label class="option"><input type="checkbox" data-component="ytdlp" checked><span class="body"><strong>yt-dlp</strong><span class="desc">Lets the agent download web video references.</span></span><span class="badge">small</span></label>
+            <label class="option"><input type="checkbox" data-component="music"><span class="body"><strong>Music covers</strong><span class="desc">Covers and custom voices in Music: the YuE2 pack, RSP, the Seed-VC voice converter and every model they load, each checked against its SHA-256. Needs ComfyUI. YuE2 weights are non-commercial (CC BY-NC 4.0).</span></span><span class="badge big">about 15 GB</span></label>
           </div>
           <p class="hint" id="components-hint"></p>
         </div>
@@ -337,8 +338,8 @@
     let inspectedDestination = '';
     const selected = name => document.querySelector(`input[name="${name}"]:checked`)?.value;
     const componentBoxes = () => [...document.querySelectorAll('input[data-component]')];
-    const BACKENDS = ['comfyui', 'hermes', 'ytdlp'];
-    const COMPONENT_NAMES = {motion: 'Motion', rea: 'REA', trainer: 'Trainer', comfyui: 'ComfyUI', hermes: 'Hermes Agent', ytdlp: 'yt-dlp'};
+    const BACKENDS = ['comfyui', 'hermes', 'ytdlp', 'music'];
+    const COMPONENT_NAMES = {motion: 'Motion', rea: 'REA', trainer: 'Trainer', comfyui: 'ComfyUI', hermes: 'Hermes Agent', ytdlp: 'yt-dlp', music: 'Music covers'};
     const STEPS = ['system', 'location', 'components', 'access', 'desktop', 'review'];
     let step = 'system';
     const visited = new Set(['system']);
@@ -576,7 +577,7 @@
       const comfyKept = existingKept() && inspection.current?.components?.comfyui;
       add('ComfyUI', comfyKept ? 'Already set up (kept)' : !chosen.comfyui ? 'Not set up now' : $('comfy-root').value.trim() ? `Your folder ${$('comfy-root').value.trim()}, plus the supervisor` : 'Downloaded into the Rocsy folder, plus the supervisor', 'components', !chosen.comfyui);
       const services = ['motion', 'rea', 'trainer'].filter(key => chosen[key]).map(key => COMPONENT_NAMES[key]);
-      const backends = ['hermes', 'ytdlp'].filter(key => chosen[key]).map(key => COMPONENT_NAMES[key]);
+      const backends = ['hermes', 'ytdlp', 'music'].filter(key => chosen[key]).map(key => COMPONENT_NAMES[key]);
       add('Optional services', services.length ? services.join(', ') : 'None', 'components', !services.length);
       add('Other backends', backends.length ? backends.join(', ') : 'None', 'components', !backends.length);
       add('Access', !passwordNeeded() ? 'Keeps the current password' : selected('password-mode') === 'none' ? 'No password' : passwordValid() ? 'Your own password' : 'Password not set yet', 'access');
@@ -626,6 +627,7 @@
         [85, 'Preparing the host helper…'], [90, 'Building Rocsy images…'], [92, 'Starting Rocsy…'],
         ...(chosen.ytdlp ? [[93, 'Downloading yt-dlp…']] : []),
         ...(chosen.comfyui ? [[94, $('comfy-root').value.trim() ? 'Setting up the ComfyUI supervisor…' : 'Downloading ComfyUI and PyTorch for ROCm…']] : []),
+        ...(chosen.music ? [[95, 'Music covers: YuE2, RSP, Seed-VC and their models…']] : []),
         ...(chosen.hermes ? [[96, 'Downloading and building Hermes Agent…']] : []),
         ...($('desktop-launcher').checked ? [[97, 'Creating desktop launcher…']] : []),
         ...($('terminal-command').checked || $('desktop-app').checked ? [[98, 'Setting up the rocsy command and Rocsy Desktop…']] : []),

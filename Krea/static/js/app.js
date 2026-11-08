@@ -118,6 +118,18 @@ function useLoraSet(model) {
 }
 const loraLabel = (index) => LORA_INFO[index]?.label || LORA_SLOTS[index].replace(/\.safetensors$/, "");
 const loraDefaultStrength = (index) => LORA_INFO[index]?.strength ?? 0.8;
+// Slider LoRAs dial a concept both ways: negative weights are valid (e.g. -1 darker, +1 brighter).
+const SLIDER_LIMIT = 10;
+const isSliderLora = (index) => Boolean(LORA_INFO[index]?.slider);
+const strengthBounds = (index) => isSliderLora(index) ? {min: -SLIDER_LIMIT, max: SLIDER_LIMIT} : {min: 0, max: 2};
+// The range control spans ±2 by default, wider when the recommended value is further out.
+const sliderSpan = (index) => Math.min(SLIDER_LIMIT, Math.max(2, Math.ceil(Math.abs(loraDefaultStrength(index)) * 2)));
+const sliderRangeHtml = (index, value, cls) => {
+  const span = sliderSpan(index);
+  return `<span class="lora-slider-track" title="Slider LoRA: left of 0 reverses the effect"><span class="lora-slider-end">&minus;</span>
+    <input type="range" class="${cls}" min="${-span}" max="${span}" step="0.05" value="${escapeHtml(String(value))}" list="lora-slider-zero" aria-label="${escapeHtml(loraLabel(index))} slider">
+    <span class="lora-slider-end">+</span></span>`;
+};
 
 // One LoRA row, as in Video: "!" (LoRAs with trigger words) shows them on
 // hover/focus, "i" opens the source page (its tooltip has the recommended
@@ -128,9 +140,10 @@ function loraRowHtml(index) {
   const triggers = info.triggers || [];
   const enabled = Boolean(LORA_DEFAULTS[index]);
   const tip = `Trigger words:\n${triggers.map((word) => `• ${word}`).join("\n")}`;
-  const strengthTitle = `Recommended ${loraDefaultStrength(index)}${info.strength_note ? ` — ${info.strength_note}` : ""}`;
+  const slider = isSliderLora(index), bounds = strengthBounds(index);
+  const strengthTitle = `Recommended ${loraDefaultStrength(index)}${slider ? " (slider: negative values reverse it)" : ""}${info.strength_note ? ` — ${info.strength_note}` : ""}`;
   return `
-    <div class="lora-row${triggers.length ? " has-trigger" : ""}${enabled ? " is-enabled" : ""}" data-lora-index="${index}" ${info.deleted ? "hidden" : ""}>
+    <div class="lora-row${triggers.length ? " has-trigger" : ""}${enabled ? " is-enabled" : ""}${slider ? " is-slider" : ""}" data-lora-index="${index}" ${info.deleted ? "hidden" : ""}>
       <label class="lora-label" title="${escapeHtml(LORA_SLOTS[index])}">
         <span class="switch switch-small"><input type="checkbox" class="lora-enabled" ${enabled ? "checked" : ""} ${info.deleted ? "disabled" : ""}><span></span></span>
         <span class="lora-name">${escapeHtml(loraLabel(index))}</span>
@@ -138,8 +151,10 @@ function loraRowHtml(index) {
       <span class="lora-badges">
         ${triggers.length ? `<span class="lora-badge lora-badge-trigger" tabindex="0" aria-label="${escapeHtml(tip)}" data-tip="${escapeHtml(tip)}">!</span>` : ""}
         ${info.url ? `<a class="lora-badge" href="${escapeHtml(info.url)}" target="_blank" rel="noopener noreferrer" title="Open source page — ${escapeHtml(strengthTitle)}">i</a>` : ""}
+        ${slider ? `<span class="lora-badge lora-badge-slider" title="Slider LoRA: drag below 0 to reverse the effect">&#8646;</span>` : ""}
       </span>
-      <input type="number" class="lora-strength" min="0" max="2" step="0.05" value="${loraDefaultStrength(index)}" title="${escapeHtml(strengthTitle)}" aria-label="${escapeHtml(loraLabel(index))} strength">
+      ${slider ? sliderRangeHtml(index, loraDefaultStrength(index), "lora-slider-range") : ""}
+      <input type="number" class="lora-strength" min="${bounds.min}" max="${bounds.max}" step="0.05" value="${loraDefaultStrength(index)}" title="${escapeHtml(strengthTitle)}" aria-label="${escapeHtml(loraLabel(index))} strength">
     </div>`;
 }
 
@@ -168,6 +183,8 @@ function syncLoraRows() {
     const on = row.querySelector(".lora-enabled").checked;
     row.classList.toggle("is-enabled", on);
     enabled += on;
+    const range = row.querySelector(".lora-slider-range");
+    if (range) range.value = row.querySelector(".lora-strength").value;
   });
   const badge = $("#lora-count");
   if (badge) badge.textContent = enabled ? `${enabled} on` : "";
@@ -194,8 +211,6 @@ const ICON_PATHS = {
   trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>',
   cancel: '<rect x="6" y="6" width="12" height="12" rx="1"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
-  // Put this generation's prompt and settings back into the form.
-  reuse: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   save: '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>',
   pencil: '<path d="M21.2 6.8a2.8 2.8 0 0 0-4-4L3.8 16.2a2 2 0 0 0-.5.8L2 21.4a.5.5 0 0 0 .6.6l4.4-1.3a2 2 0 0 0 .8-.5z"/><path d="m15 5 4 4"/>',
   upload: '<path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14"/>',
@@ -284,10 +299,10 @@ function saveReferences() {
 // (strength, Replace) and the on/off switch. Only attached slots are listed,
 // in slot order; removing one moves the later ones up, like H3.
 function referenceItem(ref, index) {
-  const token = isQwen() ? `<image${index + 1}>` : `Reference ${index + 1}`;
+  const token = isQwen() ? `<image${index + 1}>` : state.model === MOSS ? "Img2img source" : `Reference ${index + 1}`;
   const meta = ref.uploading ? "Uploading…" : ref.width && ref.height ? `${ref.width}×${ref.height}` : "Uploaded";
   const extras = `<span class="reference-tools">
-      ${isQwen() ? "" : `<label class="reference-strength-field" title="Krea 2 style-reference LoRA weight — the strongest enabled reference sets it for all references">Strength <input type="number" class="reference-strength" min="0" max="2" step="0.05" value="${ref.strength}" aria-label="Reference ${index + 1} strength"></label>`}
+      ${isQwen() || state.model === MOSS ? "" : `<label class="reference-strength-field" title="Krea 2 style-reference LoRA weight — the strongest enabled reference sets it for all references">Strength <input type="number" class="reference-strength" min="0" max="2" step="0.05" value="${ref.strength}" aria-label="Reference ${index + 1} strength"></label>`}
       <button type="button" class="button-link" data-ref-pick="${index}">Replace</button>
     </span>`;
   return {
@@ -651,7 +666,8 @@ function speedKey(model, request) {
   const qwen = model === QWEN
     ? [isQwenTurboCheckpoint(request.checkpoint) ? "turbo" : request.steps, Boolean(refs && request.match_reference_size)]
     : [];
-  const turbo = [request.speed || "standard", model === MOSS ? request.moss_steps || 50 : model === QWEN ? "" : request.krea_steps || ""];
+  const turbo = [request.speed || "standard", model === MOSS ? request.moss_steps || 50 : model === QWEN ? "" : request.krea_steps || "",
+    model === MOSS && refs ? request.moss_denoise ?? 0.6 : ""];
   const enhancer = [Boolean(request.prompt_enhancer), Boolean(request.prompt_enhancer && request.enhancer_thinking)];
   return JSON.stringify([model, request.width, request.height, Boolean(request.enhance), refs, ...enhancer, ...qwen, ...turbo]);
 }
@@ -707,7 +723,7 @@ function renderCheckpointOptions() {
   select.value = [previous, saved, preferred, options[0]].find((name) => options.includes(name)) || "";
   select.disabled = !options.length;
   updateSpeedFields();
-  $("#checkpoint-hint").textContent = options.length ? `${options.length} installed checkpoint${options.length === 1 ? "" : "s"}${state.model === "krea2" ? " · Lustify is listed here" : ""}` : "No compatible checkpoint installed yet. Generate offers to download this model's files.";
+  $("#checkpoint-hint").textContent = options.length ? `${options.length} installed checkpoint${options.length === 1 ? "" : "s"}` : "No compatible checkpoint installed yet. Generate offers to download this model's files.";
 }
 
 async function refreshCheckpoints() {
@@ -727,7 +743,9 @@ function applyModel(model) {
   document.querySelectorAll(".anima-only").forEach((node) => { node.hidden = state.model !== ANIMA; });
   document.querySelectorAll(".moss-only").forEach((node) => { node.hidden = state.model !== MOSS; });
   $("#lora-panel").hidden = false;
-  $("#reference-panel").hidden = state.model === ANIMA || state.model === MOSS;
+  $("#reference-panel").hidden = state.model === ANIMA;
+  // Qwen: reference resolution + aspect follow; MOSS: img2img denoise + aspect follow.
+  $("#reference-options").hidden = !isQwen() && state.model !== MOSS;
   $("#enhance-row").hidden = state.model === MOSS;
   if (state.model === ANIMA) {
     const versions = MODEL_CONFIG[ANIMA].versions || {};
@@ -739,6 +757,7 @@ function applyModel(model) {
   updateSpeedFields();
   useLoraSet(state.model); // Qwen has its own LoRA list
   $("#sampling-model-label").textContent = MODEL_CONFIG[state.model]?.label || "";
+  renderSpeedups();
   $(".brand-mark").textContent = isQwen() ? "Qw" : state.model === ANIMA ? "An" : state.model === MOSS ? "Ms" : "Kr2";
   renderCheckpointOptions();
   const maxSide = MODEL_CONFIG[state.model]?.max_side ?? 1536;
@@ -804,7 +823,7 @@ function syncSizePreset() {
 function updateSizeNote() {
   const note = $("#size-note");
   if (!note) return;
-  const followsReference = isQwen() && $("#use-references").checked && $("#match-reference-size").checked
+  const followsReference = (isQwen() || state.model === MOSS) && $("#use-references").checked && $("#match-reference-size").checked
     && state.references.slice(0, referenceSlotCount()).some((ref) => ref.image && ref.enabled);
   note.hidden = !followsReference;
 }
@@ -889,6 +908,55 @@ function updateReferenceHint() {
   $("#reference-hint").hidden = !(isQwen() && $("#use-references").checked);
 }
 
+/* ---------------------------------------------------- speedup & saves -- */
+// Text encoder cache + attention backend (backend/speedups.py, comfy_nodes/bunny_cond_cache).
+const ATTENTION_LABELS = { flash: "Flash", pytorch: "PyTorch SDPA", sage: "SageAttention", kitchen: "Comfy-Kitchen INT8" };
+const ATTENTION_WHY = {
+  flash: "Fastest in tests on Krea 2, Lustify and Qwen (ComfyUI's default here).",
+  pytorch: "PyTorch scaled-dot-product attention. Exact, but 20–30% slower than Flash in tests.",
+  sage: "SageAttention, 8-bit. 20–30% slower than Flash on this GPU and can change the composition.",
+  kitchen: "Comfy-Kitchen INT8. Ties Flash for speed in tests but changes small details.",
+};
+state.speedups = { available: ["flash"], best: {}, te_cache_available: true };
+
+async function loadSpeedups() {
+  try {
+    state.speedups = await Api.request("/api/speedups");
+  } catch (error) {
+    console.warn("speedups", error);
+  }
+  renderSpeedups();
+}
+
+function renderSpeedups() {
+  const info = state.speedups || {};
+  $("#speedups-model-label").textContent = MODEL_CONFIG[state.model]?.label || "";
+  const best = info.best?.[state.model] || "flash";
+  const select = $("#attention");
+  for (const option of select.options) {
+    if (option.value === "auto") {
+      option.textContent = `Auto (${ATTENTION_LABELS[best]})`;
+      continue;
+    }
+    const missing = !(info.available || []).includes(option.value);
+    option.disabled = missing;
+    option.textContent = ATTENTION_LABELS[option.value] + (missing ? " (not installed)" : "");
+  }
+  if (select.selectedOptions[0]?.disabled) select.value = "auto";
+  const chosen = select.value === "auto" ? best : select.value;
+  const fixed = info.fixed?.[state.model];
+  select.disabled = Boolean(fixed);
+  select.closest(".speedup-row").classList.toggle("is-locked", Boolean(fixed));
+  $("#attention-why").textContent = fixed || ATTENTION_WHY[chosen] || "";
+  const cacheRow = $("#te-cache-row");
+  const cacheMissing = info.te_cache_available === false;
+  cacheRow.classList.toggle("is-locked", cacheMissing);
+  $("#te-cache").disabled = cacheMissing;
+  $("#te-cache-why").textContent = cacheMissing
+    ? "Needs the Bunny node pack (bunny_cond_cache) in ComfyUI."
+    : "Skips the text encoder for a prompt it has already encoded (Retry, new seed, the rest of a batch). Same pixels.";
+}
+
 /* ----------------------------------------------------------- settings -- */
 // One settings object for the form: what Generate sends (buildPayload), what a
 // preset stores (presetSnapshot) and what "Use these settings" puts back (applySettings).
@@ -938,8 +1006,8 @@ function collectSettings() {
     settings.moss_steps = Number($("#moss-steps").value) || 50;
     settings.moss_cfg = Number($("#moss-cfg").value) || 3;
     settings.negative_prompt = $("#speed").value === "standard" ? $("#moss-negative-prompt").value : "";
-    settings.use_references = false;
-    settings.references = [];
+    settings.moss_denoise = Number($("#moss-denoise").value) || 0.6;
+    settings.match_reference_size = $("#match-reference-size").checked;
     settings.enhance = false;
   } else {
     settings.turbo_strength = Number($("#turbo-strength").value) || 1;
@@ -947,6 +1015,8 @@ function collectSettings() {
     if (steps) settings.krea_steps = steps;
   }
   settings.speed = $("#speed").value;
+  settings.te_cache = $("#te-cache").checked;
+  settings.attention = $("#attention").value;
   settings.loras = collectLoras();
   const seedValue = $("#seed").value.trim();
   if (seedValue !== "") settings.seed = Number(seedValue);
@@ -966,6 +1036,9 @@ function applySettings(settings, { withModel = false } = {}) {
   if (settings.enhance !== undefined) $("#enhance").checked = Boolean(settings.enhance);
   if (settings.use_references !== undefined) $("#use-references").checked = Boolean(settings.use_references);
   if ("seed" in settings) $("#seed").value = settings.seed ?? "";
+  if ("te_cache" in settings) $("#te-cache").checked = settings.te_cache !== false;
+  if (settings.attention && [...$("#attention").options].some((o) => o.value === settings.attention)) $("#attention").value = settings.attention;
+  renderSpeedups();
   if (settings.count) $("#batch-count").value = String(settings.count);
   if (settings.speed) { renderSpeedOptions(); $("#speed").value = settings.speed; }
   if ("krea_steps" in settings || settings.model) $("#krea-steps").value = settings.krea_steps || "";
@@ -975,6 +1048,7 @@ function applySettings(settings, { withModel = false } = {}) {
   if (settings.anima_cfg !== undefined) $("#anima-cfg").value = settings.anima_cfg;
   if (settings.moss_steps !== undefined) $("#moss-steps").value = settings.moss_steps;
   if (settings.moss_cfg !== undefined) $("#moss-cfg").value = settings.moss_cfg;
+  if (settings.moss_denoise !== undefined) $("#moss-denoise").value = settings.moss_denoise;
   if (settings.model === MOSS) $("#moss-negative-prompt").value = settings.negative_prompt || "";
   if (settings.model === ANIMA || settings.anima_version) $("#anima-negative-prompt").value = settings.negative_prompt || "";
   updateSpeedFields();
@@ -1215,6 +1289,7 @@ function bindForm() {
   $("#checkpoint").addEventListener("change", (event) => { updateSpeedFields(); try { localStorage.setItem(`krea.checkpoint.${state.model}`, event.target.value); } catch { /* storage unavailable */ } });
   $("#use-references").addEventListener("change", updateReferenceHint);
   $("#speed").addEventListener("change", updateSpeedFields);
+  $("#attention").addEventListener("change", renderSpeedups);
   $("#use-references").addEventListener("change", updateSizeNote);
   $("#match-reference-size").addEventListener("change", updateSizeNote);
 
@@ -1379,7 +1454,6 @@ function jobCard(job) {
         ${active ? button("cancel", "cancel", job.state === "cancelling" ? "Cancelling…" : "Cancel", " danger") : ""}
         ${job.zip_url && !active ? `<a class="secondary-button job-icon-button" href="${job.zip_url}" download title="Download all ${(job.images || []).length} images (zip)" aria-label="Download all images">${uiIcon("download")}</a>`
           : !multi && job.state === "complete" && job.download_url ? `<a class="secondary-button job-icon-button" href="${job.download_url}" download title="Download" aria-label="Download">${uiIcon("download")}</a>` : ""}
-        ${job.request?.prompt ? button("reuse", "reuse", "Use these settings (prompt, model and settings go back into the form)") : ""}
         ${isTerminalJob(job) && job.request?.prompt ? button("retry", "retry", "Retry (load the exact settings, references and seed into the form)") : ""}
         ${isTerminalJob(job) ? button("remove", "trash", "Remove", " danger") : ""}
       </div>
@@ -1492,12 +1566,7 @@ async function jobAction(action, jobId) {
       $("#generate-form").scrollIntoView({ behavior: "smooth", block: "start" });
       toast("Loaded the exact settings, references and seed. Review, then Generate.");
     }
-    else if (action === "reuse") {
-      applySettings({ ...job.request, seed: job.request.seed ?? null }, { withModel: true });
-      renderPresetBar();
-      $("#prompt").focus();
-      toast("Settings loaded into the form.");
-    } else if (action === "info") openJobInfo(job);
+    else if (action === "info") openJobInfo(job);
     else if (action === "view") openJobImage(job, Number(jobActionIndex ?? 0));
   } catch (error) {
     toast(error.message, "error");
@@ -1510,9 +1579,17 @@ function openJobInfo(job) {
   const jobSet = loraSetFor(job.model);
   const loras = (request.loras || []).map((slot, index) => slot.enabled ? `${escapeHtml(LORA_SETS.info[jobSet]?.[index]?.label || (LORA_SETS.slots[jobSet]?.[index] || `LoRA ${index + 1}`).replace(/\.safetensors$/, ""))} <span class="field-hint">${slot.strength}</span>` : "").filter(Boolean);
   const refs = request.use_references ? (request.references || []).map((ref, index) => ref.enabled && ref.image
-    ? `<figure class="job-info-ref"><img src="${referencePreviewUrl(ref.image)}" alt="" loading="lazy"><figcaption>Reference ${index + 1}${job.model === QWEN ? "" : ` · ${ref.strength}`}</figcaption></figure>` : "").filter(Boolean) : [];
+    ? `<figure class="job-info-ref"><img src="${referencePreviewUrl(ref.image)}" alt="" loading="lazy"><figcaption>${job.model === MOSS ? `Img2img source · denoise ${request.moss_denoise ?? 0.6}` : `Reference ${index + 1}${job.model === QWEN ? "" : ` · ${ref.strength}`}`}</figcaption></figure>` : "").filter(Boolean) : [];
   const duration = job.started_at && job.completed_at ? formatSeconds((new Date(job.completed_at) - new Date(job.started_at)) / 1000) : "";
+  let tab = "details";
+  try { tab = localStorage.getItem(JOB_INFO_TAB_KEY) === "stats" ? "stats" : "details"; } catch { /* storage blocked */ }
   $("#job-info-body").innerHTML = `
+    <div class="job-info-tabs" role="tablist" aria-label="Generation details">
+      <button type="button" role="tab" data-info-tab="details">Details</button>
+      <button type="button" role="tab" data-info-tab="stats">Stats</button>
+    </div>
+    <div class="job-info-pane" data-info-pane="stats" role="tabpanel"><p class="field-hint">Loading…</p></div>
+    <div class="job-info-pane" data-info-pane="details" role="tabpanel">
     <section class="job-info-section">
       <div class="job-info-heading"><h3>Prompt</h3><button type="button" class="secondary-button job-icon-button" data-copy-prompt title="Copy prompt" aria-label="Copy prompt">${uiIcon("copy")}</button></div>
       <pre class="job-info-prompt">${escapeHtml(job.prompt)}</pre>
@@ -1529,6 +1606,8 @@ function openJobInfo(job) {
         ${job.model === QWEN ? row("Steps / CFG", `${request.steps ?? ""} / ${request.cfg ?? ""}`) : ""}
         ${job.model === MOSS ? row("Steps / CFG", request.speed === "dmd8" ? "8 / none" : request.speed === "dmad4" ? "4 / none" : `${request.moss_steps ?? 50} / ${request.moss_cfg ?? 3}`) : ""}
         ${(job.batch_count || 1) > 1 ? row("Images", `${(job.images || []).length} of ${job.batch_count} · seeds ${escapeHtml(String(job.seed))} + 0…${job.batch_count - 1}`) : ""}
+        ${request.attention ? row("Attention", request.attention === "auto" ? "Auto" : (ATTENTION_LABELS[request.attention] || request.attention)) : ""}
+        ${"te_cache" in request ? row("Text encoder cache", request.te_cache === false ? "Off" : "On") : ""}
         ${job.model === QWEN ? row("Text encoder", request.text_encoder === "abliterated" ? "Qwen3-VL 8B Abliterated (BF16)" : "Qwen3-VL 8B (int8)") : ""}
         ${row("Speed", job.model === QWEN && isQwenTurboCheckpoint(request.checkpoint) ? "Qwen-Image Turbo, 8 steps, CFG 1"
           : request.speed === "viggle" ? "Viggle turbo LoRA, 6 steps"
@@ -1545,11 +1624,145 @@ function openJobInfo(job) {
       </dl>
       ${refs.length ? `<div class="job-info-refs">${refs.join("")}</div>` : ""}
       ${job.error ? `<div class="job-error">${escapeHtml(job.error)}</div>` : ""}
-    </section>`;
-  $("[data-copy-prompt]", $("#job-info-body")).addEventListener("click", async () => {
+    </section>
+    </div>`;
+  const body = $("#job-info-body");
+  $("[data-copy-prompt]", body).addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(job.prompt); toast("Prompt copied."); } catch { toast("Couldn't copy - select the text instead.", "error"); }
   });
+  const showTab = (name) => {
+    body.querySelectorAll("[data-info-tab]").forEach((button) => {
+      button.classList.toggle("is-active", button.dataset.infoTab === name);
+      button.setAttribute("aria-selected", String(button.dataset.infoTab === name));
+    });
+    body.querySelectorAll("[data-info-pane]").forEach((pane) => { pane.hidden = pane.dataset.infoPane !== name; });
+    try { localStorage.setItem(JOB_INFO_TAB_KEY, name); } catch { /* storage blocked */ }
+  };
+  body.querySelectorAll("[data-info-tab]").forEach((button) => button.addEventListener("click", () => showTab(button.dataset.infoTab)));
+  showTab(tab);
   openDialog("#job-info");
+  loadJobStats(body.querySelector('[data-info-pane="stats"]'), job.id);
+}
+
+// The info dialog's Stats tab (like Video's): where the generation's time went, from
+// GET /api/jobs/{id}/stats (backend/job_stats.py) - a workflow map in run order, then
+// every stage slowest first, samplers with their per-step times.
+const JOB_INFO_TAB_KEY = "krea-job-info-tab";
+const STATS_CATEGORY_ORDER = ["wait", "enhance", "load", "encode", "sample", "upscale", "decode", "output", "other"];
+
+function formatStatSeconds(seconds) {
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  if (seconds < 3600) return formatSeconds(seconds);
+  const total = Math.round(seconds);
+  return `${Math.floor(total / 3600)}h ${String(Math.floor((total % 3600) / 60)).padStart(2, "0")}m`;
+}
+
+function formatStatShare(seconds, total) {
+  const share = total > 0 ? (seconds / total) * 100 : 0;
+  return share >= 1 || share === 0 ? `${Math.round(share)}%` : "<1%";
+}
+
+function jobStatsHtml(stats) {
+  if (!stats || !stats.available) {
+    return `<p class="field-hint">${escapeHtml(stats?.message || "No stage timings for this generation.")}</p>`;
+  }
+  const total = stats.total || 0;
+  const stages = stats.stages || [];
+  const tip = (stage) => `${stage.label} · ${formatStatSeconds(stage.seconds)} (${formatStatShare(stage.seconds, total)})`;
+  const ranked = stages.map((stage, index) => ({ ...stage, index })).sort((a, b) => b.seconds - a.seconds);
+  const slowest = ranked[0];
+  const work = ranked.filter((stage) => stage.category !== "wait");
+  const longest = slowest?.seconds || 1;
+  const quick = ranked.filter((stage) => stage.seconds < Math.max(1, total * 0.01));
+  const shown = ranked.filter((stage) => !quick.includes(stage));
+  const row = (stage) => {
+    const steps = stage.steps || [];
+    const stepMax = Math.max(...steps, 0.001);
+    const later = steps.slice(1);
+    const average = later.length ? later.reduce((sum, value) => sum + value, 0) / later.length : 0;
+    const stepWord = /sampler/i.test(stage.class_type || "") ? "step" : "tick";
+    const head = `
+      <span class="stats-row-label"><span class="stats-dot" data-cat="${escapeHtml(stage.category)}"></span>
+        <span class="stats-row-name">${escapeHtml(stage.label)}${stage.running ? ` <em class="stats-running">running</em>` : ""}</span>
+        ${stage.class_type && stage.class_type !== stage.label ? `<span class="stats-row-class">${escapeHtml(stage.class_type)}</span>` : ""}</span>
+      <span class="stats-row-bar"><span data-cat="${escapeHtml(stage.category)}" style="width:${Math.max(0.5, (stage.seconds / longest) * 100).toFixed(2)}%"></span></span>
+      <span class="stats-row-time">${formatStatSeconds(stage.seconds)}</span>
+      <span class="stats-row-share">${formatStatShare(stage.seconds, total)}</span>`;
+    if (!steps.length) {
+      return `<li class="stats-row"${stage.detail ? ` title="${escapeHtml(stage.detail)}"` : ""}>${head}</li>`;
+    }
+    return `<li class="stats-row"><details><summary>${head}</summary>
+      <div class="stats-steps">
+        <p class="field-hint">${steps.length} ${stepWord}s · first ${formatStatSeconds(steps[0])} (includes getting the model onto the GPU)${average ? ` · then ${formatStatSeconds(average)} per ${stepWord} on average` : ""}</p>
+        <div class="stats-step-bars" role="img" aria-label="Seconds per ${stepWord}">${steps.map((value, index) => `
+          <span data-tip="${escapeHtml(`${stepWord[0].toUpperCase()}${stepWord.slice(1)} ${index + 1} · ${formatStatSeconds(value)}`)}" style="height:${Math.max(3, (value / stepMax) * 100).toFixed(1)}%"></span>`).join("")}
+        </div>
+      </div></details></li>`;
+  };
+  const categories = [...(stats.categories || [])].sort((a, b) => STATS_CATEGORY_ORDER.indexOf(a.key) - STATS_CATEGORY_ORDER.indexOf(b.key));
+  return `
+    <div class="stats-tiles">
+      <div class="stats-tile"><span>${stats.running ? "So far" : "Total time"}</span><strong>${formatStatSeconds(total)}</strong></div>
+      <div class="stats-tile"><span>Slowest stage</span><strong>${escapeHtml(slowest ? slowest.label : "-")}</strong>
+        <small>${slowest ? `${formatStatSeconds(slowest.seconds)} · ${formatStatShare(slowest.seconds, total)} of the total` : ""}</small></div>
+      <div class="stats-tile"><span>Slowest work</span><strong>${escapeHtml(work[0] ? work[0].label : "-")}</strong>
+        <small>${work[0] ? `${formatStatSeconds(work[0].seconds)} · ${formatStatShare(work[0].seconds, total)}` : ""}</small></div>
+      <div class="stats-tile"><span>Nodes</span><strong>${stats.nodes_run} ran</strong><small>${stats.nodes_cached} cached (skipped)</small></div>
+    </div>
+    <section class="job-info-section">
+      <h3>Workflow map${stats.running ? " · live" : ""}</h3>
+      <div class="stats-map" role="img" aria-label="Time per stage in run order">${stages.map((stage) => `
+        <span data-cat="${escapeHtml(stage.category)}" data-tip="${escapeHtml(tip(stage))}" style="flex-grow:${stage.seconds}"></span>`).join("")}
+      </div>
+      <div class="stats-axis"><span>0s</span><span>${formatStatSeconds(total / 2)}</span><span>${formatStatSeconds(total)}</span></div>
+      <ul class="stats-legend">${categories.map((category) => `
+        <li><span class="stats-dot" data-cat="${escapeHtml(category.key)}"></span>${escapeHtml(category.label)}
+          <b>${formatStatSeconds(category.seconds)}</b><small>${formatStatShare(category.seconds, total)}</small></li>`).join("")}
+      </ul>
+    </section>
+    <section class="job-info-section">
+      <h3>Stages, slowest first</h3>
+      <ol class="stats-rows">${shown.map(row).join("")}</ol>
+      ${quick.length ? `<details class="stats-quick"><summary>${quick.length} quick stage${quick.length === 1 ? "" : "s"} · ${formatStatSeconds(quick.reduce((sum, stage) => sum + stage.seconds, 0))} together</summary>
+        <ol class="stats-rows">${quick.map(row).join("")}</ol></details>` : ""}
+    </section>
+    <div class="stats-tip" hidden></div>`;
+}
+
+// Fills the Stats pane, binds the hover/tap tooltip once, and refreshes a running job every 5 s while the dialog is open.
+async function loadJobStats(pane, jobId) {
+  const show = (event) => {
+    const tipBox = pane.querySelector(".stats-tip");
+    if (!tipBox) return;
+    const target = event.target.closest("[data-tip]");
+    if (!target) { tipBox.hidden = true; return; }
+    tipBox.textContent = target.dataset.tip;
+    tipBox.hidden = false;
+    const box = pane.getBoundingClientRect();
+    tipBox.style.left = `${Math.min(Math.max(0, event.clientX - box.left + 12), Math.max(0, box.width - tipBox.offsetWidth))}px`;
+    tipBox.style.top = `${event.clientY - box.top + 16}px`;
+  };
+  pane.addEventListener("pointermove", show);
+  pane.addEventListener("pointerdown", show);
+  pane.addEventListener("pointerleave", () => { const tipBox = pane.querySelector(".stats-tip"); if (tipBox) tipBox.hidden = true; });
+  const refresh = async () => {
+    if ($("#job-info").hidden || !pane.isConnected) return;
+    let stats;
+    try {
+      stats = await Api.request(`/api/jobs/${jobId}/stats`);
+    } catch (error) {
+      if (!pane.querySelector(".stats-tiles")) pane.innerHTML = `<p class="job-error">${escapeHtml(error.message || "Could not load the stats.")}</p>`;
+      setTimeout(refresh, 5000);
+      return;
+    }
+    if (!pane.isConnected) return;
+    const open = new Set([...pane.querySelectorAll(".stats-row details[open] .stats-row-name")].map((node) => node.textContent));
+    pane.innerHTML = jobStatsHtml(stats);
+    pane.querySelectorAll(".stats-row details").forEach((node) => { if (open.has(node.querySelector(".stats-row-name")?.textContent)) node.open = true; });
+    const job = state.jobs.find((item) => item.id === jobId);
+    if (stats.running || (job && isActiveJob(job))) setTimeout(refresh, 5000);
+  };
+  await refresh();
 }
 
 function bindJobs() {
@@ -1689,7 +1902,8 @@ function galleryIndexes() {
   const order = gallery.catalog?.order || LORA_SLOTS;
   return order.map((name) => LORA_SLOTS.indexOf(name)).filter((index) => {
     if (index < 0 || galleryMeta(index).deleted) return false;
-    if (group && (gallery.catalog?.assignments[LORA_SLOTS[index]] || galleryMeta(index).group || "Other") !== group) return false;
+    if (group === "__sliders__") { if (!galleryMeta(index).slider) return false; }
+    else if (group && (gallery.catalog?.assignments[LORA_SLOTS[index]] || galleryMeta(index).group || "Other") !== group) return false;
     if (enabledOnly && !loraRow(index)?.querySelector(".lora-enabled")?.checked) return false;
     if (!query) return true;
     const info = galleryInfo(index), meta = galleryMeta(index);
@@ -1736,12 +1950,13 @@ function galleryCard(index, detail = false) {
     <div class="lora-card-body"><div class="lora-card-head"><div class="lora-card-title">
       ${detail ? `<strong>${escapeHtml(label)}</strong>` : `<button type="button" class="lora-card-open" data-gallery-open>${escapeHtml(label)}</button>`}
       ${source ? `<span class="field-hint">${escapeHtml(source)}</span>` : ""}</div>
-      <input type="number" class="lora-card-strength" min="0" max="2" step="0.05" value="${escapeHtml(strength)}" aria-label="Strength">
+      ${meta.slider ? sliderRangeHtml(index, strength, "lora-card-slider") : ""}
+      <input type="number" class="lora-card-strength" min="${strengthBounds(index).min}" max="${strengthBounds(index).max}" step="0.05" value="${escapeHtml(strength)}" aria-label="Strength">
       <label class="switch" title="Use this LoRA"><input type="checkbox" class="lora-card-enabled" ${enabled ? "checked" : ""} aria-label="Use ${escapeHtml(label)}"><span></span></label></div>
-      <div class="lora-card-chips"><span class="lora-chip">${escapeHtml(group)}</span>${info.base_model ? `<span class="lora-chip">${escapeHtml(info.base_model)}</span>` : ""}
+      <div class="lora-card-chips">${meta.slider ? `<span class="lora-chip lora-chip-slider" title="Negative strengths reverse the effect">&#8646; Slider</span>` : ""}<span class="lora-chip">${escapeHtml(group)}</span>${info.base_model ? `<span class="lora-chip">${escapeHtml(info.base_model)}</span>` : ""}
       ${triggers.map((word) => `<button type="button" class="reference-token" data-gallery-trigger="${escapeHtml(word)}" title="Add to prompt">${escapeHtml(word)}</button>`).join("")}</div>
       ${aliasGroups.length ? `<div class="lora-card-aliases">${aliasGroups.flatMap((entry) => entry.aliases.map((alias) => `<button type="button" class="lora-chip" data-gallery-alias="${escapeHtml(alias)}" title="Add shortcut for ${escapeHtml(entry.target)}">${escapeHtml(alias)} &rarr; ${escapeHtml(entry.target)}</button>`)).join("")}</div>` : ""}
-      <p class="lora-card-note">Recommended ${escapeHtml(String(meta.strength ?? 1))}${meta.strength_note ? ` · ${escapeHtml(meta.strength_note)}` : ""}</p>
+      <p class="lora-card-note">Recommended strength ${escapeHtml(String(meta.strength ?? 1))}${meta.slider && !/^slider/i.test(meta.strength_note || "") ? " · slider: try negative values too" : ""}${meta.strength_note ? ` · ${escapeHtml(meta.strength_note)}` : ""}</p>
       ${info.description ? `<p class="lora-card-desc${detail ? " is-open" : ""}">${escapeHtml(info.description)}</p>` : ""}
       <div class="lora-card-foot">${!detail && info.description ? `<button type="button" class="button-link" data-gallery-open>Show more</button>` : "<span></span>"}
       <button type="button" class="secondary-button" data-gallery-edit>Edit</button>
@@ -1749,7 +1964,8 @@ function galleryCard(index, detail = false) {
       ${detail && gallery.editing ? `<div class="lora-gallery-editor">
         <input type="text" data-edit-name maxlength="100" value="${escapeHtml(label)}" aria-label="LoRA name">
         <select data-edit-group aria-label="Category">${(gallery.catalog?.categories || [group]).map((category) => `<option value="${escapeHtml(category)}" ${category === group ? "selected" : ""}>${escapeHtml(category)}</option>`).join("")}</select>
-        <input type="number" data-edit-strength min="0" max="2" step="0.05" value="${escapeHtml(String(meta.strength ?? 1))}" aria-label="Recommended strength">
+        <input type="number" data-edit-strength min="${-SLIDER_LIMIT}" max="${SLIDER_LIMIT}" step="0.05" value="${escapeHtml(String(meta.strength ?? 1))}" aria-label="Recommended strength">
+        <label class="toggle-label" title="Slider LoRAs work in both directions: negative strengths reverse the effect"><input type="checkbox" data-edit-slider ${meta.slider ? "checked" : ""}><span>Slider LoRA (allows negative strength)</span></label>
         <input type="text" data-edit-triggers value="${escapeHtml(triggers.join(", "))}" aria-label="Trigger words" placeholder="Trigger words, comma separated">
         <textarea data-edit-description aria-label="Description" placeholder="Description">${escapeHtml(info.description || "")}</textarea>
         <input type="url" data-edit-url value="${escapeHtml(info.url || meta.url || "")}" aria-label="Source URL" placeholder="https://…">
@@ -1808,7 +2024,8 @@ async function openLoraGallery() {
   $("#lora-gallery-config").hidden = true;
   $("#lora-gallery-nsfw").checked = galleryShowsNsfw();
   const groups = gallery.catalog.categories || [];
-  $("#lora-gallery-group").innerHTML = `<option value="">All categories</option>` + groups.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
+  $("#lora-gallery-group").innerHTML = `<option value="">All categories</option>` +
+    (LORA_INFO.some((info) => info?.slider && !info.deleted) ? `<option value="__sliders__">&#8646; Sliders only</option>` : "") + groups.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
   renderLoraGallery();
   openDialog("#lora-gallery");
   $("#lora-gallery-search").focus();
@@ -1818,7 +2035,7 @@ async function saveGalleryDetails(card) {
   const index = Number(card.dataset.galleryIndex), filename = LORA_SLOTS[index], meta = galleryMeta(index);
   const value = (selector) => $(selector, card).value.trim();
   const body = {filename, label: value("[data-edit-name]"), group: value("[data-edit-group]"),
-    default_strength: Number(value("[data-edit-strength]")), triggers: value("[data-edit-triggers]").split(",").map((word) => word.trim()).filter(Boolean),
+    default_strength: Number(value("[data-edit-strength]")), slider: $("[data-edit-slider]", card).checked, triggers: value("[data-edit-triggers]").split(",").map((word) => word.trim()).filter(Boolean),
     description: value("[data-edit-description]"), url: value("[data-edit-url]"), strength_note: meta.strength_note || ""};
   try {
     if (meta.custom_id) await Api.request(`/api/lora-gallery/custom/${meta.custom_id}`, {method: "PATCH", body});
@@ -1843,6 +2060,13 @@ function renderGalleryConfig() {
 
 function bindLoraGallery() {
   $("#lora-gallery-open").addEventListener("click", openLoraGallery);
+  // Slider LoRAs: the range control and the number box are one value.
+  $("#lora-list").addEventListener("input", (event) => {
+    const row = event.target.closest(".lora-row.is-slider");
+    if (!row) return;
+    if (event.target.classList.contains("lora-slider-range")) row.querySelector(".lora-strength").value = event.target.value;
+    else if (event.target.classList.contains("lora-strength")) row.querySelector(".lora-slider-range").value = event.target.value;
+  });
   $("#lora-reset").addEventListener("click", () => {
     document.querySelectorAll("#lora-list .lora-row").forEach((row) => { row.querySelector(".lora-strength").value = loraDefaultStrength(Number(row.dataset.loraIndex)); });
     $("#generate-form").dispatchEvent(new Event("change"));
@@ -1929,7 +2153,11 @@ function bindLoraGallery() {
       row.querySelector(".lora-enabled").checked = event.target.checked;
       card.classList.toggle("is-enabled", event.target.checked);
     }
-    if (event.target.classList.contains("lora-card-strength")) row.querySelector(".lora-strength").value = event.target.value;
+    if (event.target.classList.contains("lora-card-strength") || event.target.classList.contains("lora-card-slider")) {
+      row.querySelector(".lora-strength").value = event.target.value;
+      card.querySelectorAll(".lora-card-strength, .lora-card-slider").forEach((input) => { if (input !== event.target) input.value = event.target.value; });
+      syncLoraRows();
+    }
     $("#generate-form").dispatchEvent(new Event("change"));
   });
   for (const selector of ["#lora-gallery-search", "#lora-gallery-group", "#lora-gallery-enabled-only", "#lora-gallery-by-group"])
@@ -2126,6 +2354,7 @@ try { savedModel = localStorage.getItem(MODEL_STORAGE_KEY) || "krea2"; } catch {
 applyModel(savedModel === "lustify" ? "krea2" : savedModel);
 if (savedModel === "lustify") { try { localStorage.setItem("krea.checkpoint.krea2", "lustifyNSFWCheckpoint_v10Krea2_fp8.safetensors"); } catch { /* storage unavailable */ } }
 refreshCheckpoints();
+loadSpeedups();
 window.addEventListener("focus", refreshCheckpoints);
 bindDialogs();
 bindReferences();

@@ -46,9 +46,8 @@ class Settings:
     qwen_command_path: Path = field(default_factory=lambda: _path("H3_QWEN_COMMAND", BASE_DIR / "config" / "server_command.txt"))
 
     # bunny-lock: the BunnyBytes cross-app GPU queue coordinator. It is
-    # 127.0.0.1-only; this app calls its internal surface (/enqueue,
-    # /heartbeat, /release, /dequeue) directly and unconditionally on every
-    # generation, gated by queue_internal_secret below.
+    # 127.0.0.1-only; this app talks to it through shared/bunnylock.py
+    # (protocol v2, BunnyBytes/lock/PROTOCOL.md), gated by queue_internal_secret below.
     lock_url: str = field(default_factory=lambda: os.getenv("H3_LOCK_URL", "http://127.0.0.1:8600").rstrip("/"))
     queue_internal_secret: str = field(default_factory=lambda: os.getenv("H3_QUEUE_INTERNAL_SECRET", ""))
     workflow_path: Path = field(default_factory=lambda: _workflow("H3_WORKFLOW_PATH", BASE_DIR / "workflows" / "MiniMax-H3.json"))

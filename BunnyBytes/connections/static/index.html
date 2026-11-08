@@ -7,106 +7,319 @@
 <link rel="stylesheet" href="/Connections/app.css?v={{v}}">
 </head>
 <body>
-<header class="cx-top"><strong>Connections</strong><a href="/">Home</a></header>
+<header class="cx-top">
+  <div class="cx-brand"><strong>Connections</strong><span>The websites, accounts and links the Master Agent works with</span></div>
+  <a href="/">Home</a>
+</header>
+<nav class="cx-tabs" role="tablist" aria-label="Connections">
+  <div class="cx-tab-group" aria-label="Agent on the web">
+    <button type="button" class="cx-tab" role="tab" data-tab="websites" id="stat-websites"><span class="cx-dot"></span><span>Websites</span><strong>—</strong></button>
+    <button type="button" class="cx-tab" role="tab" data-tab="accounts" id="stat-accounts"><span class="cx-dot"></span><span>Accounts</span><strong>—</strong></button>
+    <button type="button" class="cx-tab" role="tab" data-tab="emails" id="stat-emails"><span class="cx-dot"></span><span>Emails</span><strong>—</strong></button>
+    <button type="button" class="cx-tab" role="tab" data-tab="library" id="stat-library"><span class="cx-dot"></span><span>Scripts &amp; notes</span><strong>—</strong></button>
+  </div>
+  <div class="cx-tab-group" aria-label="Publishing">
+    <button type="button" class="cx-tab" role="tab" data-tab="posts" id="stat-posts"><span class="cx-dot"></span><span>Posts</span><strong>—</strong></button>
+  </div>
+  <div class="cx-tab-group" aria-label="Links">
+    <button type="button" class="cx-tab" role="tab" data-tab="links" id="tab-links"><span class="cx-dot"></span><span>Integrations</span><strong>—</strong></button>
+  </div>
+</nav>
 <main class="cx">
-  <section class="cx-hero">
-    <div class="cx-hero-text">
-      <h1>Connections</h1>
-      <p>Websites the Master Agent works with, and the links between Rocsy and the outside.</p>
-    </div>
-    <nav class="cx-stats" aria-label="Status">
-      <a class="cx-stat" href="#accounts" id="stat-accounts"><span class="cx-dot"></span><strong>—</strong><small>Websites</small></a>
-      <a class="cx-stat" href="#telegram" id="stat-telegram"><span class="cx-dot"></span><strong>—</strong><small>Telegram</small></a>
-      <a class="cx-stat" href="#hermes" id="stat-hermes"><span class="cx-dot"></span><strong>—</strong><small>Hermes link</small></a>
-      <a class="cx-stat" href="#tunnels" id="stat-tunnel"><span class="cx-dot"></span><strong>—</strong><small>Tunnel</small></a>
-    </nav>
-  </section>
-
-  <section class="cx-section" id="accounts" aria-labelledby="accounts-heading">
+  <section class="cx-panel" id="websites" data-tab="websites" aria-labelledby="websites-heading">
     <div class="cx-section-head">
       <div>
-        <h2 id="accounts-heading">Websites</h2>
-        <p>Add any site with a login. Scouting has the agent log in, work out how to do what the account is for, and note what the site needs. Later runs use the script it writes.</p>
+        <h2 id="websites-heading">Websites</h2>
+        <p>Each site is worked out once. Every account on it shares the agent's guide and scripts.</p>
       </div>
-      <button type="button" class="cx-btn cx-btn-primary" id="site-add">Add a website</button>
+      <button type="button" class="cx-btn cx-btn-primary" id="website-add">Add a website</button>
     </div>
-    <div class="cx-sites" id="account-list" aria-live="polite"></div>
+    <div class="cx-sites" id="website-list" aria-live="polite"></div>
   </section>
 
-  <div class="cx-pair">
-    <section class="cx-section cx-card" id="telegram" aria-labelledby="telegram-heading">
-      <div class="cx-card-head">
-        <span class="cx-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M21 3L3 10.5l7 2.5 2.5 7z"/><path d="M10 13l11-10"/></svg></span>
-        <div><h2 id="telegram-heading">Telegram</h2><p>Sends new ComfyUI output to your chat.</p></div>
-        <span id="state" class="cx-pill">Checking…</span>
+  <section class="cx-panel" id="accounts" data-tab="accounts" aria-labelledby="accounts-heading" hidden>
+    <div class="cx-section-head">
+      <div>
+        <h2 id="accounts-heading">Accounts</h2>
+        <p>Logins on your websites, grouped by site. Logins the agent creates appear here too.</p>
       </div>
-      <p class="cx-detail" id="detail"></p>
-      <div class="cx-actions"><button type="button" class="cx-btn" id="toggle" disabled>Loading…</button><button type="button" class="cx-btn cx-btn-ghost" id="telegram-edit">Configure</button></div>
-      <form id="telegram-form" class="cx-form" hidden>
-        <label>Bot token <input id="telegram-token" type="password" autocomplete="new-password" placeholder="Keep current token"></label>
-        <small id="telegram-token-hint"></small>
-        <label>Chat ID <input id="telegram-chat" autocomplete="off" required></label>
-        <div class="cx-actions"><button type="submit" class="cx-btn cx-btn-primary">Save</button><button id="telegram-cancel" type="button" class="cx-btn cx-btn-ghost">Cancel</button></div>
-      </form>
-    </section>
-
-    <section class="cx-section cx-card" id="hermes" aria-labelledby="hermes-heading">
-      <div class="cx-card-head">
-        <span class="cx-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/></svg></span>
-        <div><h2 id="hermes-heading">Hermes ↔ llama-swap</h2><p>Hermes talking to the local models.</p></div>
-        <span id="hermes-state" class="cx-pill">Checking…</span>
-      </div>
-      <p class="cx-detail" id="hermes-detail"></p>
-      <label class="cx-field">llama-swap model <select id="hermes-model" disabled></select></label>
-      <div class="cx-actions"><button type="button" class="cx-btn" id="hermes-connect" disabled>Connect Hermes</button><button type="button" class="cx-btn cx-btn-ghost" id="hermes-disconnect" disabled>Disconnect</button></div>
-    </section>
-  </div>
-
-  <section class="cx-section cx-card" id="tunnels" aria-labelledby="tunnel-heading">
-    <div class="cx-card-head">
-      <span class="cx-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 18a4 4 0 0 1-.6-8A6 6 0 0 1 18 9a4.5 4.5 0 0 1-1 9z"/></svg></span>
-      <div><h2 id="tunnel-heading">Cloudflare tunnel</h2><p id="cf-detail">Checking…</p></div>
-      <span id="cf-state" class="cx-pill">Checking…</span>
+      <button type="button" class="cx-btn cx-btn-primary" id="site-add">Add an account</button>
     </div>
-    <div class="cx-metrics">
-      <div><strong id="cf-connections">—</strong><small>Edge connections</small></div>
-      <div><strong id="cf-requests">—</strong><small>Requests since start</small></div>
-      <div><strong id="cf-errors">—</strong><small>Proxy errors</small></div>
-    </div>
-    <div class="cx-routes" id="cf-routes"></div>
-    <h3 class="cx-sub">Managed tunnels</h3>
-    <div id="tunnel-list" class="cx-tunnels"></div>
-    <details class="cx-more"><summary>Add an existing tunnel</summary>
-      <form id="import-tunnel" class="cx-form"><label>Name <input name="name" required></label><label>Credential JSON <input name="credential" type="file" accept=".json,application/json" required></label><label>Hostname and origin, one per line <textarea name="routes" rows="3" placeholder="example.com http://127.0.0.1:8080" required></textarea></label><div class="cx-actions"><button class="cx-btn cx-btn-primary">Import tunnel</button></div></form>
-    </details>
-    <details class="cx-more"><summary>Create a tunnel with the Cloudflare API</summary>
-      <form id="create-tunnel" class="cx-form"><label>Name <input name="name" required></label><label>Account ID <input name="account_id" required></label><label>Zone ID <input name="zone_id" required></label><label>API token <input name="api_token" type="password" autocomplete="off" required></label><label>Hostname and origin, one per line <textarea name="routes" rows="3" placeholder="example.com http://127.0.0.1:8080" required></textarea></label><small>The API token is used for this request only and isn't saved.</small><div class="cx-actions"><button class="cx-btn cx-btn-primary">Create tunnel and DNS routes</button></div></form>
-    </details>
+    <div class="cx-groups" id="account-list" aria-live="polite"></div>
   </section>
 
-  <section class="cx-section cx-card" id="activity" aria-labelledby="activity-heading">
-    <div class="cx-card-head"><div><h2 id="activity-heading">Telegram activity</h2><p>The bot token and chat ID are never shown here.</p></div></div>
-    <pre class="cx-log" id="log">Loading…</pre>
+  <section class="cx-panel" id="emails" data-tab="emails" aria-labelledby="emails-heading" hidden>
+    <div class="cx-section-head">
+      <div>
+        <h2 id="emails-heading">Emails</h2>
+        <p>Every email address: the ones on your accounts and the mailboxes the agent created. The agent can sign up with these and read their verification mail.</p>
+      </div>
+      <button type="button" class="cx-btn cx-btn-ghost" id="emails-refresh">Refresh</button>
+    </div>
+    <div id="emails-list" aria-live="polite"><p class="cx-detail">Loading…</p></div>
+  </section>
+
+  <section class="cx-panel" id="library" data-tab="library" aria-labelledby="library-heading" hidden>
+    <div class="cx-section-head">
+      <div>
+        <h2 id="library-heading">Scripts &amp; notes</h2>
+        <p>What the agent wrote for getting around each site (guides and scripts, with their code), plus your notes.</p>
+      </div>
+      <button type="button" class="cx-btn cx-btn-ghost" id="library-refresh">Refresh</button>
+    </div>
+    <div class="cx-toggles" id="automation" aria-label="Site scripts">
+      <label class="cx-switch"><input type="checkbox" name="use_scripts"><span><b>Use saved scripts</b><small>Uploads and actions run the agent's scripts. Off: everything is done by hand in the browser.</small></span></label>
+      <label class="cx-switch"><input type="checkbox" name="write_scripts"><span><b>Write and fix scripts</b><small>The agent saves new scripts and repairs broken ones. Off: it never changes a site script.</small></span></label>
+    </div>
+    <div class="cx-library" id="library-list" aria-live="polite"><p class="cx-detail">Loading…</p></div>
+  </section>
+
+  <section class="cx-panel" id="posts" data-tab="posts" aria-labelledby="posts-heading" hidden>
+    <div class="cx-section-head">
+      <div>
+        <h2 id="posts-heading">Scheduled posts</h2>
+        <p>Posts the agent makes for you at a set time, each in its own agent session.</p>
+      </div>
+      <div class="cx-actions"><button type="button" class="cx-btn" id="bulk-add">Queue many</button><button type="button" class="cx-btn cx-btn-primary" id="post-add">Schedule a post</button></div>
+    </div>
+    <div class="cx-post-tools">
+      <label class="cx-field cx-inline">Show <select id="post-filter"><option value="active">Upcoming and needing attention</option><option value="all">All</option><option value="done">Posted</option></select></label>
+      <div class="cx-batches" id="batch-list"></div>
+    </div>
+    <div class="cx-posts" id="post-list" aria-live="polite"></div>
+  </section>
+
+
+  <section class="cx-panel" id="links" data-tab="links" aria-labelledby="links-heading" hidden>
+    <div class="cx-section-head">
+      <div>
+        <h2 id="links-heading">Integrations</h2>
+        <p>The links between Rocsy and the outside.</p>
+      </div>
+    </div>
+    <div class="cx-linkstats">
+      <span class="cx-mini" id="stat-telegram"><span class="cx-dot"></span>Telegram <strong>—</strong></span>
+      <span class="cx-mini" id="stat-hermes"><span class="cx-dot"></span>Hermes link <strong>—</strong></span>
+      <span class="cx-mini" id="stat-tunnel"><span class="cx-dot"></span>Tunnel <strong>—</strong></span>
+    </div>
+    <div class="cx-pair">
+      <section class="cx-section cx-card" id="telegram" aria-labelledby="telegram-heading">
+        <div class="cx-card-head">
+          <span class="cx-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M21 3L3 10.5l7 2.5 2.5 7z"/><path d="M10 13l11-10"/></svg></span>
+          <div><h2 id="telegram-heading">Telegram</h2><p>Sends new ComfyUI output to your chat.</p></div>
+          <span id="state" class="cx-pill">Checking…</span>
+        </div>
+        <p class="cx-detail" id="detail"></p>
+        <div class="cx-actions"><button type="button" class="cx-btn" id="toggle" disabled>Loading…</button><button type="button" class="cx-btn cx-btn-ghost" id="telegram-edit">Configure</button></div>
+        <form id="telegram-form" class="cx-form" hidden>
+          <label>Bot token <input id="telegram-token" type="password" autocomplete="new-password" placeholder="Keep current token"></label>
+          <small id="telegram-token-hint"></small>
+          <label>Chat ID <input id="telegram-chat" autocomplete="off" required></label>
+          <div class="cx-actions"><button type="submit" class="cx-btn cx-btn-primary">Save</button><button id="telegram-cancel" type="button" class="cx-btn cx-btn-ghost">Cancel</button></div>
+        </form>
+      </section>
+
+      <section class="cx-section cx-card" id="hermes" aria-labelledby="hermes-heading">
+        <div class="cx-card-head">
+          <span class="cx-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/></svg></span>
+          <div><h2 id="hermes-heading">Hermes ↔ llama-swap</h2><p>Hermes talking to the local models.</p></div>
+          <span id="hermes-state" class="cx-pill">Checking…</span>
+        </div>
+        <p class="cx-detail" id="hermes-detail"></p>
+        <label class="cx-field">llama-swap model <select id="hermes-model" disabled></select></label>
+        <div class="cx-actions"><button type="button" class="cx-btn" id="hermes-connect" disabled>Connect Hermes</button><button type="button" class="cx-btn cx-btn-ghost" id="hermes-disconnect" disabled>Disconnect</button></div>
+      </section>
+    </div>
+
+    <section class="cx-section cx-card" id="tunnels" aria-labelledby="tunnel-heading">
+      <div class="cx-card-head">
+        <span class="cx-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 18a4 4 0 0 1-.6-8A6 6 0 0 1 18 9a4.5 4.5 0 0 1-1 9z"/></svg></span>
+        <div><h2 id="tunnel-heading">Cloudflare tunnel</h2><p id="cf-detail">Checking…</p></div>
+        <span id="cf-state" class="cx-pill">Checking…</span>
+      </div>
+      <div class="cx-metrics">
+        <div><strong id="cf-connections">—</strong><small>Edge connections</small></div>
+        <div><strong id="cf-requests">—</strong><small>Requests since start</small></div>
+        <div><strong id="cf-errors">—</strong><small>Proxy errors</small></div>
+      </div>
+      <div class="cx-routes" id="cf-routes"></div>
+      <h3 class="cx-sub">Managed tunnels</h3>
+      <div id="tunnel-list" class="cx-tunnels"></div>
+      <details class="cx-more"><summary>Add an existing tunnel</summary>
+        <form id="import-tunnel" class="cx-form"><label>Name <input name="name" required></label><label>Credential JSON <input name="credential" type="file" accept=".json,application/json" required></label><label>Hostname and origin, one per line <textarea name="routes" rows="3" placeholder="example.com http://127.0.0.1:8080" required></textarea></label><div class="cx-actions"><button class="cx-btn cx-btn-primary">Import tunnel</button></div></form>
+      </details>
+      <details class="cx-more"><summary>Create a tunnel with the Cloudflare API</summary>
+        <form id="create-tunnel" class="cx-form"><label>Name <input name="name" required></label><label>Account ID <input name="account_id" required></label><label>Zone ID <input name="zone_id" required></label><label>API token <input name="api_token" type="password" autocomplete="off" required></label><label>Hostname and origin, one per line <textarea name="routes" rows="3" placeholder="example.com http://127.0.0.1:8080" required></textarea></label><small>The API token is used for this request only and isn't saved.</small><div class="cx-actions"><button class="cx-btn cx-btn-primary">Create tunnel and DNS routes</button></div></form>
+      </details>
+    </section>
+
+    <section class="cx-section cx-card" id="activity" aria-labelledby="activity-heading">
+      <div class="cx-card-head"><div><h2 id="activity-heading">Telegram activity</h2><p>The bot token and chat ID are never shown here.</p></div></div>
+      <pre class="cx-log" id="log">Loading…</pre>
+    </section>
   </section>
 </main>
 
 <dialog class="cx-dialog" id="site-dialog" aria-labelledby="site-dialog-title">
   <form id="site-form" class="cx-form" method="dialog">
-    <h2 id="site-dialog-title">Add a website</h2>
+    <h2 id="site-dialog-title">Add an account</h2>
     <div class="cx-grid">
-      <label>Label <input name="name" required maxlength="60" placeholder="What you call this site"></label>
-      <label>Address <input name="url" required placeholder="https://…" inputmode="url"></label>
-      <label>Username or email <input name="username" required autocomplete="off"></label>
+      <label>Website <select name="site" required></select></label>
+      <label>Label <input name="name" maxlength="60" placeholder="Optional, e.g. Kiwi #1"></label>
+      <label>Username <input name="username" autocomplete="off" placeholder="Leave empty if the site only uses email"></label>
+      <label>Email <input name="email" type="email" autocomplete="off" placeholder="Leave empty if the site only uses a username"></label>
       <label>Password <input name="password" type="password" autocomplete="new-password"></label>
     </div>
     <label>What the agent should do there <textarea name="purpose" rows="2" maxlength="600" placeholder="What it should do on this site"></textarea></label>
-    <fieldset class="cx-segment"><legend>Browser</legend>
+    <label>Notes for the agent <textarea name="notes" rows="3" maxlength="2000" placeholder="Anything it should know for this account: tone, subreddits or tags to use, things to avoid…"></textarea></label>
+    <fieldset class="cx-segment"><legend>Browser for uploads and posts <small>(scouting and actions always use the visible browser)</small></legend>
       <label><input type="radio" name="browser" value="headed" checked><span>Headed<small>Visible Chromium on the desktop</small></span></label>
-      <label><input type="radio" name="browser" value="headless"><span>Headless<small>In the background</small></span></label>
+      <label><input type="radio" name="browser" value="headless"><span>Headless<small>In the background (uploads and posts only)</small></span></label>
     </fieldset>
     <p class="cx-form-error" id="site-error" role="alert" hidden></p>
     <div class="cx-actions cx-actions-end"><button type="button" class="cx-btn cx-btn-ghost" id="site-cancel">Cancel</button><button type="submit" class="cx-btn cx-btn-primary" id="site-save">Save</button></div>
   </form>
+</dialog>
+<dialog class="cx-dialog" id="post-dialog" aria-labelledby="post-dialog-title">
+  <form id="post-form" class="cx-form" method="dialog">
+    <h2 id="post-dialog-title">Schedule a post</h2>
+    <fieldset class="cx-accounts" data-accounts><legend>Website accounts</legend><div class="cx-account-list"></div>
+      <label class="cx-check" data-random hidden><input type="checkbox" name="account_random"> Random account<small>A random one of the ticked accounts each time it posts; off = they take turns</small></label>
+    </fieldset>
+    <label for="post-where"><span class="cx-label-row">Where <button type="button" class="cx-decide" data-decide="where">🎲 Agent decides</button></span><input id="post-where" name="where" maxlength="200" placeholder="r/subreddit, community, channel…"></label>
+    <label for="post-title"><span class="cx-label-row">Title <button type="button" class="cx-decide" data-decide="title">🎲 Agent decides</button></span><input id="post-title" name="title" maxlength="300"></label>
+    <label>Text <textarea name="body" rows="5" maxlength="40000" placeholder="The post's text or caption"></textarea></label>
+    <div class="cx-grid">
+      <label>Tags or flair <input name="tags" maxlength="300" placeholder="Optional, comma separated"></label>
+      <label>Image or video <input name="media" type="file" accept="image/png,image/jpeg,image/gif,image/webp,video/mp4,video/webm,video/quicktime"></label>
+    </div>
+    <small class="cx-hint">Let the agent decide any part: <code>{?}</code> = its call, <code>{? a fitting art subreddit}</code> = follow that, <code>{? r/art | r/drawing}</code> = pick one. Works in Where, Title, Text and Tags.</small>
+    <p class="cx-post-file" id="post-file" hidden><span></span> <label><input type="checkbox" name="remove_media"> Remove</label></p>
+    <div class="cx-grid cx-grid-3">
+      <label>Date <input name="date" type="date" required></label>
+      <label>Time <input name="time" type="time" required></label>
+      <label>Repeat <select name="repeat"><option value="once">Once</option><option value="daily">Every day</option><option value="weekly">Every week</option></select></label>
+    </div>
+    <label>Notes for the agent <textarea name="notes" rows="2" maxlength="1000" placeholder="Optional, e.g. pick the OC flair, mark NSFW"></textarea></label>
+    <small id="post-tz"></small>
+    <p class="cx-form-error" id="post-error" role="alert" hidden></p>
+    <div class="cx-actions cx-actions-end"><button type="button" class="cx-btn cx-btn-ghost" id="post-cancel">Cancel</button><button type="submit" class="cx-btn cx-btn-primary" id="post-save">Schedule</button></div>
+  </form>
+</dialog>
+<dialog class="cx-dialog cx-dialog-wide" id="bulk-dialog" aria-labelledby="bulk-dialog-title">
+  <form id="bulk-form" class="cx-form" method="dialog">
+    <h2 id="bulk-dialog-title">Queue many posts</h2>
+    <fieldset class="cx-accounts" data-accounts><legend>Website accounts</legend><div class="cx-account-list"></div>
+      <label class="cx-check" data-random hidden><input type="checkbox" name="account_random"> Random account<small>Each post goes from a random ticked account; off = they take turns</small></label>
+    </fieldset>
+    <label>Batch name <input name="label" maxlength="60" placeholder="Optional, e.g. November art"></label>
+    <label for="bulk-where"><span class="cx-label-row">Where, one per line <button type="button" class="cx-decide" data-decide="where">🎲 Agent decides</button></span><textarea id="bulk-where" name="where" rows="2" maxlength="4000" placeholder="r/subreddit&#10;r/another (posts take turns)"></textarea></label>
+    <div class="cx-form" data-section="content">
+    <label>Posts <textarea name="text" rows="7" placeholder="First line is the title&#10;The rest is the text&#10;---&#10;Next post's title&#10;Its text"></textarea></label>
+    <small class="cx-hint">Let the agent decide any part: <code>{?}</code> = its call, <code>{? a fitting art subreddit}</code> = follow that, <code>{? r/art | r/drawing}</code> = pick one. Works in Where, Title, Text and Tags.</small>
+    <small>Separate posts with a line containing only <code>---</code>. Files are paired with the posts in order; extra files become posts of their own.</small>
+    <div class="cx-grid">
+      <label>Images or videos <input name="files" type="file" multiple accept="image/png,image/jpeg,image/gif,image/webp,video/mp4,video/webm,video/quicktime"></label>
+      <label for="bulk-file-title"><span class="cx-label-row">Title for file-only posts <button type="button" class="cx-decide" data-decide="file_title">🎲 Agent decides</button></span><input id="bulk-file-title" name="file_title" maxlength="300" value="{name}" placeholder="Blank = the agent writes it · {name} · {n}"></label>
+    </div>
+    <label>Number of posts <input name="count" type="number" min="0" max="200" value="0" title="At least this many; blank ones fill the rest"></label>
+    <small>Pasted posts and files come first; blank posts make up the rest, ready to fill in from the batch's gallery.</small>
+    </div>
+    <div class="cx-grid">
+      <label>Tags or flair (all posts) <input name="tags" maxlength="300" placeholder="Optional"></label>
+      <label>Notes for the agent (all posts) <input name="notes" maxlength="1000"></label>
+    </div>
+    <fieldset class="cx-segment"><legend>A post that's still blank when its time comes</legend>
+      <label><input type="radio" name="blank" value="skip" checked><span>Skip it<small>Nothing is posted</small></span></label>
+      <label><input type="radio" name="blank" value="agent"><span>Agent writes it<small>Title and text, from the account's purpose</small></span></label>
+    </fieldset>
+
+    <fieldset class="cx-timing"><legend>When to post</legend>
+      <label class="cx-check" data-section="continue"><input type="checkbox" name="continue" checked> Continue after the batch's last post</label>
+      <div class="cx-form" data-section="apply">
+        <label class="cx-check"><input type="checkbox" name="retime"> Re-time the posts not sent yet with this timing</label>
+        <label class="cx-check"><input type="checkbox" name="apply"> Apply the accounts, destinations, tags and notes to the posts not sent yet<small>Only where a post still has the old batch value or none</small></label>
+      </div>
+      <div class="cx-grid cx-grid-3">
+        <label data-section="start">Start date <input name="start_date" type="date"></label>
+        <label data-section="start">Start time <input name="start_time" type="time"></label>
+        <label>Random offset ± minutes <input name="jitter_minutes" type="number" min="0" max="1440" value="30"></label>
+      </div>
+      <fieldset class="cx-segment"><legend>Spacing</legend>
+        <label><input type="radio" name="mode" value="per_day" checked><span>Posts per day<small>Spread across the window</small></span></label>
+        <label><input type="radio" name="mode" value="interval"><span>Fixed gap<small>Every so often, inside the window</small></span></label>
+      </fieldset>
+      <div class="cx-grid cx-grid-3">
+        <label data-mode="per_day">Posts per day <input name="per_day" type="number" min="1" max="48" value="2"></label>
+        <label data-mode="interval" hidden>Gap <span class="cx-pairinput"><input name="gap" type="number" min="1" value="3"><select name="gap_unit"><option value="60">hours</option><option value="1">minutes</option><option value="1440">days</option></select></span></label>
+        <label data-mode="interval" hidden>Max per day <input name="max_per_day" type="number" min="0" max="200" value="0" title="0 = no limit"></label>
+        <label>Window from <input name="window_start" type="time" value="09:00"></label>
+        <label>Window to <input name="window_end" type="time" value="22:00"></label>
+      </div>
+      <div class="cx-days" role="group" aria-label="Days to post on"></div>
+      <label class="cx-check"><input type="checkbox" name="shuffle"> Shuffle the order</label>
+      <small id="bulk-tz"></small>
+    </fieldset>
+
+    <div class="cx-preview" id="bulk-preview" hidden></div>
+    <p class="cx-form-error" id="bulk-error" role="alert" hidden></p>
+    <div class="cx-actions cx-actions-end">
+      <button type="button" class="cx-btn cx-btn-ghost" id="bulk-cancel">Cancel</button>
+      <button type="button" class="cx-btn" id="bulk-reroll" hidden>Re-roll times</button>
+      <button type="button" class="cx-btn" id="bulk-preview-btn">Preview times</button>
+      <button type="submit" class="cx-btn cx-btn-primary" id="bulk-save" disabled>Queue</button>
+    </div>
+  </form>
+</dialog>
+<dialog class="cx-dialog" id="website-dialog" aria-labelledby="website-dialog-title">
+  <form id="website-form" class="cx-form" method="dialog">
+    <h2 id="website-dialog-title">Add a website</h2>
+    <div class="cx-grid">
+      <label>Name <input name="name" required maxlength="60" placeholder="e.g. Reddit"></label>
+      <label>Address <input name="url" required placeholder="https://…" inputmode="url"></label>
+    </div>
+    <label>Notes for the agent on this site <textarea name="notes" rows="4" maxlength="4000" placeholder="Shared by every account here: site rules, where things are, what to avoid…"></textarea></label>
+    <p class="cx-form-error" id="website-error" role="alert" hidden></p>
+    <div class="cx-actions cx-actions-end"><button type="button" class="cx-btn cx-btn-ghost" id="website-cancel">Cancel</button><button type="submit" class="cx-btn cx-btn-primary" id="website-save">Save</button></div>
+  </form>
+</dialog>
+<dialog class="cx-dialog" id="scout-dialog" aria-labelledby="scout-dialog-title">
+  <form id="scout-form" class="cx-form" method="dialog">
+    <h2 id="scout-dialog-title">Scout</h2>
+    <label>What is this scouting for? <textarea name="note" rows="3" maxlength="2000" placeholder="e.g. Find out how to post image galleries to a subreddit, and what new accounts are allowed to do"></textarea></label>
+    <label>Log in as <select name="account"></select></label>
+    <small>The agent looks around and writes the site guide (and a script when it is logged in). Nothing is posted or changed.</small>
+    <p class="cx-form-error" id="scout-error" role="alert" hidden></p>
+    <div class="cx-actions cx-actions-end"><button type="button" class="cx-btn cx-btn-ghost" id="scout-cancel">Cancel</button><button type="submit" class="cx-btn cx-btn-primary" id="scout-run">Scout</button></div>
+  </form>
+</dialog>
+<dialog class="cx-dialog" id="action-dialog" aria-labelledby="action-dialog-title">
+  <form id="action-form" class="cx-form" method="dialog">
+    <h2 id="action-dialog-title">Action</h2>
+    <label>What should the agent do on this site? <textarea name="task" rows="4" maxlength="2000" required placeholder="e.g. Create a new email address for my business, named after it"></textarea></label>
+    <small id="action-hint"></small>
+    <p class="cx-form-error" id="action-error" role="alert" hidden></p>
+    <div class="cx-actions cx-actions-end"><button type="button" class="cx-btn cx-btn-ghost" id="action-cancel">Cancel</button><button type="submit" class="cx-btn cx-btn-primary" id="action-run">Run</button></div>
+  </form>
+</dialog>
+<dialog class="cx-dialog cx-dialog-wide" id="actlog-dialog" aria-labelledby="actlog-title">
+  <div class="cx-form">
+    <h2 id="actlog-title">Action log</h2>
+    <div id="actlog-created"></div>
+    <div class="cx-actlog" id="actlog-list"><p class="cx-detail">Loading…</p></div>
+    <div class="cx-actions cx-actions-end"><button type="button" class="cx-btn cx-btn-ghost" id="actlog-refresh">Refresh</button><button type="button" class="cx-btn cx-btn-ghost" id="actlog-close">Close</button></div>
+  </div>
+</dialog>
+<dialog class="cx-dialog cx-dialog-gallery" id="gallery-dialog" aria-labelledby="gallery-title">
+  <div class="cx-form">
+    <div class="cx-gallery-head">
+      <div><h2 id="gallery-title">Batch</h2><p id="gallery-sub"></p></div>
+      <span class="cx-pill" id="gallery-state"></span>
+    </div>
+    <div class="cx-actions" id="gallery-actions"></div>
+    <div class="cx-gallery" id="gallery-grid"></div>
+    <div class="cx-actions cx-actions-end"><button type="button" class="cx-btn cx-btn-ghost" id="gallery-close">Close</button></div>
+  </div>
 </dialog>
 <script src="/Connections/app.js?v={{v}}" defer></script>
 </body>

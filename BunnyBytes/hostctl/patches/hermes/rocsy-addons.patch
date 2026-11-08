@@ -1,8 +1,8 @@
 diff --git a/Dockerfile b/Dockerfile
-index f93bfbe7..69c80672 100644
+index 60ba5ad9bb..baa23a987c 100644
 --- a/Dockerfile
 +++ b/Dockerfile
-@@ -366,6 +366,13 @@ RUN /opt/hermes/.venv/bin/python -m docker.build_agent
+@@ -402,6 +402,13 @@ RUN /opt/hermes/.venv/bin/python -m docker.build_agent
  # read-only for the hermes user (go-w from the --chmod above).
  
  USER root
@@ -17,14 +17,15 @@ index f93bfbe7..69c80672 100644
      cp /opt/hermes/docker/hermes-exec-shim.sh /opt/hermes/bin/hermes && \
      chmod 0755 /opt/hermes /opt/hermes/bin/hermes && \
 diff --git a/gateway/platforms/api_server_runs.py b/gateway/platforms/api_server_runs.py
-index bfb5b4db..7dace805 100644
+index 599812a117..922208e5da 100644
 --- a/gateway/platforms/api_server_runs.py
 +++ b/gateway/platforms/api_server_runs.py
-@@ -333,6 +333,15 @@ def _make_run_event_callback(self, run_id: str, loop: asyncio.AbstractEventLoop,
+@@ -386,6 +386,16 @@ def _make_run_event_callback(self, run_id: str, loop: asyncio.AbstractEventLoop,
              if event_type == "tool.completed":
                  event_fields["preview"] = _tool_completed_preview(
                      kwargs.get("result"), redact_sensitive_text)
-+                if tool_name in {"browser_navigate", "browser_click", "browser_back"} and not kwargs.get("is_error"):
++                # Rocsy: browser_exec (v0.23's browser) reports its screenshot copy; the older built-in tools did too.
++                if tool_name in {"browser_exec", "browser_navigate", "browser_click", "browser_back"} and not kwargs.get("is_error"):
 +                    try:
 +                        payload = kwargs.get("result")
 +                        payload = json.loads(payload) if isinstance(payload, str) else payload
@@ -36,7 +37,7 @@ index bfb5b4db..7dace805 100644
              _push(_run_event(run_id, event_type, **event_fields))
          elif event_type in {"subagent.start", "subagent.complete"}:
              event = _run_event(run_id, event_type)
-@@ -934,6 +943,44 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
+@@ -1081,6 +1091,44 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
              loop.call_soon_threadsafe(run.put_event, _run_event(
                  run_id, "message.interim", text=text, already_streamed=bool(already_streamed)))
  
@@ -81,25 +82,46 @@ index bfb5b4db..7dace805 100644
      def _finish(status: str, extra: Optional[dict] = None, **fields: Any) -> None:
          """Terminal status, then best-effort ``run.<status>`` event; key order is wire shape."""
          extra = extra or {}
-@@ -959,8 +1006,11 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
-             return
-         with self._profile_scope(run.request_profile):
-             agent = self._create_agent(
--                stream_delta_callback=_text_cb, tool_progress_callback=self._make_run_event_callback(run_id, loop),
--                interim_assistant_callback=_interim_cb, **run.agent_kwargs)
-+                stream_delta_callback=_text_cb, reasoning_callback=_reasoning_cb,
-+                tool_progress_callback=self._make_run_event_callback(run_id, loop),
-+                interim_assistant_callback=_interim_cb,
-+                tool_start_callback=_terminal_start, tool_complete_callback=_terminal_complete,
-+                **run.agent_kwargs)
-         self._active_run_agents[run_id] = agent
-         approval_notify = _make_approval_notify(self, run, _api_server=_api_server)
-         result, usage, served_runtime = await _submit_api_worker(
+@@ -1117,15 +1165,18 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
+             def _tool_start(call_id, name, args):
+                 from agent.display import build_tool_preview
+                 tool_cb("tool.started", name, build_tool_preview(name, args or {}) or "", args, tool_call_id=call_id)
++                _terminal_start(call_id, name, args)  # Rocsy: terminal.started for the chat's terminal view
+ 
+             def _tool_complete(call_id, name, args, result):
+                 from agent.display import _detect_tool_failure
+                 is_error, _ = _detect_tool_failure(name, result)
+-                tool_cb("tool.completed", name, None, args, tool_call_id=call_id, is_error=bool(is_error))
++                # Rocsy: result= lets tool.completed carry the browser screenshot path (and its preview).
++                tool_cb("tool.completed", name, None, args, tool_call_id=call_id, is_error=bool(is_error), result=result)
++                _terminal_complete(call_id, name, args, result)
+ 
+             with observe_api_controls(run.admission, _control_cb):
+                 result, usage = await observe_api_turn(
+-                    run.admission, stream_delta_callback=_text_cb,
++                    run.admission, stream_delta_callback=_text_cb, reasoning_callback=_reasoning_cb,
+                     tool_start_callback=_tool_start, tool_complete_callback=_tool_complete)
+             # The canonical turn has no agent object here; the served pair rides on the
+             # committed usage/result runtime metadata when the turn recorded one.
+@@ -1134,8 +1185,11 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
+         else:
+             with self._profile_scope(run.request_profile):
+                 agent = self._create_agent(
+-                    stream_delta_callback=_text_cb, tool_progress_callback=self._make_run_event_callback(run_id, loop),
+-                    interim_assistant_callback=_interim_cb, **run.agent_kwargs)
++                    stream_delta_callback=_text_cb, reasoning_callback=_reasoning_cb,
++                    tool_progress_callback=self._make_run_event_callback(run_id, loop),
++                    interim_assistant_callback=_interim_cb,
++                    tool_start_callback=_terminal_start, tool_complete_callback=_terminal_complete,
++                    **run.agent_kwargs)
+             self._active_run_agents[run_id] = agent
+             approval_notify = _make_approval_notify(self, run, _api_server=_api_server)
+             result, usage, served_runtime = await _submit_api_worker(
 diff --git a/gateway/run_goals.py b/gateway/run_goals.py
-index 7d262716..cb216920 100644
+index 42d38850a9..e184ef42bb 100644
 --- a/gateway/run_goals.py
 +++ b/gateway/run_goals.py
-@@ -41,9 +41,9 @@ class GatewayGoalsMixin:
+@@ -42,9 +42,9 @@ class GatewayGoalsMixin:
                  from hermes_cli.config import load_config
  
                  goals_cfg = (load_config() or {}).get("goals") or {}
@@ -112,26 +134,27 @@ index 7d262716..cb216920 100644
      async def _warm_goals_session_db(self, label: str) -> None:
          """Warm the goals SessionDB cache off-loop (best-effort): a cold cache runs the state.db
 diff --git a/hermes_cli/cli_loops_mixin.py b/hermes_cli/cli_loops_mixin.py
-index 7f536ad3..633ac664 100644
+index 3b5c5cbe78..da1d4bb7f9 100644
 --- a/hermes_cli/cli_loops_mixin.py
 +++ b/hermes_cli/cli_loops_mixin.py
-@@ -507,9 +507,9 @@ class CLILoopsMixin:
-             def make(sid):
-                 try:
-                     goals_cfg = (load_config() or {}).get("goals") or {}
--                    max_turns = int(goals_cfg.get("max_turns", 20) or 20)
-+                    max_turns = int(goals_cfg.get("max_turns", -1))
-                 except Exception:
--                    max_turns = 20
-+                    max_turns = -1
-                 return GoalManager(session_id=sid, default_max_turns=max_turns)
-             return make
-         return self._session_bound_manager("_goal_manager", "goal manager", load)
+@@ -622,9 +622,9 @@ class CLILoopsMixin:
+             from hermes_cli.config import load_config
+             try:
+                 goals_cfg = (load_config() or {}).get("goals") or {}
+-                return int(goals_cfg.get("max_turns", 20) or 20)
+-            except Exception:  # health: allow BLE001 -- main's fallback: an unreadable goals config is the 20-turn default
+-                return 20
++                return int(goals_cfg.get("max_turns", -1))
++            except Exception:  # health: allow BLE001 -- Rocsy: an unreadable goals config means unlimited turns (-1)
++                return -1
+ 
+         def load():
+             from hermes_cli.goals import GoalManager
 diff --git a/hermes_cli/cli_status_bar_mixin.py b/hermes_cli/cli_status_bar_mixin.py
-index 67aac0e1..344f69a0 100644
+index 2caf109792..ca190aeb6e 100644
 --- a/hermes_cli/cli_status_bar_mixin.py
 +++ b/hermes_cli/cli_status_bar_mixin.py
-@@ -988,7 +988,11 @@ class CLIStatusBarMixin:
+@@ -990,7 +990,11 @@ class CLIStatusBarMixin:
              return ""
          used = snapshot.get("goal_turns_used") or 0
          max_turns = snapshot.get("goal_max_turns") or 0
@@ -145,10 +168,10 @@ index 67aac0e1..344f69a0 100644
      def _get_status_bar_field_set(self) -> Optional[frozenset]:
          """Visible status-bar fields from ``display.status_bar.fields`` (module-level
 diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
-index 9fa095ee..75095c70 100644
+index 50117f6fb1..b3a48d85a3 100644
 --- a/hermes_cli/config_defaults.py
 +++ b/hermes_cli/config_defaults.py
-@@ -1397,12 +1397,10 @@ DEFAULT_CONFIG = {
+@@ -1382,12 +1382,10 @@ DEFAULT_CONFIG = {
      # every API call for few-shot priming. Never saved to sessions/logs/trajectories.
      "prefill_messages_file": "",
      # Goals — persistent cross-turn /goal loop: after each turn an aux-model judge checks if the
@@ -165,7 +188,7 @@ index 9fa095ee..75095c70 100644
      # Loops — /loop re-runs a prompt or slash command on a cadence in-session. Fixed interval fires
      # on the user's clock; self-paced (no interval) starts at the floor and backs off exponentially
 diff --git a/hermes_cli/goal_command.py b/hermes_cli/goal_command.py
-index 0c19ebf3..5a183de3 100644
+index 0c19ebf364..5a183de34e 100644
 --- a/hermes_cli/goal_command.py
 +++ b/hermes_cli/goal_command.py
 @@ -151,8 +151,9 @@ def _set(mgr, arg, *, drafting, last_user_message, render, progress):
@@ -192,7 +215,7 @@ index 0c19ebf3..5a183de3 100644
  
  
 diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
-index c00618e3..db9fe81e 100644
+index 96ee695e28..e4e6ea6129 100644
 --- a/hermes_cli/goals.py
 +++ b/hermes_cli/goals.py
 @@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
@@ -206,7 +229,7 @@ index c00618e3..db9fe81e 100644
  DEFAULT_JUDGE_TIMEOUT = 30.0
  # Judge output budget. Reasoning models burn hidden-reasoning tokens before the visible one-line
  # JSON verdict; 200 (the original) reliably truncated it and tripped the auto-pause. 4096 covers
-@@ -1118,7 +1120,8 @@ class GoalManager:
+@@ -1122,7 +1124,8 @@ class GoalManager:
          s = self._state
          if s is None or s.status == "cleared":
              return "No active goal. Set one with /goal <text>."
@@ -216,7 +239,7 @@ index c00618e3..db9fe81e 100644
          sub = f", {len(s.subgoals)} subgoal{'s' if len(s.subgoals) != 1 else ''}" if s.subgoals else ""
          con = ", contract" if self.has_contract() else ""
          gat = f", {len(s.gates)} gate{'s' if len(s.gates) != 1 else ''}" if s.gates else ""
-@@ -1500,7 +1503,8 @@ class GoalManager:
+@@ -1504,7 +1507,8 @@ class GoalManager:
          # so the judge is skipped and the gate's output drives the next turn (same turn budget).
          gate_decision = self._check_gates()
          if gate_decision is not None:
@@ -226,7 +249,7 @@ index c00618e3..db9fe81e 100644
                  return self._budget_pause(state, "gate_failed", gate_decision.get("reason", ""), note=" (a quality gate is still failing)")
              return gate_decision
  
-@@ -1554,13 +1558,15 @@ class GoalManager:
+@@ -1558,13 +1562,15 @@ class GoalManager:
                  + _JUDGE_CONFIG_HINT.format(provider="openrouter", model="google/gemini-3-flash-preview"),
              )
  
@@ -245,7 +268,7 @@ index c00618e3..db9fe81e 100644
  
      def next_continuation_prompt(self) -> Optional[str]:
 diff --git a/tests/hermes_cli/test_cli_status_bar_goal.py b/tests/hermes_cli/test_cli_status_bar_goal.py
-index fcfddcf5..4cc9d9fe 100644
+index fcfddcf528..4cc9d9fe2b 100644
 --- a/tests/hermes_cli/test_cli_status_bar_goal.py
 +++ b/tests/hermes_cli/test_cli_status_bar_goal.py
 @@ -30,6 +30,13 @@ def _attach_goal(cli_obj, *, active: bool, turns_used: int = 3, max_turns: int =
@@ -280,7 +303,7 @@ index fcfddcf5..4cc9d9fe 100644
 +
 +        assert "⊙ goal" in text
 diff --git a/tests/hermes_cli/test_goals.py b/tests/hermes_cli/test_goals.py
-index 32113fbd..75c01dd5 100644
+index 32113fbdcd..75c01dd54a 100644
 --- a/tests/hermes_cli/test_goals.py
 +++ b/tests/hermes_cli/test_goals.py
 @@ -105,6 +105,25 @@ class TestJudgeGoal:
@@ -309,111 +332,94 @@ index 32113fbd..75c01dd5 100644
      def test_set_then_status(self, hermes_home):
          from hermes_cli.goals import GoalManager
  
-diff --git a/tools/browser_tool.py b/tools/browser_tool.py
-index 4a665e38..d41b5895 100644
---- a/tools/browser_tool.py
-+++ b/tools/browser_tool.py
-@@ -17,6 +17,7 @@ import sys
- import tempfile
- import threading
- import time
-+from contextlib import suppress
- from typing import Dict, Any, Optional, Union
- from pathlib import Path
- from agent.redact import redact_cdp_url
-@@ -745,6 +746,24 @@ def _attach_auto_snapshot(response: dict[str, Any], nav_session_key: str) -> Non
-         logger.debug("Auto-snapshot after navigate failed: %s", e)
+diff --git a/tests/tools/test_rocsy_browser_screenshot.py b/tests/tools/test_rocsy_browser_screenshot.py
+new file mode 100644
+index 0000000000..4a1232e85c
+--- /dev/null
++++ b/tests/tools/test_rocsy_browser_screenshot.py
+@@ -0,0 +1,27 @@
++"""Rocsy: browser_exec's screenshot is copied into the Rocsy workspace for the chat (and only there)."""
++import os
++import time
++
++import tools.browser_use_cli as cli
++
++
++def test_copied_into_the_rocsy_workspace(tmp_path, monkeypatch):
++    monkeypatch.setattr(cli, "get_hermes_home", lambda: str(tmp_path))
++    (tmp_path / "rocsy-workspace").mkdir()
++    shot = tmp_path / "shot.png"
++    shot.write_bytes(b"png")
++    old = tmp_path / "rocsy-workspace/.browser-screenshots"
++    old.mkdir()
++    stale = old / "page-old.png"
++    stale.write_bytes(b"x")
++    os.utime(stale, (time.time() - 2 * 86400,) * 2)
++    copy = cli._rocsy_screenshot(str(shot))
++    assert copy.startswith(str(old)) and copy.endswith(".png") and open(copy, "rb").read() == b"png"
++    assert not stale.exists()
++
++
++def test_nothing_without_a_rocsy_workspace(tmp_path, monkeypatch):
++    monkeypatch.setattr(cli, "get_hermes_home", lambda: str(tmp_path))
++    shot = tmp_path / "shot.jpg"
++    shot.write_bytes(b"jpg")
++    assert cli._rocsy_screenshot(str(shot)) == ""
+diff --git a/tools/browser_use_cli.py b/tools/browser_use_cli.py
+index ff9b9cd7a7..3bcc171a0d 100644
+--- a/tools/browser_use_cli.py
++++ b/tools/browser_use_cli.py
+@@ -325,6 +325,31 @@ def _native_screenshot_result(result: dict[str, Any], path: str) -> Optional[dic
+         return None
  
  
-+def _rocsy_page_screenshot(response: dict[str, Any], session_key: str) -> None:
-+    """Give the Rocsy chat a file to show after a successful page opening."""
++def _rocsy_screenshot(path: str) -> str:
++    """Rocsy: a copy of this call's screenshot in the Rocsy workspace, for the chat to show ("" when this
++    Hermes isn't Rocsy's). The copy keeps the chat's picture after the harness overwrites its shot.png;
++    copies older than a day are removed."""
 +    workspace = Path(get_hermes_home()) / "rocsy-workspace"
-+    if not workspace.is_dir() or _blocked_private_page_content(session_key) is not None:
-+        return
++    if not workspace.is_dir():
++        return ""
++    import shutil
 +    import uuid
 +    folder = workspace / ".browser-screenshots"
-+    path = folder / f"page-{uuid.uuid4().hex}.png"
 +    try:
 +        folder.mkdir(parents=True, exist_ok=True)
-+        _lifecycle._cleanup_old_screenshots(folder, max_age_hours=24)
-+        _, path, error = _capture_vision_screenshot(session_key, False, path, False)
-+        if error is None and path.is_file():
-+            response["rocsy_screenshot_path"] = str(path)
-+    except Exception as exc:
-+        logger.debug("Rocsy page screenshot failed: %s", exc)
-+
-+
- def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
-     """Navigate to ``url``; JSON with title, compact snapshot and, on first nav, stealth features.
-     Hybrid routing decides BEFORE the safety checks whether this URL goes to a local sidecar
-@@ -797,6 +816,7 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
-     _lp._copy_fallback_warning(response, result)
-     _add_navigate_warnings(response, title, session_info if is_first_nav else None)
-     _attach_auto_snapshot(response, nav_session_key)
-+    _rocsy_page_screenshot(response, nav_session_key)
-     return _dumps(response)
- 
- 
-@@ -891,12 +911,31 @@ def _at_ref(ref: str) -> str:
-     return ref if ref.startswith("@") else f"@{ref}"
- 
- 
-+def _current_browser_url(session_key: str) -> str:
-+    try:
-+        result = _session._run_browser_command(session_key, "get", ["url"], timeout=10)
-+        return str((result.get("data") or {}).get("url") or "") if result.get("success") else ""
-+    except Exception:
++        cutoff = time.time() - 24 * 3600
++        for old in folder.glob("page-*"):
++            with contextlib.suppress(OSError):
++                if old.stat().st_mtime < cutoff:
++                    old.unlink()
++        target = folder / f"page-{uuid.uuid4().hex}{Path(path).suffix or '.png'}"
++        shutil.copyfile(path, target)
++        return str(target)
++    except OSError as exc:
++        logger.debug("Rocsy page screenshot copy failed: %s", exc)
 +        return ""
 +
 +
- def browser_click(ref: str, task_id: Optional[str] = None) -> str:
-     """Click the element ``ref`` (e.g. "@e5")."""
-     if _is_camofox_mode():
-         return _camofox("camofox_click", ref, task_id)
-     ref = _at_ref(ref)
--    return _guarded_action(task_id, "click", "click", [ref], {"clicked": ref}, f"Failed to click {ref}")
-+    session_key = _last_session_key(task_id or "default")
-+    before = _current_browser_url(session_key)
-+    result = _guarded_action(task_id, "click", "click", [ref], {"clicked": ref}, f"Failed to click {ref}")
-+    if before:
-+        with suppress(ValueError, TypeError):
-+            response = json.loads(result)
-+            after = _current_browser_url(session_key) if response.get("success") else ""
-+            if after and after != before:
-+                response["url"] = after
-+                _rocsy_page_screenshot(response, session_key)
-+                return _dumps(response)
-+    return result
+ def _served_profile_tag() -> str:
+     """``""`` outside a served-profile scope (every legacy key stays byte-identical); under a
+     multiplexed turn, the routed profile's home key — one profile's browser must never be handed
+@@ -889,8 +914,13 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
+     screenshot = _find_screenshot(proc.stdout, started)
+     if screenshot:
+         result["screenshot_path"] = screenshot
++        rocsy = _rocsy_screenshot(screenshot)
++        if rocsy:
++            result["rocsy_screenshot_path"] = rocsy
+         native = _native_screenshot_result(result, screenshot)
+         if native is not None:
++            if rocsy:  # Rocsy: the run stream reads these off the tool result (api_server_runs)
++                native.update(success=result["success"], rocsy_screenshot_path=rocsy)
+             return native
+     return tool_result(result)
  
- 
- def browser_type(ref: str, text: str, task_id: Optional[str] = None) -> str:
-@@ -937,6 +976,7 @@ def browser_back(task_id: Optional[str] = None) -> str:
-     if _is_camofox_mode():
-         return _camofox("camofox_back", task_id)
-     effective_task_id = _last_session_key(task_id or "default")
-+    before = _current_browser_url(effective_task_id)
-     result = _session._run_browser_command(effective_task_id, "back", [])
-     if result.get("success"):
-         # History can land on a private/internal/metadata address the navigate
-@@ -944,7 +984,12 @@ def browser_back(task_id: Optional[str] = None) -> str:
-         blocked = _blocked_private_page(effective_task_id, "Browser history navigation (back) landed on this address.")
-         if blocked is not None:
-             return blocked
--    return _tool_response(result, {"url": result.get("data", {}).get("url", "")}, "Failed to go back")
-+    response = {"success": True, "url": result.get("data", {}).get("url", "")} if result.get("success") else None
-+    if response is not None:
-+        if response["url"] and response["url"] != before:
-+            _rocsy_page_screenshot(response, effective_task_id)
-+        return _json_with_fallback(response, result)
-+    return _failed_response(result, "Failed to go back")
- 
- 
- def browser_press(key: str, task_id: Optional[str] = None) -> str:
 diff --git a/tui_gateway/methods_tools.py b/tui_gateway/methods_tools.py
-index c6ad4348..26813156 100644
+index b0914c2bcc..a73457d2ab 100644
 --- a/tui_gateway/methods_tools.py
 +++ b/tui_gateway/methods_tools.py
-@@ -890,9 +890,9 @@ def _cmd_goal(rid, params, session, name, arg):
+@@ -803,9 +803,9 @@ def _cmd_goal(rid, params, session, name, arg):
          if err:
              return err
          try:
@@ -426,10 +432,10 @@ index c6ad4348..26813156 100644
          from hermes_cli.goal_command import dispatch_goal_command
          result = dispatch_goal_command(
 diff --git a/tui_gateway/prompt_turn.py b/tui_gateway/prompt_turn.py
-index 0cc90dee..ff7a8e48 100644
+index c661ee64dd..a93ed928f9 100644
 --- a/tui_gateway/prompt_turn.py
 +++ b/tui_gateway/prompt_turn.py
-@@ -66,9 +66,9 @@ def _active_goal_manager(session: dict):
+@@ -68,9 +68,9 @@ def _active_goal_manager(session: dict):
      """The session's GoalManager when a goal is active, else None."""
      from hermes_cli.goals import GoalManager
      try:

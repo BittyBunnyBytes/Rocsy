@@ -54,7 +54,14 @@ def href(app: str) -> str:
     return f"/app-icon/{app}.svg?v={version}"
 
 
+# Apps that bring their own icon picture (plugins with "icon_file"): app -> (URL, media type).
+IMAGES: dict[str, tuple[str, str]] = {}
+
+
 def link(app: str) -> str:
+    if app in IMAGES:
+        url, kind = IMAGES[app]
+        return f'<link rel="icon" type="{kind}" href="{url}" data-rb-icon>'
     return f'<link rel="icon" type="image/svg+xml" href="{href(app)}" data-rb-icon>' if app in COLORS else ""
 
 
@@ -64,7 +71,7 @@ _OWN_ICON = re.compile(rb'<link\b(?=[^>]*\brel=["\']?(?:shortcut\s+)?icon["\'\s>
 
 def apply(html: bytes, app: str) -> bytes:
     """Replace the page's favicon links with this app's icon."""
-    if app not in COLORS or b"data-rb-icon" in html:
+    if (app not in COLORS and app not in IMAGES) or b"data-rb-icon" in html:
         return html
     head_end = html.lower().find(b"</head>")
     if head_end < 0:

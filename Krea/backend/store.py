@@ -55,6 +55,8 @@ class Store:
                 ("outputs_json", "TEXT"),
                 # Jobs other services render through Krea (e.g. GPU tuning benchmarks): never listed in the gallery or home.
                 ("hidden", "INTEGER NOT NULL DEFAULT 0"),
+                # JSON {runs: [...]}: per-node wall time of each ComfyUI prompt, for the info dialog's Stats tab.
+                ("timings", "TEXT"),
             ):
                 if column not in columns:
                     self._conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} {definition}")
@@ -75,7 +77,7 @@ class Store:
             )
 
     def update_job(self, job_id: str, **changes: Any) -> None:
-        allowed = {"prompt_id", "state", "started_at", "completed_at", "output_path", "error", "progress", "lock_token", "queue_entry_id", "stage", "enhanced_prompt", "width", "height", "prompt_ids", "outputs_json"}
+        allowed = {"prompt_id", "state", "started_at", "completed_at", "output_path", "error", "progress", "lock_token", "queue_entry_id", "stage", "enhanced_prompt", "width", "height", "prompt_ids", "outputs_json", "timings"}
         values = {key: value for key, value in changes.items() if key in allowed}
         if not values:
             return
@@ -121,12 +123,13 @@ class Store:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def delete_unfinished_jobs(self) -> int:
+    def delete_unfinished_jobs(self, keep: set[str] | frozenset[str] = frozenset()) -> int:
+        # keep: jobs waiting for the GPU with a saved submission (they survive a restart).
         placeholders = ", ".join("?" for _ in UNFINISHED_JOB_STATES)
         with self._lock, self._conn:
             cursor = self._conn.execute(
-                f"DELETE FROM jobs WHERE state IN ({placeholders})",
-                UNFINISHED_JOB_STATES,
+                f"DELETE FROM jobs WHERE state IN ({placeholders}) AND id NOT IN ({', '.join('?' for _ in keep)})",
+                (*UNFINISHED_JOB_STATES, *keep),
             )
         return cursor.rowcount
 

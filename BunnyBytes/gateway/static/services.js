@@ -316,10 +316,47 @@
     timer = setTimeout(load, 5000);
   }
 
+  // GPU queue settings live in the queue service itself (bunny-lock, /Queue/api/settings).
+  const queuePrepare = document.getElementById("gpu-queue-prepare");
+  const queueStatus = document.getElementById("gpu-queue-status");
+  async function loadQueueSettings() {
+    try {
+      const response = await fetch("/Queue/api/settings", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+      queuePrepare.checked = data.prepare_early !== false;
+      queuePrepare.disabled = false;
+      queueStatus.textContent = "";
+    } catch (error) {
+      queueStatus.textContent = `Queue unavailable: ${error.message}`;
+      queueStatus.dataset.kind = "error";
+    }
+  }
+  queuePrepare.addEventListener("change", async () => {
+    queuePrepare.disabled = true;
+    queueStatus.textContent = "Saving…";
+    queueStatus.dataset.kind = "";
+    try {
+      const response = await fetch("/Queue/api/settings", {
+        method: "PUT", headers: { "Content-Type": "application/json", "X-BB-Action": "1" },
+        body: JSON.stringify({ prepare_early: queuePrepare.checked }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+      queuePrepare.checked = data.prepare_early !== false;
+      queueStatus.textContent = "Saved";
+      queueStatus.dataset.kind = "ok";
+    } catch (error) {
+      queuePrepare.checked = !queuePrepare.checked;
+      queueStatus.textContent = error.message;
+      queueStatus.dataset.kind = "error";
+    } finally { queuePrepare.disabled = false; }
+  });
+
   // Load when the tab is shown (notifications.js switches panels via the hidden attribute).
-  new MutationObserver(() => { if (!panel.hidden) { load(); loadProfiles(); loadPriority(); } else clearTimeout(timer); })
+  new MutationObserver(() => { if (!panel.hidden) { load(); loadProfiles(); loadPriority(); loadQueueSettings(); } else clearTimeout(timer); })
     .observe(panel, { attributes: true, attributeFilter: ["hidden"] });
   document.addEventListener("visibilitychange", () => { if (document.hidden) clearTimeout(timer); else load(); });
   load();
-  if (!panel.hidden) { loadProfiles(); loadPriority(); }
+  if (!panel.hidden) { loadProfiles(); loadPriority(); loadQueueSettings(); }
 })();

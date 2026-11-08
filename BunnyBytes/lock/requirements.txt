@@ -1,5 +1,0 @@
-fastapi==0.143.5
-uvicorn
-jinja2
-httpx
-starlette==1.7.0

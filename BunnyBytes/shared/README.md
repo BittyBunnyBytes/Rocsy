@@ -162,3 +162,15 @@ The authenticated internal API (`X-Queue-Internal-Secret`):
 settings persist in the `framework-agentic-data` volume. In-flight runs are marked
 `interrupted` after a framework restart; completed results remain browseable.
 `FRAMEWORK_AGENTIC_MODEL` sets the default Hermes model (matches Video).
+
+## RAG calls in Agentic mode
+
+`rag.py` resolves `@` calls to the RAG library (the gateway's RAG & Cache pins) with the Master Agent's syntax:
+`@{Name}` or `@Name` for a pinned file's alias or file name, and `@{Group} all` or `@{Group} random N` for a group.
+A bare `@word` that names nothing stays plain text; a `@{...}` that names nothing is flagged in the box and logged.
+
+`window.BunnyRag` in `ui/h3-studio.js` is the browser side: `attach(textarea, {url})` adds the suggestion menu and
+the highlight layer, and `split(text)` gives the pieces for a page with its own layer (Video's guide). Each studio
+serves the list at `/api/agentic/rag`. Text documents go to the planner, including its plan review. Image attaches
+pictures as reference images up to the model's slots, Video attaches pictures, video and audio as private
+`agentic-references`, and anything a studio can't take is passed on by name and note, with a warning in the terminal.

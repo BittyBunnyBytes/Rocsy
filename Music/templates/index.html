@@ -4,12 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0f1418">
-  <title>Music</title>
+  <title>Music · Rocsy</title>
   <link rel="stylesheet" href="{{ app_prefix }}/static/css/h3-studio.css?v={{ app_version }}">
   <link rel="stylesheet" href="{{ app_prefix }}/static/css/missing-files.css?v={{ app_version }}">
   <!-- Before the app scripts: it wraps fetch to catch "missing model files" answers. -->
   <script defer src="{{ app_prefix }}/static/js/missing-files.js?v={{ app_version }}"></script>
   <script defer src="{{ app_prefix }}/static/js/h3-studio.js?v={{ app_version }}"></script>
+  <script src="{{ app_prefix }}/static/js/lyrics-syntax.js?v={{ app_version }}"></script>
+  <script type="module" src="{{ app_prefix }}/static/js/music-player.js?v={{ app_version }}"></script>
   <script type="module" src="{{ app_prefix }}/static/js/app.js?v={{ app_version }}"></script>
   <link rel="stylesheet" href="{{ app_prefix }}/static/css/agentic-ui.css?v={{ app_version }}">
   <link rel="stylesheet" href="{{ app_prefix }}/static/css/app.css?v={{ app_version }}">
@@ -20,6 +22,10 @@
 <body class="h3-studio-ui" data-studio="music" data-app-prefix="{{ app_prefix }}" data-mobile-tab="create">
   <header class="topbar">
     <div class="brand"><span class="brand-mark">♪</span><span class="brand-name">Music</span></div>
+    <nav class="view-tabs" role="tablist" aria-label="Views">
+      <button type="button" class="view-tab is-active" role="tab" aria-selected="true" aria-controls="studio-view" data-view="studio">Studio</button>
+      <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="settings-view" data-view="settings">Settings</button>
+    </nav>
     <div class="service-state" id="comfy-status"><span class="status-dot"></span><span>ComfyUI</span><strong>Checking</strong></div>
   </header>
 
@@ -28,7 +34,7 @@
     <button type="button" class="mobile-tab" role="tab" aria-selected="false" data-mobile-tab="jobs" aria-controls="jobs-panel">Generations <span class="mobile-tab-badge" id="mobile-jobs-badge"></span></button>
   </nav>
 
-  <main class="app-shell">
+  <main class="app-shell" id="studio-view">
     <section class="composer-panel" id="composer-panel" aria-label="Music generation controls">
       <h1>Create a track</h1>
       <form id="generate-form">
@@ -37,20 +43,24 @@
           <select id="model" name="model" data-request>
             <option value="yue2">YuE2</option>
             <option value="minimax_music3">MiniMax Music 3</option>
+            <option value="yue2_pack">YuE2 Studio</option>
           </select>
           <small id="model-note" hidden aria-live="polite"></small>
         </div>
         <div class="composer-footer"><div class="action-copy"><span>Ready to create</span><strong id="engine-label">YuE2 · INT8</strong></div><button type="submit" class="primary-button" id="generate-button">Generate</button></div>
+        <div class="cover-bar" id="cover-bar"><button type="button" class="secondary-button" id="cover-open">Cover audio</button><button type="button" class="secondary-button" id="voice-open">Voice</button></div>
         <section class="card prompt-card" id="prompt-card">
         <div class="card-head"><span class="card-title">Prompt</span></div>
         <div class="card-body">
         <div class="field-row">
-          <label for="style">Music direction</label>
+          <div class="field-label-row"><label for="style">Music direction</label><span class="enhance-actions"><button type="button" class="button ghost prompt-undo-button" data-enhance-undo="style" hidden title="Put back the text from before the last Enhance">&#8630; Undo</button><button type="button" class="button ghost prompt-enhance-button" data-enhance="style" aria-expanded="false" aria-controls="enhance-panel-style" title="Enhance: tell Hermes what to change; it rewrites this for the loaded model (nothing is rendered)"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.9 15.5a2 2 0 0 0-1.4-1.4l-6.1-1.6a.5.5 0 0 1 0-1l6.1-1.6a2 2 0 0 0 1.4-1.4l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg> Enhance</button></span></div><div class="enhance-panel" id="enhance-panel-style" data-enhance-panel="style" hidden><input type="text" maxlength="2000" data-enhance-wish="style" placeholder="What should change? e.g. darker, more 80s synths, female vocal (optional)" aria-label="What Enhance should change"><button type="button" class="button ghost prompt-enhance-button" data-enhance-go="style"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.9 15.5a2 2 0 0 0-1.4-1.4l-6.1-1.6a.5.5 0 0 1 0-1l6.1-1.6a2 2 0 0 0 1.4-1.4l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg> Enhance</button><button type="button" class="button ghost prompt-undo-button" data-enhance-close="style" aria-label="Close">&#10005;</button></div>
+          <div class="field-writing" id="style-writing" role="status" aria-live="polite" hidden></div>
           <textarea id="style" name="style" data-request rows="3" maxlength="4000" placeholder="Synth-pop, warm female vocal, dreamy analog synths, punchy drums, 110 BPM, uplifting chorus" required></textarea>
           <small>Include genre, vocal character, instruments, tempo, and mood.</small>
         </div>
         <div class="field-row">
-          <label for="lyrics">Lyrics</label>
+          <div class="field-label-row"><label for="lyrics">Lyrics</label><span class="enhance-actions"><button type="button" class="button ghost prompt-undo-button" data-enhance-undo="lyrics" hidden title="Put back the text from before the last Enhance">&#8630; Undo</button><button type="button" class="button ghost prompt-enhance-button" data-enhance="lyrics" aria-expanded="false" aria-controls="enhance-panel-lyrics" title="Enhance: tell Hermes what to change; it rewrites this for the loaded model (nothing is rendered)"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.9 15.5a2 2 0 0 0-1.4-1.4l-6.1-1.6a.5.5 0 0 1 0-1l6.1-1.6a2 2 0 0 0 1.4-1.4l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg> Enhance</button></span></div><div class="enhance-panel" id="enhance-panel-lyrics" data-enhance-panel="lyrics" hidden><input type="text" maxlength="2000" data-enhance-wish="lyrics" placeholder="What should change? e.g. shorter chorus, more about the sea, add a bridge (optional)" aria-label="What Enhance should change"><button type="button" class="button ghost prompt-enhance-button" data-enhance-go="lyrics"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.9 15.5a2 2 0 0 0-1.4-1.4l-6.1-1.6a.5.5 0 0 1 0-1l6.1-1.6a2 2 0 0 0 1.4-1.4l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg> Enhance</button><button type="button" class="button ghost prompt-undo-button" data-enhance-close="lyrics" aria-label="Close">&#10005;</button></div>
+          <div class="field-writing" id="lyrics-writing" role="status" aria-live="polite" hidden></div>
           <textarea id="lyrics" name="lyrics" data-request rows="7" maxlength="20000" placeholder="[Verse]
 ...
 
@@ -59,6 +69,30 @@
           <div class="lyric-tags" role="toolbar" aria-label="Insert lyric section"><button type="button" data-lyric-tag="[Verse]">Verse</button><button type="button" data-lyric-tag="[Chorus]">Chorus</button><button type="button" data-lyric-tag="[Bridge]">Bridge</button><button type="button" data-lyric-tag="[Instrumental]">Instrumental</button></div>
           <small>Use section tags to shape the song, or leave lyrics empty for an instrumental.</small>
         </div>
+        </div>
+        </section>
+        <section class="card" id="reference-card" hidden>
+        <div class="card-head"><span class="card-title">Reference Audio</span><span class="card-sub" id="cv_label"></span><button type="button" class="secondary-button cover-remove" id="cv_remove">Remove</button></div>
+        <div class="card-body">
+          <div class="field-row"><label for="cv_audio">Audio influence <output id="cv_audio_out">75</output></label><input id="cv_audio" type="range" min="0" max="100" step="1" value="75"><small id="cv_audio_note"></small></div>
+          <div class="field-row"><label for="cv_style">Style influence <output id="cv_style_out">50</output></label><input id="cv_style" type="range" min="0" max="100" step="1" value="50"><small>Loose to Strong: how closely it follows Music direction.</small></div>
+          <div class="field-row"><label for="cv_weird">Weirdness <output id="cv_weird_out">50</output></label><input id="cv_weird" type="range" min="0" max="100" step="1" value="50"><small>Safe to Chaos. 50 is the normal result.</small></div>
+          <div class="field-grid">
+            <div class="field-row"><label for="cv_gender">Vocal gender</label><select id="cv_gender"><option value="auto">Auto</option><option value="female">Female</option><option value="male">Male</option></select></div>
+          </div>
+          <div class="field-grid">
+            <div class="field-row"><label for="cv_transpose">Transpose song (semitones)</label><input id="cv_transpose" type="number" min="-12" max="12" step="1" value="0"></div>
+          </div>
+          <div class="toggle-row"><label for="cv_downloads">Download missing models when needed</label><input id="cv_downloads" type="checkbox" checked></div>
+          <small>Empty Lyrics use the song's own words. Covers are saved as FLAC, at the song's length.</small>
+          <div class="cover-actions"><button type="button" class="secondary-button" id="cv_write">Write Music direction with Agentic</button></div>
+        </div>
+        </section>
+        <section class="card lora-card" id="lora-card">
+        <div class="card-head"><span class="card-title">LoRAs</span><span class="card-sub" id="lora-sub">Styles and voices trained in Trainer</span><button type="button" class="icon-button lora-refresh" id="lora-refresh" title="Look for new LoRAs" aria-label="Refresh LoRAs">↻</button></div>
+        <div class="card-body">
+          <div class="lora-gallery" id="lora-gallery"><div class="lora-empty">Loading LoRAs…</div></div>
+          <small>Up to 4 at once. Trainer puts finished YuE2 / MiniMax Music 3 LoRAs here by itself; other music LoRAs in models/loras show up too.</small>
         </div>
         </section>
         <section class="card output-card" id="output-card">
@@ -78,13 +112,13 @@
         </div>
         <div class="field-grid format-grid">
           <div class="field-row"><label for="output_format">Audio format</label><select id="output_format" name="output_format" data-request><option value="flac">FLAC</option><option value="mp3">MP3</option><option value="opus">Opus</option></select></div>
-          <div class="field-row" data-format-quality hidden><label for="output_quality">Audio quality</label><select id="output_quality" name="output_quality" data-request><option value="V0">V0 · variable bitrate</option><option value="128k">128 kbps</option><option value="192k">192 kbps</option><option value="320k">320 kbps</option><option value="64k">64 kbps</option><option value="96k">96 kbps</option></select></div>
+          <div class="field-row" data-format-quality hidden><label for="output_quality">Audio quality</label><select id="output_quality" name="output_quality" data-request></select></div>
         </div>
         </div>
         </section>
 
         <details class="card music-model-card" id="yue2-options">
-          <summary class="card-head"><span class="card-title">Model &amp; sampling</span><span class="card-sub">YuE2 composition, references, sampler</span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <summary class="card-head"><span class="card-title">Model &amp; sampling</span><span class="card-sub">YuE2 composition, sampler</span><span class="card-chevron" aria-hidden="true"></span></summary>
           <div class="card-body">
           <div class="option-section">
             <h2>Composition</h2>
@@ -102,19 +136,7 @@
           </div>
 
           <div class="option-section">
-            <h2>Reference audio</h2>
-            <p>Use an existing recording to guide the melody and score transcription.</p>
-            <div class="toggle-row"><label for="use_reference">Use a reference</label><input id="use_reference" name="use_reference" data-request type="checkbox"></div>
-            <div class="toggle-row"><label for="use_youtube">Load reference from YouTube</label><input id="use_youtube" name="use_youtube" data-request type="checkbox"></div>
-            <div class="field-row" data-local-reference hidden><label for="reference_audio">ComfyUI input filename</label><input id="reference_audio" name="reference_audio" data-request type="text" maxlength="240" value="Ref Music.mp3" placeholder="Ref Music.mp3"><small>Choose a file already in ComfyUI’s input folder.</small></div>
-            <div class="field-grid" data-youtube-reference hidden>
-              <div class="field-row"><label for="youtube_url">YouTube URL</label><input id="youtube_url" name="youtube_url" data-request type="url" placeholder="https://www.youtube.com/watch?v=..."></div>
-              <div class="field-row"><label for="youtube_start_time">Start time (seconds)</label><input id="youtube_start_time" name="youtube_start_time" data-request type="number" min="0" max="36000" step="1" value="0"></div>
-              <div class="field-row"><label for="youtube_duration">Reference length (seconds, 0 = full)</label><input id="youtube_duration" name="youtube_duration" data-request type="number" min="0" max="36000" step="1" value="0"></div>
-              <div class="toggle-row"><label for="youtube_force_redownload">Download reference again</label><input id="youtube_force_redownload" name="youtube_force_redownload" data-request type="checkbox"></div>
-            </div>
-            <div class="field-row"><label for="reference_strength">Reference influence <output id="reference-strength-readout" for="reference_strength">0.90</output></label><input id="reference_strength" name="reference_strength" data-request type="range" min="0" max="1" step="0.01" value="0.9"><small>Higher values favor the reference melody and adjust YuE2’s sampling behavior.</small></div>
-            <div class="field-row"><label for="reference_mode">Transcription mode</label><select id="reference_mode" name="reference_mode" data-request><option value="full">Full transcription</option><option value="melody">Melody only</option></select></div>
+            <h2>Music sampling</h2>
             <div class="toggle-row"><label for="custom_music_sampling">Set music sampling values manually</label><input id="custom_music_sampling" name="custom_music_sampling" data-request type="checkbox"></div>
             <div class="field-grid manual-sampling" data-manual-sampling hidden>
               <div class="field-row"><label for="music_temperature">Music temperature</label><input id="music_temperature" name="music_temperature" data-request type="number" min="0.01" max="1.5" step="0.01" value="0.69"></div>
@@ -160,6 +182,87 @@
           </div>
           </div>
         </details>
+        <section class="card" id="pack-card" hidden>
+          <div class="card-head"><span class="card-title">YuE2 Studio</span></div>
+          <div class="card-body">
+            <div class="field-row"><label for="pk_task">Task</label>
+              <select id="pk_task">
+                <option value="song">Sing a song</option>
+                <option value="plan">Write the score first</option>
+                <option value="write">Write style &amp; lyrics from an idea</option>
+                <option value="transcribe">Cover: score from a recording</option>
+                <option value="midi">Score from a MIDI file</option>
+                <option value="vocals">Vocals only</option>
+                <option value="edit">Edit a track</option>
+              </select></div>
+
+            <div data-pk="song">
+              <div class="field-row"><label for="pk_score">Score (ABC)</label><textarea id="pk_score" rows="5" maxlength="200000" placeholder="Empty: the model writes it"></textarea></div>
+              <div class="field-grid">
+                <div class="field-row"><label for="pk_cot">Score mode</label><select id="pk_cot"><option value="full">Full (melody + chords)</option><option value="melody">Melody</option><option value="off">Off (no score)</option></select></div>
+                <div class="field-row"><label for="pk_seconds">Maximum seconds (0 = from the lyrics)</label><input id="pk_seconds" type="number" min="0" max="900" step="1" value="0"></div>
+                <div class="field-row"><label for="pk_steps">Steps</label><input id="pk_steps" type="number" min="8" max="64" value="32"></div>
+                <div class="field-row"><label for="pk_cfg">CFG</label><input id="pk_cfg" type="number" min="0" max="20" step="0.1" value="0"></div>
+                <div class="field-row"><label for="pk_transpose">Transpose (semitones)</label><input id="pk_transpose" type="number" min="-24" max="24" value="0"></div>
+                <div class="field-row"><label for="pk_vae">Decoder</label><select id="pk_vae"><option value="standard">Standard</option><option value="legacy">Legacy</option></select></div>
+                <div class="field-row"><label for="pk_attention">Attention</label><select id="pk_attention"><option value="sdpa">SDPA</option><option value="fast">Fast</option><option value="flash">Flash</option></select></div>
+                <div class="field-row"><label for="pk_offload">Offload</label><select id="pk_offload"><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></div>
+              </div>
+              <div class="toggle-row"><label for="pk_vocals_only">Vocals only (a cappella)</label><input id="pk_vocals_only" type="checkbox"></div>
+              <div class="toggle-row"><label for="pk_low_vram">Low VRAM</label><input id="pk_low_vram" type="checkbox"></div>
+            </div>
+
+            <div data-pk="write">
+              <div class="field-row"><label for="pk_idea">Idea</label><textarea id="pk_idea" rows="3" maxlength="4000" placeholder="A sad song about winter, female vocal"></textarea></div>
+              <div class="field-row"><label for="pk_instructions">Instructions</label><textarea id="pk_instructions" rows="2" maxlength="4000"></textarea></div>
+              <div class="field-row"><label for="pk_length">Length</label><select id="pk_length"><option value="short">Short</option><option value="normal" selected>Normal</option><option value="long">Long</option><option value="very long">Very long</option></select></div>
+            </div>
+
+            <div data-pk="file">
+              <div class="field-row"><label for="pk_file">File</label><input id="pk_file" type="file"><small id="pk_file_name"></small></div>
+            </div>
+            <div data-pk="score-mode">
+              <div class="field-row"><label for="pk_score_mode">Score mode</label><select id="pk_score_mode"><option value="full">Full (melody + chords)</option><option value="melody">Melody</option></select></div>
+            </div>
+            <div data-pk="transcribe">
+              <div class="field-row"><label for="pk_listen">Listen</label><select id="pk_listen"><option value="the whole song">The whole song</option><option value="a minute at a time">A minute at a time</option></select></div>
+              <div class="toggle-row"><label for="pk_recognize">Recognise the lyrics</label><input id="pk_recognize" type="checkbox"></div>
+              <div class="toggle-row"><label for="pk_second">Second hearing (Whisper)</label><input id="pk_second" type="checkbox"></div>
+            </div>
+            <div data-pk="language">
+              <div class="field-row"><label for="pk_language">Language</label><input id="pk_language" type="text" maxlength="80" value="auto"></div>
+              <div class="field-row"><label for="pk_llm">Language model</label><input id="pk_llm" type="text" maxlength="240" value="auto"></div>
+            </div>
+            <div data-pk="midi">
+              <div class="field-grid">
+                <div class="field-row"><label for="pk_vocal_track">Vocal track</label><input id="pk_vocal_track" type="text" maxlength="8" value="auto"></div>
+                <div class="field-row"><label for="pk_instrument_track">Instrument track</label><input id="pk_instrument_track" type="text" maxlength="8" value="auto"></div>
+              </div>
+              <div class="toggle-row"><label for="pk_without_sections">Leave out section comments</label><input id="pk_without_sections" type="checkbox" checked></div>
+            </div>
+
+            <div data-pk="edit">
+              <div class="field-row"><label for="pk_source">Song</label><select id="pk_source"></select></div>
+              <div class="field-grid">
+                <div class="field-row"><label for="pk_op">Edit</label><select id="pk_op"><option value="retake">Retake</option><option value="cut">Cut</option><option value="words">New words</option><option value="extend">Extend</option><option value="move">Move</option><option value="break">Instrumental break</option><option value="restyle">Restyle</option></select></div>
+                <div class="field-row" data-op="bars"><label for="pk_from">From bar</label><input id="pk_from" type="number" min="0"></div>
+                <div class="field-row" data-op="bars"><label for="pk_until">To bar (not included)</label><input id="pk_until" type="number" min="0"></div>
+                <div class="field-row" data-op="lines"><label for="pk_line_from">From line</label><input id="pk_line_from" type="number" min="0"></div>
+                <div class="field-row" data-op="lines"><label for="pk_line_until">To line (not included)</label><input id="pk_line_until" type="number" min="0"></div>
+                <div class="field-row" data-op="to"><label for="pk_to">At bar line</label><input id="pk_to" type="number" min="0"></div>
+                <div class="field-row" data-op="length"><label for="pk_len">Length in bars</label><input id="pk_len" type="number" min="1" value="4"></div>
+                <div class="field-row" data-op="sung"><label for="pk_op_takes">Takes</label><input id="pk_op_takes" type="number" min="1" max="8" value="2"></div>
+              </div>
+              <div class="field-row" data-op="text"><label for="pk_op_text">Words</label><textarea id="pk_op_text" rows="3" maxlength="8000"></textarea></div>
+              <div class="field-row" data-op="restyle"><label for="pk_op_style">New style</label><input id="pk_op_style" type="text" maxlength="4000"></div>
+              <button type="button" class="secondary-button" id="pk_add_edit">Add edit</button>
+              <div class="field-row"><label for="pk_edits">Edits (JSON, applied in order)</label><textarea id="pk_edits" rows="5" maxlength="200000">[]</textarea></div>
+            </div>
+
+            <div class="field-row" data-pk="seed"><label for="pk_seed">Seed</label><input id="pk_seed" type="number" min="0" placeholder="Random each time"></div>
+            <div class="toggle-row"><label for="pk_downloads">Allow model downloads for this run</label><input id="pk_downloads" type="checkbox"></div>
+          </div>
+        </section>
 
       </form>
       <!-- Per-workflow model files (VAE, text encoder, DiT, ...): shared/ui/workflow-models.js. -->
@@ -178,11 +281,145 @@
       <div class="jobs-pager" id="jobs-pager" hidden></div>
     </section>
   </main>
+
+  <section class="settings-view" id="settings-view" aria-label="Settings" hidden>
+    <h1>Settings</h1>
+    <section class="card settings-card">
+      <div class="card-head"><span class="card-title">Player</span></div>
+      <div class="card-body">
+        <fieldset class="viz-choice">
+          <legend>Default visualizer</legend>
+          <label><input type="radio" name="default-viz" value="bars"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M5 26V14M13 26V6M21 26V16M29 26V3M37 26V11M45 26V18"/></svg><span>Bars</span></label>
+          <label><input type="radio" name="default-viz" value="wave"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M2 14c4-14 7-14 11 0s7 14 11 0 7-14 11 0 7 14 11 0"/></svg><span>Wave</span></label>
+          <label><input type="radio" name="default-viz" value="radial"><svg viewBox="0 0 48 28" aria-hidden="true"><path d="M24 8V2M24 20v6M18 14h-7M30 14h7M20 10l-4-4M28 10l4-4M20 18l-4 4M28 18l4 4"/></svg><span>Radial</span></label>
+        </fieldset>
+        <label class="setting-check"><input type="checkbox" id="viz-cover-colors-setting"><span>Visualizer colors from the song cover<small>A song with a cover draws its visualizer in the cover's own colors. Songs without one keep the usual colors. Saved in this browser, like the default visualizer.</small></span></label>
+        <label class="setting-check"><input type="checkbox" id="lyric-timing-setting" checked><span>Whisper lyric timing<small>After each song with lyrics, Whisper finds when every word is sung (a short GPU job). Off: new songs follow an estimate.</small></span></label>
+        <label class="setting-field" for="whisper-model-setting"><span>Whisper model<small>Used for word timing and for writing a song's lyrics. A model that isn't on this machine yet downloads the first time it runs. Songs already timed keep their timing until you choose Redo word timings in the player.</small></span><select id="whisper-model-setting"></select></label>
+      </div>
+    </section>
+    <section class="card settings-card">
+      <div class="card-head"><span class="card-title">Song covers</span></div>
+      <div class="card-body">
+        <label class="setting-check"><input type="checkbox" id="song-cover-setting"><span>Generate a song cover<small>After each song, an agent writes an image prompt from its style and lyrics and the Image studio renders it as the song's cover (both join the GPU queue). Songs made earlier can get one from their card.</small></span></label>
+        <div id="song-cover-options">
+          <label class="setting-field" for="cover-agent-setting"><span>Agent<small>The model that writes the image prompt. Online and CLI agents don't use the GPU.</small></span><select id="cover-agent-setting"><option value="">Image Agentic's model</option></select></label>
+          <label class="setting-field" for="cover-reads-setting"><span>Cover art reads<small>What the agent is given to imagine the cover from. Lyrics only falls back to the Music direction for an instrumental.</small></span><select id="cover-reads-setting"><option value="both">Music direction and lyrics</option><option value="direction">Music direction only</option><option value="lyrics">Lyrics only</option></select></label>
+          <label class="setting-field" for="cover-image-model-setting"><span>Image model<small>Renders the cover. Its model guide is given to the agent.</small></span><select id="cover-image-model-setting"></select></label>
+          <label class="setting-field" for="cover-preset-setting"><span>Preset<small>An Image studio preset saved for this model (size, steps, LoRAs and the rest); the cover is always one image. With none, or if the preset no longer exists, the cover renders with the current settings: this model at 1024 × 1024.</small></span><select id="cover-preset-setting"><option value="">None: current settings</option></select></label>
+          <div class="setting-field"><label for="cover-size-setting"><span>Size<small>Overrides the size the cover renders at, a preset's included. "From the preset" keeps the preset's size, or 1024 × 1024 without one.</small></span></label><span class="cover-size-controls"><select id="cover-size-setting"><option value="">From the preset</option></select><span class="cover-size-custom" id="cover-size-custom" hidden><input type="number" id="cover-width-setting" min="512" max="2752" step="32" inputmode="numeric" aria-label="Cover width in pixels"><span aria-hidden="true">×</span><input type="number" id="cover-height-setting" min="512" max="2752" step="32" inputmode="numeric" aria-label="Cover height in pixels"><span class="cover-size-unit">px</span></span></span></div>
+          <label class="setting-field" for="cover-prompt-setting"><span>System prompt<small>What the agent is told before it reads the song. Empty goes back to the default.</small></span><textarea id="cover-prompt-setting" rows="6" maxlength="20000"></textarea></label>
+          <div class="setting-actions"><button type="button" class="secondary-button" id="cover-prompt-reset">Reset to default</button></div>
+        </div>
+      </div>
+    </section>
+  </section>
   <div class="studio-dialog" id="job-info" data-studio-dialog hidden>
     <section class="studio-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="job-info-title">
       <button type="button" class="studio-dialog-close" data-studio-dialog-close aria-label="Close" title="Close">&#10005;</button>
-      <h2 class="studio-dialog-title" id="job-info-title">Generation prompts</h2>
+      <h2 class="studio-dialog-title" id="job-info-title">Generation details</h2>
       <div id="job-info-body"></div>
+    </section>
+  </div>
+  <div class="studio-dialog cover-view" id="cover-view" data-studio-dialog hidden>
+    <section class="studio-dialog-panel cover-view-panel" role="dialog" aria-modal="true" aria-labelledby="cover-view-title">
+      <button type="button" class="studio-dialog-close" data-studio-dialog-close aria-label="Close" title="Close">&#10005;</button>
+      <img class="cover-view-image" id="cover-view-image" alt="Song cover">
+      <div class="cover-view-info">
+        <span class="eyebrow">Song cover</span>
+        <h2 class="cover-view-title" id="cover-view-title"></h2>
+        <div class="cover-view-actions">
+          <a class="secondary-button" id="cover-view-download" download>Download</a>
+          <button type="button" class="secondary-button" id="cover-view-new">Make a new cover</button>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="studio-dialog" id="cover-dialog" data-studio-dialog hidden>
+    <section class="studio-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="cover-dialog-title">
+      <button type="button" class="studio-dialog-close" data-studio-dialog-close aria-label="Close" title="Close">&#10005;</button>
+      <h2 class="studio-dialog-title" id="cover-dialog-title">Cover audio</h2>
+      <div class="cover-chips" role="tablist" aria-label="Song source">
+        <button type="button" role="tab" class="is-active" data-cover-source="file" aria-selected="true">Upload</button>
+        <button type="button" role="tab" data-cover-source="youtube" aria-selected="false">YouTube link</button>
+      </div>
+      <div class="field-row" data-cover-pane="file"><label for="cd_file">Song</label><input id="cd_file" type="file" accept="audio/*,.flac,.wav,.mp3,.ogg,.opus,.m4a"></div>
+      <div data-cover-pane="youtube" hidden>
+        <div class="field-row"><label for="cd_url">YouTube link</label><input id="cd_url" type="url" placeholder="https://www.youtube.com/watch?v=..."></div>
+        <div class="field-grid">
+          <div class="field-row"><label for="cd_start">Start (seconds)</label><input id="cd_start" type="number" min="0" max="36000" step="1" value="0"></div>
+          <div class="field-row"><label for="cd_length">Length (seconds, 0 = full)</label><input id="cd_length" type="number" min="0" max="3600" step="1" value="0"></div>
+        </div>
+      </div>
+      <div class="toggle-row"><label for="cd_whisper">Transcribe the song into lyrics with Whisper</label><input id="cd_whisper" type="checkbox"></div>
+      <small>Joins the GPU queue and fills Lyrics when it's done.</small>
+      <div class="toggle-row"><label for="cd_agentic">Have Agentic write the Music direction</label><input id="cd_agentic" type="checkbox"></div>
+      <small>From the song's score and measurements, plus its name on YouTube. Anything already in Music direction counts as your wishes.</small>
+      <div class="cover-actions"><button type="button" class="primary-button" id="cd_use">Use this song</button></div>
+    </section>
+  </div>
+  <div class="studio-dialog" id="voice-dialog" data-studio-dialog hidden>
+    <section class="studio-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="voice-dialog-title">
+      <button type="button" class="studio-dialog-close" data-studio-dialog-close aria-label="Close" title="Close">&#10005;</button>
+      <h2 class="studio-dialog-title" id="voice-dialog-title">Voice</h2>
+      <div class="voice-list" id="voice-list" role="radiogroup" aria-label="Who sings"></div>
+      <div id="voice-settings">
+        <div class="field-row"><label for="vc_strength">Voice strength <output id="vc_strength_out">100</output></label><input id="vc_strength" type="range" min="0" max="100" step="1" value="100"><small>100 is only this voice, 0 is only YuE2's.</small></div>
+        <div class="field-grid">
+          <div class="field-row"><label for="vc_semitones">Shift voice (semitones)</label><input id="vc_semitones" type="number" min="-24" max="24" step="1" value="0"></div>
+          <div class="field-row"><label for="vc_steps">Conversion steps</label><input id="vc_steps" type="number" min="4" max="100" step="1" value="40"></div>
+        </div>
+      </div>
+      <div class="voice-preview" id="voice-preview" hidden>
+        <h3 class="voice-add-title" id="vp_title">Preview</h3>
+        <div class="field-grid">
+          <div class="field-row"><label for="vp_song">Sing it over</label><select id="vp_song"></select></div>
+          <div class="field-row" id="vp_file_row" hidden><label for="vp_file">Clip</label><input id="vp_file" type="file" accept="audio/*,.flac,.wav,.mp3,.ogg,.opus,.m4a"></div>
+        </div>
+        <div class="field-grid">
+          <div class="field-row"><label for="vp_start">Start at (seconds)</label><input id="vp_start" type="number" min="0" step="1" value="0"></div>
+          <div class="field-row"><label for="vp_length">Length (seconds)</label><input id="vp_length" type="number" min="5" max="60" step="1" value="20"></div>
+        </div>
+        <small>Uses the voice settings above. Previews don't go in your library; the newest few are kept here.</small>
+        <div class="cover-actions"><button type="button" class="secondary-button" id="vp_close">Close preview</button><button type="button" class="primary-button" id="vp_go">Convert</button></div>
+        <div class="voice-preview-results" id="vp_results" aria-live="polite"></div>
+      </div>
+      <h3 class="voice-add-title">Add a custom voice</h3>
+      <div class="field-grid">
+        <div class="field-row"><label for="vc_name">Name</label><input id="vc_name" type="text" maxlength="80" placeholder="Name"></div>
+        <div class="field-row"><label for="vc_file">Recording of them singing</label><input id="vc_file" type="file" accept="audio/*,.flac,.wav,.mp3,.ogg,.opus,.m4a"></div>
+      </div>
+      <small>Clean singing works best. Any band behind it is removed, and the clearest 25 s is used.</small>
+      <div class="cover-actions"><button type="button" class="secondary-button" id="vc_add">Add voice</button></div>
+      <h3 class="voice-add-title">Or from a YouTube video</h3>
+      <div class="voice-url-line"><input id="vc_url" type="url" inputmode="url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" aria-label="YouTube link"><button type="button" class="secondary-button" id="vc_fetch">Download</button></div>
+      <div class="voice-import-status" id="vc_status" aria-live="polite" hidden></div>
+      <div class="voice-trim" id="vc_trim" hidden>
+        <p class="voice-trim-title" id="vc_trim_title"></p>
+        <audio id="vc_trim_audio" controls preload="metadata"></audio>
+        <div class="field-grid">
+          <div class="field-row"><label for="vc_from">From</label><div class="voice-trim-mark"><input id="vc_from" type="text" inputmode="decimal" value="0:00"><button type="button" class="secondary-button" data-trim-mark="from">Set to now</button></div></div>
+          <div class="field-row"><label for="vc_to">To</label><div class="voice-trim-mark"><input id="vc_to" type="text" inputmode="decimal"><button type="button" class="secondary-button" data-trim-mark="to">Set to now</button></div></div>
+          <div class="field-row voice-url-row"><label for="vc_trim_name">Name</label><input id="vc_trim_name" type="text" maxlength="80"></div>
+        </div>
+        <small id="vc_trim_length"></small>
+        <div class="cover-actions"><button type="button" class="secondary-button" id="vc_trim_discard">Discard</button><button type="button" class="secondary-button" id="vc_trim_play">Play selection</button><button type="button" class="primary-button" id="vc_trim_add">Add voice</button></div>
+      </div>
+    </section>
+  </div>
+  <div class="studio-dialog" id="remix-dialog" data-studio-dialog hidden>
+    <section class="studio-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="remix-dialog-title">
+      <button type="button" class="studio-dialog-close" data-studio-dialog-close aria-label="Close" title="Close">&#10005;</button>
+      <h2 class="studio-dialog-title" id="remix-dialog-title">Remix</h2>
+      <p class="remix-song" id="rx_title"></p>
+      <p class="remix-note" id="rx_note"></p>
+      <div class="field-row">
+        <div class="field-label-row"><label for="rx_lyrics">Lyrics</label><span class="enhance-actions"><button type="button" class="button ghost prompt-undo-button" data-enhance-undo="rx_lyrics" hidden title="Put back the text from before the last Enhance">&#8630; Undo</button><button type="button" class="button ghost prompt-enhance-button" data-enhance="rx_lyrics" aria-expanded="false" aria-controls="enhance-panel-rx_lyrics" title="Enhance: tell Hermes what to change; it rewrites this for the loaded model (nothing is rendered)"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.9 15.5a2 2 0 0 0-1.4-1.4l-6.1-1.6a.5.5 0 0 1 0-1l6.1-1.6a2 2 0 0 0 1.4-1.4l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg> Enhance</button></span></div><div class="enhance-panel" id="enhance-panel-rx_lyrics" data-enhance-panel="rx_lyrics" hidden><input type="text" maxlength="2000" data-enhance-wish="rx_lyrics" placeholder="What should change? e.g. make the chorus about the sea, keep verse 1 (optional)" aria-label="What Enhance should change"><button type="button" class="button ghost prompt-enhance-button" data-enhance-go="rx_lyrics"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.9 15.5a2 2 0 0 0-1.4-1.4l-6.1-1.6a.5.5 0 0 1 0-1l6.1-1.6a2 2 0 0 0 1.4-1.4l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg> Enhance</button><button type="button" class="button ghost prompt-undo-button" data-enhance-close="rx_lyrics" aria-label="Close">&#10005;</button></div>
+        <div class="field-writing" id="rx_lyrics-writing" role="status" aria-live="polite" hidden></div>
+        <textarea id="rx_lyrics" rows="14" maxlength="20000" spellcheck="true"></textarea>
+        <small class="remix-count" id="rx_count" aria-live="polite"></small>
+      </div>
+      <div class="cover-actions"><button type="button" class="secondary-button" id="rx_reset">Original words</button><button type="button" class="primary-button" id="rx_go">Remix</button></div>
     </section>
   </div>
   <div class="toast-region" id="toasts" aria-live="polite"></div>

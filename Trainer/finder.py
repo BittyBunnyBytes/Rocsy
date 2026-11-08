@@ -38,6 +38,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+
+from bunnylock import BunnyLock
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -606,7 +608,7 @@ def form_url(form: dict[str, Any], values: dict[str, str]) -> tuple[str, dict[st
     return urllib.parse.urlunsplit((split.scheme, split.netloc, split.path, urllib.parse.urlencode(data), "")), {}
 
 
-def build_router(prefix: str, data_dir: Path, queue_request, datasets_router) -> tuple[APIRouter, Any]:
+def build_router(prefix: str, data_dir: Path, gpu: BunnyLock, datasets_router) -> tuple[APIRouter, Any]:
     router = APIRouter(prefix=prefix)
     jobs: dict[str, dict[str, Any]] = {}
     tasks: dict[str, asyncio.Task] = {}
@@ -1101,16 +1103,6 @@ def build_router(prefix: str, data_dir: Path, queue_request, datasets_router) ->
         job = jobs[job_id]
         if token:
             ev(job, "system", f"GPU queue slot acquired after {time.time() - job['created']:.0f}s")
-        stop = asyncio.Event()
-
-        async def heartbeat():
-            while token and not stop.is_set():
-                try:
-                    await asyncio.wait_for(stop.wait(), timeout=20)
-                except asyncio.TimeoutError:
-                    with suppress(Exception):
-                        await queue_request("/heartbeat", {"token": token}, timeout=6)
-        hb = asyncio.create_task(heartbeat())
         try:
             if token:
                 job.update(state="preparing", stage="Freeing ComfyUI VRAM")
@@ -1139,16 +1131,13 @@ def build_router(prefix: str, data_dir: Path, queue_request, datasets_router) ->
             job.update(state="failed", stage="Failed", error=str(exc)[:400])
             ev(job, "error", f"job failed: {str(exc)[:300]}")
         finally:
-            stop.set()
-            hb.cancel()
             if token and job.get("unload_after"):
                 with suppress(Exception):
                     async with httpx.AsyncClient(timeout=30) as c:
                         await c.get(LLAMA_URL + "/unload", headers={"Authorization": f"Bearer {LLAMA_KEY}"} if LLAMA_KEY else {})
                     ev(job, "tool", "llama.unload  (VRAM freed)", icon="⏏")
             if token:
-                with suppress(Exception):
-                    await queue_request("/release", {"token": token}, timeout=6)
+                await gpu.release(token, llm_settle=bool(job.get("unload_after")))
 
     def proceed(job_id: str, token: str) -> bool:
         job = jobs.get(job_id)
@@ -1246,9 +1235,10 @@ def build_router(prefix: str, data_dir: Path, queue_request, datasets_router) ->
         job.update(state="waiting_for_gpu", stage="Waiting for the GPU queue")
         ev(job, "system", "waiting for the shared GPU queue (Hermes' model runs on the GPU; renders and training go first)")
         try:
-            r = await queue_request("/enqueue", {"app": "Trainer", "job_id": job["id"], "label": f"Find clips: {job['query'][:40]}"})
-            r.raise_for_status()
-            job["queue_entry_id"] = r.json().get("entry_id")
+            entry = await gpu.enqueue(job["id"], f"Find clips: {job['query'][:40]}", uses_llm=True)
+            if entry is None:
+                raise RuntimeError("The GPU queue is not reachable.")
+            job["queue_entry_id"] = entry.get("entry_id")
         except Exception as exc:
             job.update(state="failed", stage="Queue error", error=str(exc)[:300])
             raise HTTPException(503, "Could not reach the shared GPU queue.") from exc
@@ -1386,8 +1376,7 @@ def build_router(prefix: str, data_dir: Path, queue_request, datasets_router) ->
             job.update(state="cancelled", stage="Removed from URL queue")
             ev(job, "warn", "removed from URL queue")
         elif job["state"] == "waiting_for_gpu" and job["source"] == "trainer":
-            with suppress(Exception):
-                await queue_request(f"/dequeue/{job.get('queue_entry_id')}")
+            await gpu.dequeue(job.get("queue_entry_id"))
             job.update(state="cancelled", stage="Cancelled")
         elif job["state"] in ACTIVE:
             job["cancel"] = True

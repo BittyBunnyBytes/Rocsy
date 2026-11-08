@@ -33,6 +33,17 @@
         <button type="button" class="a-link-btn" id="a-sel-finished" title="Every session that isn't running">Select all</button>
         <button type="button" class="a-btn danger" id="a-sel-delete" disabled>Delete</button>
       </div>
+      <div class="a-side-projects">
+        <div class="a-side-head">
+          <button type="button" class="a-side-link" id="a-projects-link"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg><span>Projects</span></button>
+          <button type="button" class="a-icon-btn" id="a-project-new-side" aria-label="New project" title="New project"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+        </div>
+        <nav id="a-project-recent" class="a-project-recent" aria-label="Recent projects"></nav>
+        <div class="a-side-head">
+          <button type="button" class="a-side-link" id="a-agents-link"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" aria-hidden="true"><rect x="4.5" y="7.5" width="15" height="11" rx="3" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.5V4.5M9.5 12.5v1M14.5 12.5v1M2.5 12v2.5M21.5 12v2.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><span>Agents</span><span class="a-count a-agents-busy" id="a-agents-busy" hidden></span></button>
+        </div>
+      </div>
+      <p class="a-side-label">Sessions</p>
       <nav id="a-sessions" class="a-sessions" aria-label="Sessions (F2 renames, Delete removes)"></nav>
     </aside>
 
@@ -45,9 +56,118 @@
         <div class="a-sugs" role="group" aria-label="Example requests"></div>
       </section>
 
+      <section id="a-projects" class="a-pv" aria-labelledby="a-projects-title" hidden>
+        <div class="a-pv-head">
+          <h2 id="a-projects-title">Projects</h2>
+          <button type="button" class="a-btn primary" id="a-project-new">New project</button>
+        </div>
+        <input type="search" id="a-project-search" class="a-pv-search" placeholder="Search projects" aria-label="Search projects">
+        <div id="a-project-list" class="a-pv-list"></div>
+      </section>
+
+      <section id="a-project" class="a-pv" aria-labelledby="a-project-name" hidden>
+        <div class="a-pv-head">
+          <button type="button" class="a-icon-btn" id="a-project-back" aria-label="All projects" title="All projects"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <span class="a-tile" id="a-project-tile"></span>
+          <h2 id="a-project-name"></h2>
+          <button type="button" class="a-btn ghost" id="a-project-edit">Edit</button>
+          <button type="button" class="a-btn ghost" id="a-project-delete">Delete</button>
+        </div>
+        <button type="button" id="a-project-instr" class="a-pv-instr"><span class="a-pv-instr-title">Instructions</span><span class="a-pv-instr-text" id="a-project-instr-text"></span></button>
+        <div class="a-pv-tabs" role="tablist" aria-label="Project contents">
+          <button type="button" role="tab" id="a-tab-chats" data-ptab="chats" aria-selected="true" aria-controls="a-project-chats">Chats</button>
+          <button type="button" role="tab" id="a-tab-sources" data-ptab="sources" aria-selected="false" aria-controls="a-project-sources">Sources</button>
+          <button type="button" role="tab" id="a-tab-access" data-ptab="access" aria-selected="false" aria-controls="a-project-access">Model &amp; access</button>
+        </div>
+        <div id="a-pchat-tools" class="a-pchat-tools">
+          <button type="button" class="a-btn ghost a-select-toggle" id="a-pchat-select" aria-pressed="false" title="Select chats to delete several at once">Select</button>
+          <span class="a-selbar a-pchat-selbar" id="a-pchat-selbar" hidden>
+            <span id="a-pchat-count">0 selected</span>
+            <button type="button" class="a-link-btn" id="a-pchat-all" title="Every chat in this project that isn't running">Select all</button>
+            <button type="button" class="a-btn danger" id="a-pchat-delete" disabled>Delete</button>
+          </span>
+        </div>
+        <div id="a-project-chats" class="a-pv-list" role="tabpanel" aria-labelledby="a-tab-chats"></div>
+        <div id="a-project-sources" class="a-pv-list" role="tabpanel" aria-labelledby="a-tab-sources" hidden>
+          <div class="a-source-add">
+            <button type="button" class="a-btn" id="a-source-files">Add files</button>
+            <button type="button" class="a-btn ghost" id="a-source-text">Paste text</button>
+            <input type="file" id="a-source-input" multiple hidden>
+          </div>
+          <p class="a-source-hint">Every chat in this project can read these. Drop files here to add them. Set a source to specific tools to have it read only before those tools are used.</p>
+          <div id="a-source-list" class="a-pv-rows"></div>
+        </div>
+        <div id="a-project-access" class="a-pv-list a-access" role="tabpanel" aria-labelledby="a-tab-access" hidden>
+          <h3>Model</h3>
+          <p class="a-source-hint">New and existing chats here use these from their next turn.</p>
+          <label class="a-field">AI model<select id="a-pa-model"></select></label>
+          <label class="a-field">Thinking level<select id="a-pa-think"></select></label>
+          <h3>Rocsy services</h3>
+          <p class="a-source-hint">What the Master Agent, and any subagent it starts, may use in this project.</p>
+          <div id="a-pa-services" class="a-pv-rows"></div>
+          <h3>Other agents</h3>
+          <div id="a-pa-agents" class="a-pv-rows"></div>
+          <h3>Tools</h3>
+          <div id="a-pa-tools" class="a-pv-rows"></div>
+        </div>
+      </section>
+
+      <section id="a-agents" class="a-pv" aria-labelledby="a-agents-title" hidden>
+        <div class="a-pv-head">
+          <h2 id="a-agents-title">Agents</h2>
+          <button type="button" class="a-btn ghost" id="a-agents-refresh">Refresh</button>
+        </div>
+        <p class="a-source-hint">Every Agentic mode session in Video, Image, Music and Voice, whoever started it. Open one to read its log, talk to it, or pause and resume it.</p>
+        <div class="a-pv-tabs a-agents-filter" role="tablist" aria-label="Filter agents">
+          <button type="button" role="tab" data-afilter="all" aria-selected="true">All</button>
+          <button type="button" role="tab" data-afilter="busy" aria-selected="false">Running</button>
+          <button type="button" role="tab" data-afilter="video" aria-selected="false">Video</button>
+          <button type="button" role="tab" data-afilter="image" aria-selected="false">Image</button>
+          <button type="button" role="tab" data-afilter="music" aria-selected="false">Music</button>
+          <button type="button" role="tab" data-afilter="voice" aria-selected="false">Voice</button>
+        </div>
+        <input type="search" id="a-agents-search" class="a-pv-search" placeholder="Search agents" aria-label="Search agents">
+        <div class="a-pchat-tools">
+          <button type="button" class="a-btn ghost a-select-toggle" id="a-agents-select" aria-pressed="false" title="Select sessions to delete several at once">Select</button>
+          <span class="a-selbar a-pchat-selbar" id="a-agents-selbar" hidden>
+            <span id="a-agents-count">0 selected</span>
+            <button type="button" class="a-link-btn" id="a-agents-all" title="Every session shown that isn't running">Select all</button>
+            <button type="button" class="a-btn danger" id="a-agents-delete" disabled>Delete</button>
+          </span>
+        </div>
+        <p class="a-source-hint">Deleting a Video session also deletes its renders, as Video's own trash button does. Running sessions can't be deleted.</p>
+        <p class="a-agents-offline" id="a-agents-offline" hidden></p>
+        <div id="a-agents-list" class="a-pv-list"></div>
+      </section>
+
+      <section id="a-agent" class="a-pv a-agent" aria-labelledby="a-agent-title" hidden>
+        <div class="a-pv-head">
+          <button type="button" class="a-icon-btn" id="a-agent-back" aria-label="All agents" title="All agents"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <span class="a-studio-badge" id="a-agent-studio"></span>
+          <h2 id="a-agent-title"></h2>
+        </div>
+        <div class="a-agent-bar">
+          <span class="a-agent-state" id="a-agent-state"><span class="a-dot"></span><span id="a-agent-state-text"></span></span>
+          <span class="a-agent-acts">
+            <button type="button" class="a-btn" id="a-agent-pause" hidden>Pause</button>
+            <button type="button" class="a-btn primary" id="a-agent-resume" hidden>Resume</button>
+            <button type="button" class="a-btn ghost" id="a-agent-stop" hidden>Stop</button>
+            <a class="a-btn ghost" id="a-agent-chat" hidden>Master Agent chat</a>
+            <a class="a-btn ghost" id="a-agent-open" target="_blank" rel="noopener">Open in studio</a>
+          </span>
+        </div>
+        <p class="a-agent-stage" id="a-agent-stage" hidden></p>
+        <ol class="a-agent-log" id="a-agent-log" aria-live="polite"></ol>
+        <form class="a-agent-compose" id="a-agent-form">
+          <textarea id="a-agent-input" rows="2" maxlength="8000" aria-label="Message this agent"></textarea>
+          <button type="submit" class="a-btn primary" id="a-agent-send">Send</button>
+        </form>
+        <p class="a-source-hint" id="a-agent-help"></p>
+      </section>
+
       <section id="a-session" class="a-session" hidden>
         <div class="a-head">
-          <div class="a-head-text"><div class="a-title-row"><h2 id="a-title" title="Double-click to rename"></h2><button type="button" class="a-icon-btn" id="a-rename" aria-label="Rename this session" title="Rename (F2)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Z M13.5 6.5l4 4" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></button></div><p id="a-stage" class="a-stage"></p>
+          <div class="a-head-text"><button type="button" class="a-crumb" id="a-crumb" hidden></button><div class="a-title-row"><h2 id="a-title" title="Double-click to rename"></h2><button type="button" class="a-icon-btn" id="a-rename" aria-label="Rename this session" title="Rename (F2)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Z M13.5 6.5l4 4" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></button><button type="button" class="a-icon-btn" id="a-move" aria-label="Move to a project" title="Move to a project"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></button></div><p id="a-stage" class="a-stage"></p>
             <p id="a-goal" class="a-goal" hidden></p></div>
           <div class="a-head-actions">
             <button type="button" class="a-btn" id="a-gallery-open" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.6"/></svg><span>Gallery</span><span class="a-count" id="a-gallery-count"></span></button>
@@ -127,6 +247,45 @@
       <button type="button" class="a-viewer-nav" data-step="1" aria-label="Next">›</button>
       <div class="a-viewer-bar"><a id="a-viewer-open" target="_blank" rel="noopener">Open in studio</a><a id="a-viewer-download" download>Download</a><button type="button" class="a-btn ghost" id="a-viewer-back">Back to the grid</button></div>
     </div>
+  </dialog>
+  <dialog id="a-project-dialog" class="a-modal" aria-labelledby="a-pd-title">
+    <form method="dialog" id="a-project-form">
+      <h2 id="a-pd-title">New project</h2>
+      <label class="a-field">Name<input id="a-pd-name" maxlength="80" required autocomplete="off"></label>
+      <div class="a-field"><span id="a-pd-icon-label">Icon</span><div class="a-pick" id="a-pd-icons" role="radiogroup" aria-labelledby="a-pd-icon-label"></div></div>
+      <div class="a-field"><span id="a-pd-color-label">Colour</span><div class="a-pick" id="a-pd-colors" role="radiogroup" aria-labelledby="a-pd-color-label"></div></div>
+      <p class="a-modal-error" id="a-pd-error" role="alert" hidden></p>
+      <div class="a-modal-actions">
+        <button type="button" class="a-btn ghost" id="a-pd-cancel">Cancel</button>
+        <button type="submit" class="a-btn primary" id="a-pd-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="a-instr-dialog" class="a-modal a-instr" aria-labelledby="a-in-title">
+    <div class="a-instr-head">
+      <button type="button" class="a-icon-btn" id="a-in-back" aria-label="Back without saving"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <h2 id="a-in-title">Instructions</h2>
+      <button type="button" class="a-icon-btn" id="a-in-save" aria-label="Save instructions"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+    <label class="a-instr-label" for="a-in-text"><strong>How should the Master Agent respond?</strong><span>Ask it to focus on certain topics, use a certain tone or format, or follow rules. It follows these in every chat in this project.</span></label>
+    <textarea id="a-in-text" maxlength="8000"></textarea>
+    <p class="a-modal-error" id="a-in-error" role="alert" hidden></p>
+  </dialog>
+  <dialog id="a-text-dialog" class="a-modal" aria-labelledby="a-td-title">
+    <form method="dialog" id="a-text-form">
+      <h2 id="a-td-title">Paste text as a source</h2>
+      <label class="a-field">Name<input id="a-td-name" maxlength="100" required autocomplete="off" placeholder="Style guide"></label>
+      <label class="a-field">Text<textarea id="a-td-text" rows="12" required></textarea></label>
+      <div class="a-modal-actions">
+        <button type="button" class="a-btn ghost" id="a-td-cancel">Cancel</button>
+        <button type="submit" class="a-btn primary">Add source</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="a-move-dialog" class="a-modal" aria-labelledby="a-mv-title">
+    <h2 id="a-mv-title">Move to a project</h2>
+    <div id="a-mv-list" class="a-pv-rows"></div>
+    <div class="a-modal-actions"><button type="button" class="a-btn ghost" id="a-mv-cancel">Cancel</button></div>
   </dialog>
   <div class="a-toast" id="a-toast" role="status" aria-live="polite" hidden><span id="a-toast-text"></span><button type="button" class="a-link-btn" id="a-toast-undo">Undo</button></div>
   <div class="a-drop" id="a-drop" hidden><span>Drop files to attach them</span></div>

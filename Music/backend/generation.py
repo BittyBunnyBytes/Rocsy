@@ -6,6 +6,7 @@ import random
 import time
 from typing import Any
 
+from . import loras as lora_gallery
 from .config import Settings
 from .models import MAX_SEED, GenerationRequest
 
@@ -33,6 +34,42 @@ def _load_template(config: Settings, model: str = "yue2") -> dict[str, Any]:
         raise GenerationError("workflow_invalid", f"The configured {model} workflow could not be loaded.") from exc
 
 
+def apply_loras(config: Settings, workflow: dict[str, Any], request: GenerationRequest, loader: str, clip_output: int | None) -> None:
+    """Chain the picked gallery LoRAs after the model loader: every consumer of the loader's MODEL (and,
+    for YuE2, its CLIP: the AR expert) is rewired to the last LoRA node."""
+    if not request.loras:
+        return
+    model_ref, clip_ref = [loader, 0], ([loader, clip_output] if clip_output is not None else None)
+    added: list[str] = []
+    for n, pick in enumerate(request.loras):
+        try:
+            entry = lora_gallery.resolve(config.models_dir, pick.file, request.model)
+        except ValueError as exc:
+            raise GenerationError("lora_invalid", str(exc)) from exc
+        node_id = f"lora{n + 1}"
+        if clip_ref is not None:
+            workflow[node_id] = {"class_type": "LoraLoader", "inputs": {
+                "model": model_ref, "clip": clip_ref, "lora_name": entry["file"],
+                "strength_model": pick.strength, "strength_clip": pick.strength if entry["clip"] else 0.0}}
+            clip_ref = [node_id, 1]
+        else:
+            workflow[node_id] = {"class_type": "LoraLoaderModelOnly", "inputs": {
+                "model": model_ref, "lora_name": entry["file"], "strength_model": pick.strength}}
+        model_ref = [node_id, 0]
+        added.append(node_id)
+    for node_id, node in workflow.items():
+        if node_id in added or not isinstance(node, dict):
+            continue
+        for name, value in (node.get("inputs") or {}).items():
+            if value == [loader, 0]:
+                node["inputs"][name] = model_ref
+            elif clip_ref is not None and value == [loader, clip_output]:
+                node["inputs"][name] = clip_ref
+
+
+SCORE_PREVIEW = "91"   # PreviewAny on the YuE2 graph's score (node 48): the job's result "score"
+
+
 def build_workflow(config: Settings, request: GenerationRequest) -> tuple[dict[str, Any], int]:
     """Deep-copy the YuE2-INT8 template and inject the per-request fields
     documented in BunnyBytes/workflows/NOTES.md's node-id map. Only the exact
@@ -56,6 +93,9 @@ def build_workflow(config: Settings, request: GenerationRequest) -> tuple[dict[s
             node = workflow[node_id]["inputs"]
             node["style"] = request.style
             node["lyrics"] = request.lyrics
+        # Remix: the composer writes the score from the original words (same seed, same score) while 22 sings the new ones.
+        if request.score_lyrics.strip():
+            workflow["23"]["inputs"]["lyrics"] = request.score_lyrics
             # Three independent seed fields fanned out from one API field, per
             # NOTES.md ("generate one random seed ... unless the user provides
             # one").
@@ -97,16 +137,16 @@ def build_workflow(config: Settings, request: GenerationRequest) -> tuple[dict[s
                 "repetition_penalty": request.music_repetition_penalty,
             })
 
-        workflow["43"]["inputs"]["value"] = request.use_reference
-        workflow["42"]["inputs"]["value"] = request.use_youtube
-        workflow["40"]["inputs"]["audio"] = request.reference_audio
-        workflow["41"]["inputs"].update({
-            "url": request.youtube_url or "https://youtu.be/placeholder-unused-reference",
-            "start_time": request.youtube_start_time,
-            "duration": request.youtube_duration,
-            "force_redownload": request.youtube_force_redownload,
-        })
-        workflow["47"]["inputs"]["mode"] = request.reference_mode
+        # Reference audio moved to covers (pack.py, task "cover"). The request fields stay so
+        # saved jobs still load, but this graph always composes its own score.
+        workflow["43"]["inputs"]["value"] = False
+        workflow["42"]["inputs"]["value"] = False
+        if request.score_abc.strip():
+            # Remix with the saved score: sung exactly as written; the composer (23) then isn't run at all.
+            workflow["22"]["inputs"]["abc"] = request.score_abc
+        else:
+            # Keep the score this song is sung from, so a later Remix can reuse it note for note.
+            workflow[SCORE_PREVIEW] = {"class_type": "PreviewAny", "inputs": {"source": ["48", 0]}}
         workflow["17"]["inputs"]["tile_size"] = request.tile_size
         workflow["17"]["inputs"]["overlap"] = request.overlap
         # DynamicCombo V3 selects its option using the parent input value;
@@ -123,6 +163,15 @@ def build_workflow(config: Settings, request: GenerationRequest) -> tuple[dict[s
     except (KeyError, TypeError) as exc:
         raise GenerationError("workflow_incompatible", "The configured workflow is missing an expected YuE2 node.") from exc
 
+    apply_loras(config, workflow, request, "15", 1)      # CheckpointLoaderSimple: MODEL 0, CLIP 1
+    if request.voice_id:
+        # Between the decoded song and the save node, so every form setting still applies.
+        workflow["rsp_voice_audio"] = {"class_type": "RSPCustomVoice", "inputs": {"voice": request.voice_id}}
+        workflow["rsp_voice"] = {"class_type": "RSPApplyVoice", "inputs": {
+            "song": workflow["10"]["inputs"]["audio"], "voice_audio": ["rsp_voice_audio", 0],
+            "voice_strength": request.voice_strength, "voice_semitones": request.voice_semitones,
+            "conversion_steps": request.conversion_steps}}
+        workflow["10"]["inputs"]["audio"] = ["rsp_voice", 0]
     return workflow, seed
 
 
@@ -141,4 +190,5 @@ def build_minimax_workflow(config: Settings, request: GenerationRequest) -> tupl
         workflow["10"]["inputs"]["filename_prefix"] = f"audio/MiniMaxMusic3_{time.strftime('%Y%m%d-%H%M%S')}"
     except (KeyError, TypeError) as exc:
         raise GenerationError("workflow_incompatible", "The MiniMax Music 3 workflow is missing an expected node.") from exc
+    apply_loras(config, workflow, request, "6", None)    # UNETLoader; LoRAs train the music DiT only
     return workflow, seed

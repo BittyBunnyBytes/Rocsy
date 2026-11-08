@@ -1,5 +1,5 @@
 (() => {
-  const base = window.TRAINER_BASE || "/Trainer";
+  const base = window.TRAINER_BASE || document.body?.dataset.base || "/Trainer";
   const $ = (s) => document.querySelector(s);
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
   const enc = encodeURIComponent;
@@ -397,6 +397,25 @@
     }
     return card;
   }
+  // ---- lyrics (audio): same debounced auto-save, into <name>.lyrics ----
+  function lyricsSaver(it, key, ta, state) {
+    const show = (txt) => { state.textContent = txt; state.dataset.state = txt; };
+    show(it.lyrics ? "" : "instrumental");
+    const flush = async () => {
+      clearTimeout(saveTimers.get(key)); saveTimers.delete(key);
+      const value = ta.value;
+      if (value.trim() === (it.lyrics || "").trim()) { drafts.delete(key); show(it.lyrics ? "saved" : "instrumental"); return; }
+      show("saving…");
+      try {
+        const r = await api(`/api/datasets/${enc(current)}/lyrics/${enc(it.file)}`, {method:"PUT", body:JSON.stringify({lyrics:value})});
+        it.lyrics = r.lyrics;
+        if (ta.value === value) { drafts.delete(key); show(r.lyrics ? "saved" : "instrumental"); }
+      } catch (e) { show("not saved"); note(e.message, true); }
+    };
+    ta.addEventListener("input", () => { drafts.set(key, ta.value); show("editing…"); clearTimeout(saveTimers.get(key)); saveTimers.set(key, setTimeout(flush, 700)); });
+    ta.addEventListener("blur", () => { if (saveTimers.has(key)) flush(); });
+    return flush;
+  }
   // ---- captions: auto-save (debounced) shared by the card and the editor ----
   const saveTimers = new Map();
   function captionSaver(it, key, ta, state) {
@@ -450,6 +469,7 @@
       const a = el("audio"); a.controls = true; a.preload = "none"; a.src = mediaUrl(it); media.classList.add("audio"); media.append(a);
     }
     if (it.kind !== "audio") media.addEventListener("click", () => openEditor(it));
+    else { const tag = el("span", "ds-lyrics-tag", it.lyrics ? "♪ lyrics" : "no lyrics"); tag.title = it.lyrics ? it.lyrics.slice(0, 400) : "Instrumental unless you add lyrics (Edit caption)"; if (!it.lyrics) tag.classList.add("empty"); tag.addEventListener("click", () => openEditor(it)); media.append(tag); }
     card.append(media);
     const bodyEl = el("div", "ds-item-body");
     const head = el("div", "ds-item-head");
@@ -516,10 +536,23 @@
       const side = el("div", "ed-side");
       const top = el("div", "ed-top");
       top.append(el("strong", null, cur.file), el("span", "ds-info", infoText(cur)));
-      const ta = el("textarea", "ed-caption"); ta.placeholder = "Caption for this clip, starting with your trigger word. Saves automatically.";
+      const ta = el("textarea", "ed-caption"); ta.placeholder = cur.kind === "audio"
+        ? "Style of this song, starting with your trigger word: genre, mood, instruments, vocal, tempo/BPM, key. Saves automatically."
+        : "Caption for this clip, starting with your trigger word. Saves automatically.";
       ta.value = drafts.has(key) ? drafts.get(key) : (cur.caption || "").trim();
       const state = el("span", "ds-cap-state");
       captionSaver(cur, key, ta, state);
+      let lyricsBox = null;
+      if (cur.kind === "audio") {      // music LoRAs (YuE2, MiniMax Music 3): lyrics live next to the song in <name>.lyrics
+        const lyr = el("textarea", "ed-caption ed-lyrics"); lyr.placeholder = "Lyrics, one line each, with section tags on their own lines ([verse], [chorus], [bridge]…). Leave empty for an instrumental. Saves automatically.";
+        const lkey = key + "#lyrics";
+        lyr.value = drafts.has(lkey) ? drafts.get(lkey) : (cur.lyrics || "").trim();
+        const lstate = el("span", "ds-cap-state");
+        lyricsSaver(cur, lkey, lyr, lstate);
+        lyricsBox = el("div", "ed-lyrics-box");
+        const head = el("div", "ed-lyrics-head"); head.append(el("strong", null, "Lyrics"), lstate);
+        lyricsBox.append(head, lyr);
+      }
       const nav = el("div", "ed-nav");
       const prev = el("button", "button secondary", "◀ Previous"), next = el("button", "button secondary", "Next ▶");
       prev.disabled = idx === 0; next.disabled = idx === list.length - 1;
@@ -542,7 +575,7 @@
       const close = el("button", "button primary", "Done");
       close.addEventListener("click", () => shell.close());
       nav.append(prev, el("span", "ed-count", `${idx + 1} / ${list.length}`), next, state, close);
-      side.append(top, ta, nav);
+      side.append(top, ta, ...(lyricsBox ? [lyricsBox] : []), nav);
       if (cur.kind !== "audio") side.insertBefore(auto, nav);
       shell.body.replaceChildren(stage, side);
     };
@@ -2269,7 +2302,7 @@
     const hold = $("#ds-autotrim").checked;
     $("#drop-title").textContent = current ? `Drop to add to “${current}”` : "Pick or create a dataset first";
     $("#drop-sub").textContent = !current ? "Choose one in the Dataset menu (or type a name and press Create), then drop again."
-      : hold ? "Videos go to “Waiting to be trimmed” · images, audio and .txt captions go straight in"
+      : hold ? "Videos go to “Waiting to be trimmed” · images, audio, .txt captions and .lyrics/.lrc lyrics go straight in"
              : "Everything goes straight into the dataset (Hold videos for trimming is off)";
     dropOverlay.classList.toggle("no-target", !current);
   }

@@ -30,6 +30,14 @@ class InstallCancelled(Exception):
     """A linked download was cancelled while its model file was being copied."""
 
 
+
+SLIDER_RANGE = 10.0
+
+
+def looks_like_slider(*texts: str) -> bool:
+    """Slider LoRAs (one concept dialled both ways, negative weights included) say so in their name."""
+    return any(re.search(r'\bsliders?\b', text or '', re.I) for text in texts)
+
 def _copy_file(source: Path, destination: Path, cancel_check: Callable[[], bool] | None) -> None:
     if not cancel_check:
         shutil.copyfile(source, destination)
@@ -105,6 +113,7 @@ def _sync() -> None:
             'source': entry.get('source', ''),
             'strength': entry.get('default_strength', 1.0), 'strength_note': entry.get('strength_note', ''),
             'triggers': entry.get('triggers', []), 'custom_id': entry['id'], 'deleted': entry.get('deleted', False),
+            'slider': bool(entry.get('slider')),
             **({'experts': experts} if (experts := _experts(entry)) else {}),
         }
 
@@ -273,6 +282,7 @@ def register(storage_name: str, model: str, label: str, *, source_job_id: str = 
             'default_strength': 1.0, 'strength_note': 'Default starting strength; adjust after testing',
             'triggers': (triggers or [])[:12], 'description': '', 'creator': '', 'version': '',
             'base_model': models.MODEL_LABELS.get(model, model), 'url': '', 'previews': [], 'deleted': False,
+            'slider': looks_like_slider(label, storage_name),
         }
         if model == 'wan_2_2' and (expert := wan_expert(storage_name)):
             entry['expert'] = expert
@@ -304,10 +314,16 @@ def update(item_id: str, changes: dict[str, Any]) -> dict[str, Any]:
         if not revised['label']:
             raise ValueError('Give the LoRA a name')
         if 'default_strength' in changes:
+            if 'slider' in changes:
+                revised['slider'] = bool(changes['slider'])
             value = float(changes['default_strength'])
-            if not 0 <= value <= 2:
-                raise ValueError('Recommended strength must be between 0 and 2')
+            low, high = (-SLIDER_RANGE, SLIDER_RANGE) if revised.get('slider') else (0, 2)
+            if not low <= value <= high:
+                raise ValueError(f'Recommended strength must be between {low:g} and {high:g}'
+                                 + ('' if revised.get('slider') else ' (mark it as a slider for negative values)'))
             revised['default_strength'] = value
+        if 'slider' in changes:
+            revised['slider'] = bool(changes['slider'])
         if 'triggers' in changes:
             value = changes['triggers']
             if not isinstance(value, list) or any(not isinstance(word, str) for word in value):

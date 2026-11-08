@@ -581,3 +581,7 @@ body.h-tour-open { overflow: auto; }
 /* icon on the left, then the status pill(s) together on the right */
 .h-studio-top:has(.h-exp) { justify-content: flex-start; }
 .h-studio-top:has(.h-exp) > :nth-child(2) { margin-left: auto; }
+
+/* Plugins with their own icon picture (plugin.json "icon_file") */
+.h-icon.h-icon-img { overflow: hidden; padding: 0; }
+.h-icon.h-icon-img img { display: block; width: 70%; height: 70%; object-fit: contain; border-radius: 6px; }

@@ -1,0 +1,18 @@
+{
+  "1": {"class_type": "LoadAudio", "inputs": {"audio": "your-song.flac"}},
+  "2": {"class_type": "RSPSunoCover", "inputs": {
+    "audio": ["1", 0],
+    "style": "acoustic folk, warm guitar, brushed drums, intimate",
+    "lyrics": "",
+    "seed": 831001,
+    "audio_influence": 75.0,
+    "style_influence": 50.0,
+    "weirdness": 50.0,
+    "vocal_gender": "auto",
+    "voice_source": "source singer",
+    "voice_strength": 100.0,
+    "allow_downloads": true
+  }},
+  "3": {"class_type": "SaveAudio", "inputs": {"audio": ["2", 0], "filename_prefix": "audio/RSP_cover"}},
+  "4": {"class_type": "SaveAudio", "inputs": {"audio": ["2", 1], "filename_prefix": "audio/RSP_yue2_take"}}
+}

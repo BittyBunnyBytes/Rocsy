@@ -150,43 +150,90 @@ class Api {
     return new File([blob], name, { type });
   }
 
+  // Opening the phone's gallery (to pick more files) backgrounds the page and the browser drops whatever is
+  // uploading. Upload requests wait until the page is visible again and retry; a try that failed while the page was
+  // hidden doesn't count. The key lets the server hand back the reference a lost reply had already stored.
+  static whenVisible() {
+    if (document.visibilityState === "visible") return Promise.resolve();
+    return new Promise((resolve) => {
+      const check = () => {
+        if (document.visibilityState !== "visible") return;
+        document.removeEventListener("visibilitychange", check);
+        resolve();
+      };
+      document.addEventListener("visibilitychange", check);
+    });
+  }
+
+  static async uploadRequest(path, makeBody, key, label) {
+    const MAX_ATTEMPTS = 6, MAX_BACKGROUND_RETRIES = 30;
+    let failures = 0, backgrounded = 0, paused = false;
+    for (;;) {
+      await this.whenVisible();
+      let hidden = false;
+      const watch = () => { if (document.visibilityState !== "visible") hidden = true; };
+      document.addEventListener("visibilitychange", watch);
+      try {
+        return await this.request(path, { method: "POST", body: makeBody(), headers: { "Idempotency-Key": key } });
+      } catch (error) {
+        const retryable = !error.status || error.status >= 500 || error.status === 408 || error.status === 429;
+        if (!retryable) throw error;
+        if ((hidden || document.visibilityState !== "visible") && backgrounded < MAX_BACKGROUND_RETRIES) {
+          backgrounded += 1;
+          if (!paused) toast(`${label}: paused while the app was in the background; it continues when you're back.`);
+          paused = true;
+          continue;
+        }
+        failures += 1;
+        if (failures >= MAX_ATTEMPTS) throw error;
+        toast(`${label} failed (${error.message}); retrying…`);
+        await new Promise((resolve) => setTimeout(resolve, Math.min(1500 * failures, 6000)));
+      } finally {
+        document.removeEventListener("visibilitychange", watch);
+      }
+    }
+  }
+
+  static uploadKey() {
+    return [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
   static async upload(file, role) {
     file = await this.shrinkImage(file);
-    // Parallel 8 MB chunks for anything over 8 MB: one request stream rarely
+    // Parallel 4 MB chunks for anything over 4 MB: one request stream rarely
     // fills a phone link through the Cloudflare tunnel, three at once do.
-    const UPLOAD_DIRECT_MAX = 8 * 1024 * 1024, UPLOAD_CHUNK = 8 * 1024 * 1024, PARALLEL = 3;
+    // 8 MB parts took over 20 s each on a slow uplink and the connection dropped
+    // them every retry (a 40 MB FLAC never finished), so parts stay small; the
+    // server takes at most 64 parts, so very large files get bigger ones.
+    const UPLOAD_DIRECT_MAX = 4 * 1024 * 1024, PARALLEL = 3;
+    const UPLOAD_CHUNK = Math.max(4 * 1024 * 1024, Math.ceil(file.size / 60));
     if (file.size <= UPLOAD_DIRECT_MAX) {
-      const body = new FormData();
-      body.append("file", file);
-      if (role) body.append("role", role);
-      return this.request(`${API_BASE}/api/references`, { method: "POST", body });
+      return this.uploadRequest(`${API_BASE}/api/references`, () => {
+        const body = new FormData();
+        body.append("file", file);
+        if (role) body.append("role", role);
+        return body;
+      }, this.uploadKey(), `Uploading ${file.name}`);
     }
-    const uploadId = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const uploadId = this.uploadKey();
     const total = Math.ceil(file.size / UPLOAD_CHUNK);
     const mb = Math.round(file.size / 1048576);
     let done = 0, result = null, next = 0;
     const sendChunk = async (index) => {
-      const body = new FormData();
-      body.append("chunk", file.slice(index * UPLOAD_CHUNK, (index + 1) * UPLOAD_CHUNK), `${file.name}.part${index}`);
-      body.append("upload_id", uploadId);
-      body.append("index", String(index));
-      body.append("total", String(total));
-      body.append("filename", file.name);
-      body.append("content_type", file.type || "application/octet-stream");
-      if (role) body.append("role", role);
-      // A dropped request used to fail the whole upload: network errors and 5xx
-      // are retried (the server overwrites the part); 4xx are real answers.
-      for (let attempt = 1; ; attempt++) {
-        try {
-          const reply = await this.request(`${API_BASE}/api/references/chunked`, { method: "POST", body });
-          if (reply?.id) result = reply; // whichever part completes the set gets the reference back
-          return;
-        } catch (error) {
-          if ((error.status && error.status < 500) || attempt >= 4) throw error;
-          toast(`Upload part ${index + 1} failed (${error.message}); retrying…`);
-          await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
-        }
-      }
+      // Network errors and 5xx are retried (the server overwrites the part; a part retried after the whole file
+      // was stored gets the reference back); 4xx are real answers.
+      const reply = await this.uploadRequest(`${API_BASE}/api/references/chunked`, () => {
+        const body = new FormData();
+        body.append("chunk", file.slice(index * UPLOAD_CHUNK, (index + 1) * UPLOAD_CHUNK), `${file.name}.part${index}`);
+        body.append("upload_id", uploadId);
+        body.append("index", String(index));
+        body.append("total", String(total));
+        body.append("filename", file.name);
+        body.append("content_type", file.type || "application/octet-stream");
+        if (role) body.append("role", role);
+        return body;
+      }, `${uploadId}-${index}`, `Upload part ${index + 1} of ${file.name}`);
+      if (reply?.id) result = reply; // whichever part completes the set gets the reference back
     };
     toast(`Uploading ${file.name} (${mb} MB)…`);
     const worker = async () => {
@@ -250,6 +297,7 @@ const ICON_PATHS = {
   thumbsUp: '<path d="M7 10v11"/><path d="M15 5.9 14 10h5.8a2 2 0 0 1 2 2.3l-1.4 7A2 2 0 0 1 18.5 21H7V10l4.3-7.2A1.9 1.9 0 0 1 15 5.9Z"/>',
   thumbsDown: '<path d="M17 14V3"/><path d="M9 18.1 10 14H4.2a2 2 0 0 1-2-2.3l1.4-7A2 2 0 0 1 5.5 3H17v11l-4.3 7.2A1.9 1.9 0 0 1 9 18.1Z"/>',
   repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  paperclip: '<path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l8.6-8.6a4 4 0 0 1 5.7 5.7l-8.6 8.6a2 2 0 0 1-2.8-2.8l8.5-8.5"/>',
   scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9"/><path d="M14.5 14.5 20 20"/><path d="M8.1 8.1 12 12"/>',
 };
 const uiIcon = (name) => `<svg class="ui-icon ui-icon-${name}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
@@ -414,16 +462,26 @@ function showJob(jobId) {
   let card = document.querySelector(`[data-job-id="${CSS.escape(jobId)}"]`);
   if (!card) {
     // Older than the current page (or filtered out): show everything up to it.
-    const index = state.jobs.findIndex((job) => job.id === jobId);
-    if (index < 0) return false;
+    const target = state.jobs.find((job) => job.id === jobId);
+    if (!target) return false;
+    if (!jobOnShelf(target)) {
+      state.shelf = jobHomeShelf(target);
+      $$("[data-shelf]").forEach((item) => item.classList.toggle("is-active", item.dataset.shelf === state.shelf));
+    }
     state.filter = "all";
     state.jobSearch = "";
     $("#jobs-search").value = "";
     $$('[data-filter]').forEach((item) => item.classList.toggle("is-active", item.dataset.filter === "all"));
-    state.jobsShown = Math.ceil((index + 1) / JOBS_PAGE) * JOBS_PAGE;
+    state.jobsShown = Math.ceil((matchingJobs().findIndex((job) => job.id === jobId) + 1) / JOBS_PAGE) * JOBS_PAGE;
     renderJobs();
     card = document.querySelector(`[data-job-id="${CSS.escape(jobId)}"]`);
     if (!card) return false;
+  }
+  // Inside a folded session tile: open the part it's in.
+  const group = card.closest(".agentic-session-group:not(.is-focused)");
+  if (group) {
+    const kind = card.closest(".agentic-stage-cards") ? "previews" : "finals";
+    if (group.classList.contains(`${kind}-collapsed`)) toggleAgenticCollapse(group, kind);
   }
   card.scrollIntoView({ behavior: "smooth", block: "center" });
   card.classList.add("is-flash");
@@ -1258,6 +1316,10 @@ function finishSuggestions(fragment) {
 }
 
 const PROMPT_SYNTAX = new RegExp([
+  // Agentic extended-video plans: ::VIDEO headers, ::END, continuation placeholders
+  String.raw`(?<planHead>^::VIDEO\b[^\n]*)`,
+  String.raw`(?<planEnd>^::END\b[^\n]*)`,
+  String.raw`(?<placeholder>\{\{CONTINUATION_(?:FRAME|VIDEO)\}\})`,
   // H3 dialogue: <d>[English] spoken words</d> (unclosed: to end of line)
   String.raw`(?<dialogue><d>)(?<lang>\s*\[[^\]\n]*\])?(?<speech>.*?)(?<dialogueEnd><\/d>|$)`,
   String.raw`(?<ref><\s*(?:[Pp]icture|[Ii]mage|[Vv]ideo|[Aa]udio|[Ss]ubject)\s+\d+\s*>)`,
@@ -1408,6 +1470,27 @@ function highlightPlain(text, offset) {
   return html + escapeHtml(text.slice(last));
 }
 
+// A ::VIDEO header: fields, NEW/EXTEND, clip ids, and refs=/exclude= aliases in their reference colours.
+function highlightPlanHeader(line, span) {
+  const value = (key, v) => {
+    if (v === "-") return span("plan-none", v);
+    if (key === "action") return span(/^extend$/i.test(v) ? "plan-extend" : /^new$/i.test(v) ? "plan-new" : "plan-bad", v);
+    if (key === "id" || key === "from") return span("plan-id", v);
+    if (key === "refs" || key === "exclude") {
+      return v.split(/(,)/).filter(Boolean).map((part) => part === "," ? span("plan-eq", part)
+        : part === "inherit" ? span("plan-keyword", part)
+        : /^(image|video|audio)\d+$/i.test(part) ? span("ref", part, ` data-category="${tokenCategory(part)}"`) : span("plan-value", part)).join("");
+    }
+    return span("plan-value", v);
+  };
+  return `<span class="hl-plan-head">${span("plan", "::VIDEO")}${line.slice(7).split(/(\s+)/).map((part) => {
+    if (!part) return "";
+    const field = part.match(/^([a-z]+)=(.+)$/i);
+    if (!field) return /^\s+$/.test(part) ? part : span("plan-bad", part);
+    return span("plan-key", field[1]) + span("plan-eq", "=") + value(field[1].toLowerCase(), field[2]);
+  }).join("")}</span>`;
+}
+
 function highlightPrompt(text) {
   let html = "";
   let last = 0;
@@ -1417,7 +1500,12 @@ function highlightPrompt(text) {
     last = match.index + match[0].length;
     const g = match.groups;
     const span = (cls, value, extra = "") => `<span class="hl-${cls}"${extra}>${escapeHtml(value)}</span>`;
-    if (g.dialogue) {
+    if (g.planHead) html += highlightPlanHeader(g.planHead, span);
+    else if (g.planEnd) html += span("plan", g.planEnd);
+    else if (g.placeholder) html += g.placeholder.includes("VIDEO")
+      ? span("placeholder is-invalid", g.placeholder, ` title="Not allowed: EXTEND attaches only the source clip's final frame. Use {{CONTINUATION_FRAME}}."`)
+      : span("placeholder", g.placeholder, ` title="Replaced at render time with the source clip's final frame (&lt;Picture N&gt;)"`);
+    else if (g.dialogue) {
       html += span("tag", g.dialogue) + (g.lang ? span("lang", g.lang) : "") + g.speech.split(/(<scenetrans>|<cutoff>|\[unclear\])/).map((part, i) => part && span(i % 2 ? "tag" : "speech", part)).join("") + (g.dialogueEnd ? span("tag", g.dialogueEnd) : "");
     } else if (g.ref) html += span("ref", g.ref, ` data-category="${tokenCategory(g.ref)}"`);
     else if (g.legacy) html += span("ref", g.legacy, ` data-category="image"`);
@@ -3377,6 +3465,8 @@ function bindDropZones(parent) {
   });
 }
 
+// Audio the server takes; anything but MP3/WAV/M4A/FLAC/OGG is converted on upload.
+const AUDIO_FILE_PATTERN = /\.(mp3|wav|m4a|flac|ogg|opus|oga|weba|aac|aiff?|aifc|wma|m4b|amr|caf|mka|ape|wv|e?ac3|mp2|mpga|tta|spx|au|snd|dsf|dff)$/i;
 const UPLOAD_ROLE_CONFIG = {
   first: { typePrefix: "image/", max: 1, error: "Choose a PNG, JPEG, WEBP, or BMP image." },
   last: { typePrefix: "image/", max: 1, error: "Choose a PNG, JPEG, WEBP, or BMP image." },
@@ -3387,14 +3477,14 @@ const UPLOAD_ROLE_CONFIG = {
   // just a sane per-drop batch cap, not the real limit.
   references: {
     typePrefix: ["image/", "video/", "audio/"], max: 15,
-    error: "Choose a PNG/JPEG/WEBP/BMP image, an MP4/WEBM/MOV/MKV video, or an MP3/WAV/M4A/FLAC/OGG audio file.",
+    error: "Choose a PNG/JPEG/WEBP/BMP image, an MP4/WEBM/MOV/MKV video, or an audio file (MP3, WAV, FLAC, OGG, OPUS, AAC, AIFF, ...).",
   },
   "sh-first": { typePrefix: "image/", max: 1, error: "Choose a PNG, JPEG, WEBP, or BMP image." },
   "sh-last": { typePrefix: "image/", max: 1, error: "Choose a PNG, JPEG, WEBP, or BMP image." },
   "sh-images": { typePrefix: "image/", max: 6, error: "Choose a PNG, JPEG, WEBP, or BMP image." },
   "sh-videos": { typePrefix: "video/", max: 3, error: "Choose an MP4, WEBM, MOV, or MKV video." },
-  "sh-audios": { typePrefix: "audio/", max: 3, error: "Choose an MP3, WAV, M4A, FLAC, or OGG audio file." },
-  "stitch-music": { typePrefix: "audio/", max: 1, error: "Choose an MP3, WAV, M4A, FLAC, or OGG audio file." },
+  "sh-audios": { typePrefix: "audio/", max: 3, error: "Choose an audio file (MP3, WAV, M4A, FLAC, OGG, OPUS, AAC, AIFF, WMA, ...)." },
+  "stitch-music": { typePrefix: "audio/", max: 1, error: "Choose an audio file (MP3, WAV, M4A, FLAC, OGG, OPUS, AAC, AIFF, WMA, ...)." },
 };
 
 // After an upload, if a video or audio clip's raw length pushes its whole
@@ -3421,29 +3511,62 @@ function openTrimEditorIfOverBudget(uploaded) {
   toast(`${overBudget.filename} pushes ${category} references over the ${limitSeconds.toFixed(1)}s combined limit - trim it below.`, "error");
 }
 
+// Up to this many bytes of one pick are copied into memory before uploading (see uploadFiles).
+const UPLOAD_SNAPSHOT_BUDGET = 256 * 1024 * 1024;
+
 async function uploadFiles(files, role) {
   const config = UPLOAD_ROLE_CONFIG[role] || UPLOAD_ROLE_CONFIG.references;
   const prefixes = Array.isArray(config.typePrefix) ? config.typePrefix : [config.typePrefix];
-  const matching = files.filter((file) => prefixes.some((prefix) => file.type.startsWith(prefix)));
+  const matching = files.filter((file) => prefixes.some((prefix) => file.type.startsWith(prefix)
+    || (prefix === "audio/" && AUDIO_FILE_PATTERN.test(file.name))));
   if (!matching.length) return toast(config.error, "error");
-  try {
-    const uploaded = [];
-    for (const file of matching.slice(0, config.max)) uploaded.push(await Api.upload(file, role));
-    mergeReferences(uploaded);
-    if (role === "first") {
-      if (state.firstFrameId) restoreResolutionSnapshot(); // replacing a frame undoes any pending match
-      state.firstFrameId = uploaded[0].id;
+  const picked = matching.slice(0, config.max);
+  const failed = [];
+  // Read the picked files in first: on phones a picked file can stop being readable once the page is
+  // backgrounded or the picker opens again, which used to fail the files still waiting their turn.
+  const ready = [];
+  let budget = UPLOAD_SNAPSHOT_BUDGET;
+  for (const file of picked) {
+    try {
+      if (file.size <= budget) {
+        ready.push(new File([await file.arrayBuffer()], file.name, { type: file.type, lastModified: file.lastModified }));
+        budget -= file.size;
+      } else ready.push(file);
+    } catch {
+      failed.push(`${file.name} (couldn't be read; pick it again)`);
     }
-    if (role === "last") state.lastFrameId = uploaded[0].id;
-    if (role === "sh-first") state.shFirstFrameId = uploaded[0].id;
-    if (role === "sh-last") state.shLastFrameId = uploaded[0].id;
-    if (role === "stitch-music") state.stitchMusicId = uploaded[0].id;
+  }
+  // One by one, each added as soon as it's up: a failure no longer drops the files before it or skips those after.
+  const uploaded = [];
+  for (const file of ready) {
+    let reference;
+    try { reference = await Api.upload(file, role); } catch (error) {
+      failed.push(`${file.name} (${error.message})`);
+      continue;
+    }
+    uploaded.push(reference);
+    mergeReferences([reference]);
+    if (uploaded.length === 1) {
+      if (role === "first") {
+        if (state.firstFrameId) restoreResolutionSnapshot(); // replacing a frame undoes any pending match
+        state.firstFrameId = reference.id;
+      }
+      if (role === "last") state.lastFrameId = reference.id;
+      if (role === "sh-first") state.shFirstFrameId = reference.id;
+      if (role === "sh-last") state.shLastFrameId = reference.id;
+      if (role === "stitch-music") state.stitchMusicId = reference.id;
+    }
     renderKeyframes();
     renderReferenceGallery();
     renderSeedhunterGalleries();
     renderStitchMusic();
-    if (role === "references") openTrimEditorIfOverBudget(uploaded);
-  } catch (error) { toast(error.message, "error"); }
+  }
+  if (failed.length) {
+    toast(`Uploaded ${uploaded.length} of ${picked.length}. Not uploaded: ${failed.join("; ")}`, "error");
+  } else if (picked.length > 1) {
+    toast(`Uploaded ${uploaded.length} files.`);
+  }
+  if (role === "references" && uploaded.length) openTrimEditorIfOverBudget(uploaded);
 }
 
 async function removeReference(id) {
@@ -3611,12 +3734,19 @@ function applyDurationBounds(config) {
 
 /* -------------------------------------------------------------- status -- */
 
+// One pill for both services: "Ready" (or "N rendering") when all is well; otherwise it names the one that isn't.
 function renderStatus() {
   const comfy = state.serviceStatus.comfyui || {};
-  const qwen = state.serviceStatus.qwen || {};
-  setServiceNode($("#comfy-status"), comfy, comfy.online ? (comfy.rendering ? `${comfy.rendering} rendering` : "Ready") : (comfy.starting ? "Starting" : "Offline"));
-  $("span:not(.status-dot)", $("#qwen-status")).textContent = "Llama";
-  setServiceNode($("#qwen-status"), { online: !!state.llamaOnline }, state.llamaOnline ? "Ready" : "Offline");
+  const comfyLabel = comfy.online ? (comfy.rendering ? `${comfy.rendering} rendering` : "Ready") : (comfy.starting ? "Starting" : "Offline");
+  const llamaLabel = state.llamaOnline ? "Ready" : "Offline";
+  const node = $("#comfy-status");
+  const name = $(".service-name", node);
+  let label = comfyLabel;
+  name.hidden = true;
+  if (!comfy.online) { name.textContent = "ComfyUI"; name.hidden = false; }
+  else if (!state.llamaOnline) { name.textContent = "Llama"; name.hidden = false; label = llamaLabel; }
+  setServiceNode(node, { ...comfy, online: Boolean(comfy.online && state.llamaOnline) }, label);
+  node.title = `ComfyUI: ${comfyLabel} · Llama: ${llamaLabel}`;
 }
 
 function setServiceNode(node, service, label) {
@@ -4231,6 +4361,30 @@ function jobProgress(job) {
   </div>`;
 }
 
+// A stitch made from one session's clips: a chip that opens that session's tile on the Agentic shelf.
+function stitchSessionChip(job) {
+  if (job.model !== "stitch") return "";
+  const id = job.stitch_session_id || job.agentic_session_id;
+  if (!id) return "";
+  const title = job.stitch_session_title || job.agentic_session_title || "Agentic session";
+  return `<button type="button" class="stitch-session-chip" data-stitch-session="${escapeHtml(id)}" style="--session-hue:${agenticSessionHue(id)}" title="Show the session this stitch came from">From session: ${escapeHtml(title)}</button>`;
+}
+
+function showAgenticSessionTile(sessionId) {
+  if (!["agentic", "all"].includes(state.shelf)) setShelf("agentic");
+  let group = document.querySelector(`#jobs-list > [data-agentic-session-id="${CSS.escape(sessionId)}"]`);
+  if (!group) {
+    state.jobsShown = state.jobs.length;
+    renderJobs();
+    group = document.querySelector(`#jobs-list > [data-agentic-session-id="${CSS.escape(sessionId)}"]`);
+  }
+  if (!group) return toast("That session is no longer in the list.", "error");
+  const head = $(".agentic-session-head", group);
+  head.scrollIntoView({ behavior: "smooth", block: "center" });
+  group.classList.add("is-flash");
+  setTimeout(() => group.classList.remove("is-flash"), 1600);
+}
+
 function jobCard(job) {
   const active = isActiveJob(job);
   const cancelling = job.state === "cancelling";
@@ -4253,11 +4407,12 @@ function jobCard(job) {
       ${isActiveJob(job) ? `<span class="job-eta${job.estimate?.fit ? " is-fitted" : ""}" title="${escapeHtml(job.estimate?.fit ? stepFitTitle(job.estimate.fit)
         : job.estimate?.samples ? `Average of the last ${job.estimate.samples} run(s) with these settings` : "")}">${jobEta(job)}</span>` : ""}
     </div>
+    ${stitchSessionChip(job)}
     ${active ? jobProgress(job) : finalizing ? `<div class="job-progress"><div class="job-progress-bar" style="width:0%"></div></div>` : ""}
     ${job.error ? `<div class="job-error">${escapeHtml(job.error)}</div>` : ""}
     ${awaitingSelection ? `<div class="approval-banner">Approval required &mdash; pick a candidate below</div>` : ""}
     ${awaitingSelection ? candidatePicker(job) : ""}
-    ${job.state === "complete" && job.output_url ? `<video class="job-video" src="${job.output_url}"${job.poster_url ? ` poster="${job.poster_url}" preload="none"` : ` preload="metadata"`} controls playsinline></video>` : ""}
+    ${job.state === "complete" && job.output_url ? `<video class="job-video" src="${job.output_url}"${job.poster_url ? ` data-poster="${job.poster_url}" preload="none"` : ` preload="metadata"`} controls playsinline></video>` : ""}
     <div class="job-actions">
       <button type="button" class="secondary-button job-icon-button" data-info="${job.id}" title="Generation details" aria-label="Generation details">${JOB_ICONS.info}</button>
       ${(active || finalizing) ? `<button type="button" class="secondary-button job-icon-button danger" data-cancel="${job.id}" ${cancelling ? "disabled" : ""} title="${cancelling ? "Cancelling…" : "Cancel"}" aria-label="${cancelling ? "Cancelling" : "Cancel"}">${JOB_ICONS.cancel}</button>` : ""}
@@ -4280,7 +4435,7 @@ function jobCard(job) {
 // Deliberately excludes `progress`: the SSE "jobs" handler already skips
 // calling renderJobs() at all for pure progress ticks (see jobsNeedRender),
 // and updateJobMetrics() patches the progress bar/elapsed time in place.
-const JOB_RENDER_FIELDS = ["id", "model_label", "mode_label", "prompt", "state", "stage", "output_url", "poster_url", "candidate_urls", "error", "retry_expires_at", "rating", "rating_reasons", "agentic_session_id", "agentic_clip_index", "agentic_phase", "agentic_planned_clip", "agentic_attempt", "agentic_approval_run_id"];
+const JOB_RENDER_FIELDS = ["id", "model_label", "mode_label", "prompt", "state", "stage", "output_url", "poster_url", "candidate_urls", "error", "retry_expires_at", "rating", "rating_reasons", "agentic_session_id", "agentic_session_kind", "agentic_clip_index", "agentic_phase", "agentic_planned_clip", "agentic_attempt", "agentic_approval_run_id"];
 
 function jobRenderKey(job) {
   return JOB_RENDER_FIELDS.map((field) => job[field]).join("::");
@@ -4302,7 +4457,30 @@ function downloadCurrentFrame(jobId, card) {
   toast(`Downloading the frame at ${time.toFixed(2)}s.`);
 }
 
+// Card stills load as their card nears the view (the list holds hundreds; a first visit
+// used to pull every poster on the page at once). Root: the list when it scrolls itself
+// (desktop), else the page (phones).
+let posterObserver = null, posterObserverRoot;
+function observePoster(video) {
+  if (!("IntersectionObserver" in window)) { video.poster = video.dataset.poster; return; }
+  const list = $("#jobs-list");
+  const root = list && getComputedStyle(list).overflowY === "auto" ? list : null;
+  if (!posterObserver || posterObserverRoot !== root) {
+    posterObserver?.disconnect();
+    posterObserverRoot = root;
+    posterObserver = new IntersectionObserver((entries) => entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      posterObserver.unobserve(entry.target);
+      if (entry.target.dataset.poster) entry.target.poster = entry.target.dataset.poster;
+    }), { root, rootMargin: "900px 0px" });
+    document.querySelectorAll("video.job-video[data-poster]:not([poster])").forEach((item) => posterObserver.observe(item));
+  }
+  posterObserver.observe(video);
+}
+
 function bindJobCard(node) {
+  const still = node.querySelector("video.job-video[data-poster]");
+  if (still) observePoster(still);
   node.addEventListener("click", (event) => {
     if (!state.stitchMode && !state.compareMode) return;
     if (event.target.closest("button, a, input, label, video")) return;
@@ -4344,6 +4522,67 @@ const JOBS_PAGE = 12;
 state.jobsShown = JOBS_PAGE;
 state.jobSearch = "";
 
+// Shelves keep the three kinds of output apart: Singles (your own renders), Agentic (one tile per
+// session), Stitches. job_kind comes from the server: single | agentic | stitch | agentic-stitch.
+const JOBS_SHELF_KEY = "h3-jobs-shelf";
+const JOB_SHELVES = ["single", "agentic", "stitch", "all"];
+state.shelf = (() => { try { const saved = localStorage.getItem(JOBS_SHELF_KEY); return JOB_SHELVES.includes(saved) ? saved : "single"; } catch { return "single"; } })();
+
+function jobKind(job) {
+  if (job.job_kind) return job.job_kind;
+  if (job.model === "stitch") return job.agentic_session_id || job.stitch_session_id ? "agentic-stitch" : "stitch";
+  return job.agentic_session_id ? "agentic" : "single";
+}
+
+// The shelf a job lives on (a session's own stitch also shows inside its tile on the Agentic shelf).
+function jobOnShelf(job, shelf = state.shelf) {
+  const kind = jobKind(job);
+  if (shelf === "all") return true;
+  if (shelf === "single") return kind === "single";
+  if (shelf === "stitch") return kind === "stitch" || kind === "agentic-stitch";
+  return kind === "agentic" || (kind === "agentic-stitch" && Boolean(job.agentic_session_id));
+}
+
+function jobHomeShelf(job) {
+  const kind = jobKind(job);
+  return kind === "single" ? "single" : kind === "agentic" ? "agentic" : "stitch";
+}
+
+function setShelf(shelf) {
+  if (!JOB_SHELVES.includes(shelf)) return;
+  state.shelf = shelf;
+  try { localStorage.setItem(JOBS_SHELF_KEY, shelf); } catch { /* this page only */ }
+  $$("[data-shelf]").forEach((item) => item.classList.toggle("is-active", item.dataset.shelf === shelf));
+  resetJobsPage();
+  renderJobs();
+}
+
+// Starting something new shows its shelf, unless the user is looking at All.
+function followShelf(shelf) {
+  if (state.shelf !== "all" && state.shelf !== shelf) setShelf(shelf);
+}
+
+function renderShelfCounts() {
+  const sessions = new Set(), live = state.agenticLive || new Map();
+  let singles = 0, stitches = 0, waiting = false;
+  for (const job of state.jobs) {
+    if (!jobMatchesFilter(job)) continue;
+    const kind = jobKind(job);
+    if (kind === "single") singles += 1;
+    if (kind === "stitch" || kind === "agentic-stitch") stitches += 1;
+    if (job.agentic_session_id) sessions.add(job.agentic_session_id);
+    if (job.agentic_approval_run_id) waiting = true;
+  }
+  for (const item of live.values()) {
+    if (["all", "running"].includes(state.filter)) sessions.add(item.session_id);
+    if (item.awaiting === "prompts" || item.state === "awaiting_approval") waiting = true;
+  }
+  const counts = { single: singles, agentic: sessions.size, stitch: stitches };
+  $$("[data-shelf-count]").forEach((node) => { node.textContent = counts[node.dataset.shelfCount] || ""; });
+  const alert = $('[data-shelf="agentic"] .shelf-alert');
+  if (alert) alert.hidden = !waiting;
+}
+
 function jobMatchesFilter(job, filter = state.filter) {
   return filter === "all" || (filter === "running" ? (isActiveJob(job) || needsAttention(job)) : job.state === "complete");
 }
@@ -4362,7 +4601,7 @@ function loadFullPrompts() {
 
 function matchingJobs() {
   const words = state.jobSearch.toLowerCase().split(/\s+/).filter(Boolean);
-  return state.jobs.filter((job) => jobMatchesFilter(job)
+  return state.jobs.filter((job) => jobMatchesFilter(job) && jobOnShelf(job)
     && words.every((word) => `${(job.prompt_truncated && fullPrompts?.[job.id]) || job.prompt || ""} ${job.model_label || ""} ${job.mode_label || ""} ${job.agentic_session_title || ""}`.toLowerCase().includes(word)));
 }
 
@@ -4395,9 +4634,10 @@ function maybeLoadMoreJobs() {
 
 function renderJobsPager(total, shown) {
   $$("[data-filter-count]").forEach((node) => {
-    const count = state.jobs.filter((job) => jobMatchesFilter(job, node.dataset.filterCount)).length;
+    const count = state.jobs.filter((job) => jobMatchesFilter(job, node.dataset.filterCount) && jobOnShelf(job)).length;
     node.textContent = count ? count : "";
   });
+  renderShelfCounts();
   $("#jobs-more").hidden = total <= JOBS_PAGE && shown >= total;
   $("#jobs-more-count").textContent = `Showing ${shown} of ${total}`;
   const button = $("#jobs-show-more");
@@ -4419,14 +4659,27 @@ function renderJobs() {
   host.classList.toggle("is-agentic-focus", Boolean(focusJobs.length));
   const filtered = matching.slice(0, state.jobsShown);
   renderJobsPager(matching.length, filtered.length);
+  if (state.shelf === "agentic" && !focusJobs.length) {   // count tiles, not the renders folded inside them
+    const sessions = (jobs) => new Set(jobs.map((job) => job.agentic_session_id)).size;
+    $("#jobs-more-count").textContent = `Showing ${sessions(filtered)} of ${sessions(matching)} sessions`;
+    $("#jobs-show-more").textContent = "Show more sessions";
+  }
   updateMobileTabBadge();
   if (!jobsVisible()) {
     state.jobsStale = true; // built when the Generations tab opens
     return;
   }
   state.jobsStale = false;
-  if (!filtered.length) {
-    host.innerHTML = `<div class="jobs-empty">${state.jobs.length ? "No matching generations." : "No generations yet. Describe a shot and hit Generate."}</div>`;
+  // Agentic sessions writing their prompts (no render yet) still get their group, from the first prompt on.
+  const live = state.agenticLive || new Map();
+  const searchWords = state.jobSearch.toLowerCase().split(/\s+/).filter(Boolean);
+  const liveOnly = [...live.values()].filter((item) => !filtered.some((job) => job.agentic_session_id === item.session_id)
+    && ["all", "running"].includes(state.filter) && (focusId ? focusId === item.session_id : ["agentic", "all"].includes(state.shelf))
+    && searchWords.every((word) => item.title.toLowerCase().includes(word)));
+  if (!filtered.length && !liveOnly.length) {
+    const emptyShelf = { single: "No single generations here yet.", agentic: "No Agentic sessions here yet.", stitch: "No stitches here yet." }[state.shelf];
+    host.innerHTML = `<div class="jobs-empty">${!state.jobs.length ? "No generations yet. Describe a shot and hit Generate."
+      : state.jobSearch || state.filter !== "all" || !emptyShelf ? "No matching generations." : emptyShelf}</div>`;
     renderStitchBar();
     return;
   }
@@ -4438,19 +4691,25 @@ function renderJobs() {
     .map((node) => [node.dataset.agenticSessionId, node]));
   const entries = [];
   const grouped = new Map();
+  const flat = state.shelf === "stitch" && !focusJobs.length;
   filtered.forEach((job) => {
-    if (!job.agentic_session_id) {
+    if (!job.agentic_session_id || flat) {
       entries.push({ job });
       return;
     }
     let entry = grouped.get(job.agentic_session_id);
     if (!entry) {
-      entry = { id: job.agentic_session_id, jobs: [], title: job.agentic_session_title || job.prompt };
+      entry = { id: job.agentic_session_id, jobs: [], title: job.agentic_session_title || job.prompt,
+        plan: job.agentic_session_kind === "plan" };
       grouped.set(entry.id, entry);
       entries.push(entry);
     }
     entry.jobs.push(job);
   });
+  for (const item of liveOnly.slice().reverse()) {      // newest first, ahead of everything else
+    entries.unshift({ id: item.session_id, jobs: [], title: item.title, plan: item.kind === "plan" });
+  }
+  entries.forEach((entry) => { if (!entry.job) entry.live = live.get(entry.id) || null; });
   function place(parent, node, index) {
     if (parent.children[index] !== node) parent.insertBefore(node, parent.children[index] || null);
   }
@@ -4482,8 +4741,9 @@ function renderJobs() {
       group = document.createElement("div");
       group.className = "agentic-session-group";
       group.dataset.agenticSessionId = entry.id;
-      group.innerHTML = `<div class="agentic-session-head"><span class="agentic-session-mark" aria-hidden="true"></span><span class="agentic-session-heading"><strong>Agentic session</strong><small class="agentic-session-title"></small></span><span class="agentic-session-count"></span><span class="agentic-collapse-chips"><button type="button" class="secondary-button agentic-collapse-chip" data-collapse="previews" aria-expanded="true"></button><button type="button" class="secondary-button agentic-collapse-chip" data-collapse="finals" aria-expanded="true"></button></span><span class="agentic-session-buttons"><button type="button" class="secondary-button agentic-show-all-button" title="Show every generation again (the session stays active)">Show all</button><button type="button" class="secondary-button job-icon-button agentic-info-button" title="What was sent to start this session" aria-label="What was sent to start this session">${JOB_ICONS.info}</button><button type="button" class="secondary-button job-icon-button agentic-folder-button" title="Session folder: assets, prompt log, rewrite clips" aria-label="Session folder: assets, prompt log, rewrite clips">${jobIcon('<path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>')}</button><button type="button" class="secondary-button agentic-stitch-button" title="Join this session's final clips into one video, in story order" hidden>Stitch</button><button type="button" class="secondary-button agentic-resume-button">Resume</button><button type="button" class="secondary-button job-icon-button danger agentic-delete-button" title="Delete this session and every video it made" aria-label="Delete this session and every video it made">${JOB_ICONS.remove}</button></span></div><div class="agentic-session-cards"><div class="agentic-stage-group"><button type="button" class="agentic-stage-head" aria-expanded="true"><strong>Staging previews</strong><span class="agentic-stage-count"></span><span class="card-chevron" aria-hidden="true"></span></button><div class="agentic-stage-cards"></div><div class="agentic-stage-approval" hidden><label>Notes for every clip<textarea class="agentic-stage-notes" rows="3" placeholder="Changes for the whole series (style, setting, characters). Notes for one clip go in the box under that clip."></textarea></label><div class="agentic-stage-actions"><button type="button" class="secondary-button agentic-stage-accept" data-stage-action="accept">Accept and run final</button><button type="button" class="secondary-button danger agentic-stage-exclude" data-stage-action="exclude">Exclude and retry staging</button></div></div></div><div class="agentic-final-group"><button type="button" class="agentic-stage-head agentic-final-head" aria-expanded="true"><strong>Final clips</strong><span class="agentic-stage-count agentic-final-count"></span><span class="card-chevron" aria-hidden="true"></span></button><div class="agentic-final-cards"></div></div></div>`;
+      group.innerHTML = `<div class="agentic-session-head"><span class="agentic-session-mark" aria-hidden="true"></span><span class="agentic-session-heading"><strong>Agentic session</strong><small class="agentic-session-title"></small></span><img class="agentic-session-cover" alt="" loading="lazy" hidden title="Show this session's final clips"><span class="agentic-session-count"></span><span class="agentic-collapse-chips"><button type="button" class="secondary-button agentic-collapse-chip" data-collapse="previews" aria-expanded="true"></button><button type="button" class="secondary-button agentic-collapse-chip" data-collapse="finals" aria-expanded="true"></button></span><span class="agentic-session-buttons"><button type="button" class="secondary-button agentic-show-all-button" title="Show every generation again (the session stays active)">Show all</button><button type="button" class="secondary-button job-icon-button agentic-info-button" title="What was sent to start this session" aria-label="What was sent to start this session">${JOB_ICONS.info}</button><button type="button" class="secondary-button job-icon-button agentic-folder-button" title="Session folder: assets, prompt log, rewrite clips" aria-label="Session folder: assets, prompt log, rewrite clips">${jobIcon('<path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>')}</button><button type="button" class="secondary-button agentic-pause-button" hidden></button><button type="button" class="secondary-button agentic-stitch-button" title="Join this session's final clips into one video, in story order" hidden>Stitch</button><button type="button" class="secondary-button agentic-resume-button">Revise</button><button type="button" class="secondary-button job-icon-button danger agentic-delete-button" title="Delete this session and every video it made" aria-label="Delete this session and every video it made">${JOB_ICONS.remove}</button></span></div><div class="agentic-session-cards"><div class="agentic-stage-group"><button type="button" class="agentic-stage-head" aria-expanded="true"><strong>Staging previews</strong><span class="agentic-stage-count"></span><span class="card-chevron" aria-hidden="true"></span></button><div class="agentic-stage-cards"></div><div class="agentic-stage-approval" hidden><label>Notes for every clip<textarea class="agentic-stage-notes" rows="3" placeholder="Changes for the whole series (style, setting, characters). Notes for one clip go in the box under that clip."></textarea></label><div class="agentic-stage-actions"><button type="button" class="secondary-button agentic-stage-accept" data-stage-action="accept">Accept and run final</button><button type="button" class="secondary-button danger agentic-stage-exclude" data-stage-action="exclude">Exclude and retry staging</button></div></div></div><div class="agentic-final-group"><button type="button" class="agentic-stage-head agentic-final-head" aria-expanded="true"><strong>Final clips</strong><span class="agentic-stage-count agentic-final-count"></span><span class="card-chevron" aria-hidden="true"></span></button><div class="agentic-final-cards"></div></div></div>`;
       // Previews / final clips collapse together from the tile chips (grid) or the lane headers (resumed).
+      $(".agentic-session-cover", group).addEventListener("click", () => toggleAgenticCollapse(group, "finals"));
       $(".agentic-stage-head", group).addEventListener("click", () => toggleAgenticCollapse(group, "previews"));
       $(".agentic-final-head", group).addEventListener("click", () => toggleAgenticCollapse(group, "finals"));
       $$(".agentic-collapse-chip", group).forEach((chip) => chip.addEventListener("click", (event) => {
@@ -4535,16 +4795,30 @@ function renderJobs() {
         event.stopPropagation();
         openAgenticSessionInfo(group.dataset.agenticSessionId);
       });
+      $(".agentic-pause-button", group).addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleAgenticGroupPause(group, event.currentTarget);
+      });
       $(".agentic-resume-button", group).addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        if (activeAgenticSessionId === group.dataset.agenticSessionId) endAgenticSession();
-        else resumeAgenticSession(group.dataset.agenticSessionId);
+        const id = group.dataset.agenticSessionId;
+        if (activeAgenticSessionId === id) endAgenticSession();
+        else if (state.agenticLive?.get(id)) resumeAgenticSession(id);   // still running or paused: just watch it
+        else openReviseDialog(id, $(".agentic-session-title", group).textContent);
       });
     }
     group.style.setProperty("--session-hue", agenticSessionHue(entry.id));
+    // Pasted plans queued with Generate get their own "Plan session" grouping and look.
+    group.classList.toggle("is-plan-session", entry.plan);
+    $(".agentic-session-heading strong", group).textContent = entry.plan ? "Plan session" : "Agentic session";
+    $(".agentic-resume-button", group).title = entry.plan ? "Tell Hermes what to do next with this plan's session: finish it, add on, or change clips"
+      : "Tell Hermes what to do next with this session: finish it, add on, or change clips";
     $(".agentic-session-title", group).textContent = entry.title;
-    $(".agentic-session-count", group).textContent = `${entry.jobs.length} render${entry.jobs.length === 1 ? "" : "s"}`;
+    $(".agentic-session-count", group).textContent = entry.jobs.length ? `${entry.jobs.length} render${entry.jobs.length === 1 ? "" : "s"}` : "no renders yet";
+    syncAgenticWriting(group, entry.live);
+    syncAgenticPauseButton(group, entry.live);
     const staging = entry.jobs.filter((job) => job.agentic_phase === "staging");
     const final = entry.jobs.filter((job) => job.agentic_phase !== "staging");
     // Every attempt of one clip (retries, best of 2, Whisper re-renders) shares one card with ‹ › arrows.
@@ -4566,6 +4840,8 @@ function renderJobs() {
     // Stitch needs two finished full clips; the server picks the kept attempt of each, in story order.
     const stitchable = finalClips.filter(([, attempts]) => attempts.some((job) => (job.agentic_phase || "full") === "full" && job.state === "complete"));
     $(".agentic-stitch-button", group).hidden = stitchable.length < 2;
+    group.classList.toggle("is-focused", entry.id === focusId);
+    syncAgenticCover(group, entry);
     applyAgenticCollapse(group);
     const approvalRunId = entry.jobs.find((job) => job.agentic_approval_run_id)?.agentic_approval_run_id || "";
     group.dataset.agenticApprovalRunId = approvalRunId;
@@ -4588,7 +4864,6 @@ function renderJobs() {
       place(finalCards, card, cardIndex);
       syncAgenticAttemptPager(card, key, attempts, job);
     });
-    group.classList.toggle("is-focused", entry.id === focusId);
     place(host, group, index);
   });
   syncAgenticSessionButtons();
@@ -4598,6 +4873,101 @@ function renderJobs() {
   applyStitchModeToCards();
   maybeLoadMoreJobs(); // keeps loading until the list at least fills its view
 }
+
+// The prompt ledger, live, inside a session group: which clips are being written, written, rendered and verified,
+// from the first prompt on (GET /api/agentic/live, polled while a session is running).
+const AGENTIC_LIVE_STATES = { writing: "being written", written: "written", rendered: "rendered", verified: "verified" };
+function agenticLiveLabel(live) {
+  if (live.awaiting === "prompts") return "Prompts are waiting for your approval (Hermes log)";
+  if (live.state === "paused") return "Paused";
+  if (live.state === "awaiting_approval") return "Previews are waiting for your approval";
+  if (live.state === "rendering") return "Rendering";
+  const counts = live.overview?.counts || {};
+  if (counts.writing) return "Writing prompts";
+  if (!live.clips.length) return /research|search|download/i.test(live.phase) ? "Researching" : "Planning";
+  return live.state === "reviewing" ? "Reviewing" : "Checking the prompts";
+}
+function syncAgenticWriting(group, live) {
+  let box = $(":scope > .agentic-writing", group);
+  if (!live) { box?.remove(); group.classList.remove("is-live"); return; }
+  if (!box) {
+    box = document.createElement("div");
+    box.className = "agentic-writing";
+    $(".agentic-session-head", group).after(box);
+  }
+  group.classList.add("is-live");
+  const key = JSON.stringify([live.state, live.phase, live.awaiting, live.overview?.strip, live.clips.map((c) => [c.state, c.summary.length])]);
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  const ov = live.overview || {}, counts = ov.counts || {};
+  const letter = { v: "verified", d: "rendered", w: "written", i: "writing", "-": "todo" };
+  const squares = [...String(ov.strip || "")].map((ch, i) => `<span class="aw-sq is-${letter[ch] || "todo"}" title="Clip ${i + 1}: ${AGENTIC_LIVE_STATES[letter[ch]] || "not written yet"}"></span>`).join("");
+  const tally = [["verified", counts.verified], ["rendered", counts.done], ["written", counts.written], ["writing", counts.writing], ["todo", counts.todo]]
+    .filter(([, n]) => n).map(([k, n]) => `<span class="aw-count is-${k}"><i></i>${n} ${k === "todo" ? "to come" : AGENTIC_LIVE_STATES[k]}</span>`).join("");
+  // The clips in play (not yet verified) in full; finished ones only as a count, so a 50-clip film stays short.
+  const open = live.clips.filter((c) => c.state !== "verified");
+  const rows = open.slice(0, 12).map((c) => `<li class="is-${c.state}"><b>${c.n}</b><span class="aw-badge">${AGENTIC_LIVE_STATES[c.state]}</span><span class="aw-summary">${escapeHtml(c.summary || "…")}</span></li>`).join("")
+    + (open.length > 12 ? `<li class="aw-more">+${open.length - 12} more</li>` : "");
+  const batch = live.batch ? ` · batch: clips ${live.batch.first}–${live.batch.first + live.batch.size - 1}` : "";
+  box.innerHTML = `<div class="aw-head"><span class="aw-dot"></span><b>${escapeHtml(agenticLiveLabel(live))}</b><span class="aw-phase">${escapeHtml(live.phase || "")}${escapeHtml(batch)}</span></div>
+    ${squares ? `<div class="aw-strip">${squares}</div><div class="aw-tally">${tally}</div>` : `<div class="aw-hint">Prompts appear here as Hermes writes them.</div>`}
+    ${rows ? `<ol class="aw-list">${rows}</ol>` : ""}`;
+}
+
+// Pause/Resume right on a live session's header (2026-11-06), so a run can be paused without opening the
+// Agentic card's queue or the Hermes log. Pausing can take a while (the server waits for the step to stop),
+// so runs being paused/resumed stay disabled across re-renders until the live poll shows the new state.
+const agenticPauseBusy = new Map(); // run id -> "pause" | "resume"
+function syncAgenticPauseButton(group, live) {
+  const button = $(".agentic-pause-button", group);
+  if (!button) return;
+  const runId = live?.run_id || "";
+  const paused = live?.state === "paused";
+  const show = Boolean(runId) && (paused || AGENTIC_ACTIVE_STATES.has(live.state));
+  button.hidden = !show;
+  if (!show) return;
+  const busy = agenticPauseBusy.get(runId);
+  if (busy && (busy === "pause") === paused) agenticPauseBusy.delete(runId); // the poll caught up
+  const pending = agenticPauseBusy.get(runId);
+  const key = [runId, paused, pending || ""].join("|");
+  if (button.dataset.key === key) return;
+  button.dataset.key = key;
+  button.dataset.runId = runId;
+  button.dataset.action = paused ? "resume" : "pause";
+  button.disabled = Boolean(pending);
+  button.classList.toggle("is-paused", paused);
+  button.innerHTML = pending ? (pending === "pause" ? "Pausing…" : "Resuming…")
+    : paused ? `${uiIcon("play")} Resume run` : `${uiIcon("pause")} Pause`;
+  button.title = paused ? "Continue this paused run in the same session; anything the pause interrupted is generated again"
+    : "Pause this run now and free the GPU; Resume run continues this same session";
+  button.setAttribute("aria-label", paused ? "Resume this paused Agentic run" : "Pause this Agentic run");
+}
+
+async function toggleAgenticGroupPause(group, button) {
+  const runId = button.dataset.runId, action = button.dataset.action;
+  if (!runId || agenticPauseBusy.has(runId)) return;
+  agenticPauseBusy.set(runId, action);
+  syncAgenticPauseButton(group, state.agenticLive?.get(group.dataset.agenticSessionId) || null);
+  await setAgenticPaused(runId, group.dataset.agenticSessionId, action === "pause");
+  // Done (or failed): let the next live poll decide the label; clear now if the server refused.
+  setTimeout(() => { if (agenticPauseBusy.get(runId) === action) { agenticPauseBusy.delete(runId); renderJobs(); } }, 8000);
+  agenticLiveKey = "";
+  pollAgenticLive();
+}
+
+let agenticLiveKey = "";
+async function pollAgenticLive() {
+  try {
+    const { sessions } = await Api.request(`${API_BASE}/api/agentic/live`, { cache: "no-store" });
+    const key = JSON.stringify(sessions);
+    if (key === agenticLiveKey) return;
+    agenticLiveKey = key;
+    state.agenticLive = new Map(sessions.map((item) => [item.session_id, item]));
+    renderJobs();
+  } catch { /* the next poll tries again */ }
+}
+setInterval(() => { if (!document.hidden) pollAgenticLive(); }, 3000);
+setTimeout(pollAgenticLive, 1500);
 
 // Per-clip staging notes, "sessionId:clip" -> text; kept across re-renders and reloads until submitted.
 const AGENTIC_CLIP_NOTES_KEY = "h3-agentic-clip-notes";
@@ -4680,12 +5050,19 @@ const AGENTIC_COLLAPSE_KEY = "h3-agentic-collapsed";
 // sessionId -> {previews, finals}; kept in memory and mirrored to localStorage when it's available.
 const agenticCollapsed = (() => { try { return JSON.parse(localStorage.getItem(AGENTIC_COLLAPSE_KEY) || "{}"); } catch { return {}; } })();
 
+// The grid (unfocused tile) and the resumed lane keep separate choices: in the grid a session is one
+// folded tile until its chips open it, so a long run never floods the list; the lane opens as before.
+function agenticCollapseKey(group, kind) {
+  return group.classList.contains("is-focused") ? kind : `grid-${kind}`;
+}
+
 function applyAgenticCollapse(group) {
   const saved = agenticCollapsed[group.dataset.agenticSessionId] || {};
   const counts = { previews: Number(group.dataset.previewCount || 0), finals: Number(group.dataset.finalCount || 0) };
-  const automatic = { previews: group.dataset.finalsDone === "1", finals: false };
+  const focused = group.classList.contains("is-focused");
+  const automatic = focused ? { previews: group.dataset.finalsDone === "1", finals: false } : { previews: true, finals: true };
   for (const kind of ["previews", "finals"]) {
-    const collapsed = saved[kind] ?? automatic[kind];
+    const collapsed = saved[agenticCollapseKey(group, kind)] ?? automatic[kind];
     group.classList.toggle(`${kind}-collapsed`, collapsed);
     const chip = $(`[data-collapse="${kind}"]`, group);
     chip.textContent = `${collapsed ? "▸" : "▾"} ${kind === "previews" ? "Previews" : "Final"} ${counts[kind]}`;
@@ -4695,10 +5072,22 @@ function applyAgenticCollapse(group) {
   }
 }
 
+// Tile cover: the session's newest finished stitch, else its newest finished final clip.
+function syncAgenticCover(group, entry) {
+  const img = $(".agentic-session-cover", group);
+  const done = (job) => job.state === "complete" && job.poster_url;
+  const stitches = state.jobs.filter((job) => job.model === "stitch" && done(job)
+    && (job.agentic_session_id === entry.id || job.stitch_session_id === entry.id));
+  const cover = stitches[0] || entry.jobs.filter((job) => job.agentic_phase !== "staging" && done(job))
+    .sort((a, b) => (b.agentic_clip_index || 0) - (a.agentic_clip_index || 0))[0];
+  img.hidden = !cover;
+  if (cover && img.getAttribute("src") !== cover.poster_url) img.src = cover.poster_url;
+}
+
 function toggleAgenticCollapse(group, kind) {
   const id = group.dataset.agenticSessionId;
   // Store the explicit choice (true or false) so it overrides the automatic hide.
-  const entry = { ...(agenticCollapsed[id] || {}), [kind]: !group.classList.contains(`${kind}-collapsed`) };
+  const entry = { ...(agenticCollapsed[id] || {}), [agenticCollapseKey(group, kind)]: !group.classList.contains(`${kind}-collapsed`) };
   agenticCollapsed[id] = entry;
   try { localStorage.setItem(AGENTIC_COLLAPSE_KEY, JSON.stringify(agenticCollapsed)); } catch { /* this page only */ }
   applyAgenticCollapse(group);
@@ -5009,6 +5398,7 @@ async function openAgenticSessionFolder(sessionId) {
     return;
   }
   if ($("#job-info").hidden) return;
+  if (folder.film?.clips?.length) return renderAgenticFilmFolder(sessionId, folder, body);
   const time = (seconds) => new Date(seconds * 1000).toLocaleString();
   const clipRows = folder.clips.map((clip) => `
     <section class="job-info-section session-clip">
@@ -5062,6 +5452,169 @@ async function openAgenticSessionFolder(sessionId) {
       event.currentTarget.disabled = false;
     }
   });
+}
+
+// The session folder for the prompt ledger (backend/ledger.py): the film by overall clip number, what each clip's
+// prompt is (being written, written, rendered, verified), the outline and standing directions, and scoped edits.
+const FILM_STATES = [["verified", "Verified", "Final render kept: locked (prompts/verified)"],
+  ["rendered", "Rendered", "Rendered, waiting for its final review — or a verified clip being edited"],
+  ["written", "Written", "Validated and reviewed, waiting to render (prompts/written)"],
+  ["writing", "Being written", "A draft that hasn't passed the plan checks yet (prompts/in-progress)"]];
+function renderAgenticFilmFolder(sessionId, folder, body) {
+  const film = folder.film, ov = film.overview || {}, counts = ov.counts || {};
+  const time = (seconds) => new Date(seconds * 1000).toLocaleString();
+  const letter = { v: "verified", d: "rendered", w: "written", i: "writing", "-": "todo" };
+  const stateLabel = { verified: "Verified", rendered: "Rendered", written: "Written", writing: "Being written" };
+  const total = ov.total || film.clips.length;
+  const longHaul = film.long_haul;
+  const status = longHaul?.finished_at ? "Whole film done" : longHaul?.stopped ? `Stopped — ${longHaul.stopped}` : folder.busy ? "Running" : "Idle";
+  const pct = total ? Math.round(100 * (counts.verified || 0) / total) : 0;
+  const tally = [["verified", counts.verified, "verified"], ["rendered", counts.done, "rendered"], ["written", counts.written, "written"],
+    ["writing", counts.writing, "being written"], ["todo", counts.todo, "to come"]]
+    .filter(([key, n]) => n || key === "verified").map(([key, n, label]) => `<span class="ff-count is-${key}"><i></i><b>${n || 0}</b> ${label}</span>`).join("");
+  const squares = [...String(ov.strip || "")].map((ch, i) => `<button type="button" class="ff-sq is-${letter[ch] || "todo"}" data-jump="${i + 1}" title="Clip ${i + 1}: ${stateLabel[letter[ch]] || "not written yet"}"></button>`).join("");
+  const poster = (clip) => clip.render_id ? `${API_BASE}/api/outputs/${encodeURIComponent(clip.render_id)}/poster` : "";
+  const clipCard = (clip) => `
+    <details class="ff-clip is-${clip.state}" data-n="${clip.n}" id="ff-clip-${clip.n}">
+      <summary>
+        <span class="ff-thumb">${poster(clip) ? `<img src="${escapeHtml(poster(clip))}" alt="" loading="lazy">` : `<span class="ff-thumb-empty">${clip.state === "writing" ? "✎" : "…"}</span>`}<span class="ff-num">${clip.n}</span></span>
+        <span class="ff-clip-body">
+          <span class="ff-clip-top">${clip.reached ? `<label class="ff-pick" title="Pick for an edit"><input type="checkbox" class="session-clip-pick" value="${clip.n}"></label>` : ""}
+            <span class="ff-badge is-${clip.state}">${clip.editing ? "being edited" : stateLabel[clip.state] || clip.state}</span>
+            <span class="ff-meta">${escapeHtml([clip.seconds ? `${clip.seconds} s` : "", clip.extends ? `↪ continues ${clip.extends}` : clip.action === "NEW" ? "new shot" : "",
+              clip.refs?.length ? `refs ${clip.refs.join(", ")}` : ""].filter(Boolean).join(" · "))}</span></span>
+          <span class="ff-summary">${escapeHtml(clip.summary || "(no prompt yet)")}</span>
+        </span>
+      </summary>
+      <div class="ff-clip-detail">
+        <div class="job-info-heading"><span class="hint">${clip.render_id ? `Render ${escapeHtml(clip.render_id.slice(0, 8))}` : "Not rendered yet"}</span>
+          <button type="button" class="secondary-button job-icon-button" data-copy-film="${clip.n}" title="Copy prompt" aria-label="Copy clip ${clip.n} prompt">${JOB_ICONS.copy}</button></div>
+        <pre class="job-info-prompt">${escapeHtml(clip.prompt)}</pre>
+        ${clip.history.length > 1 ? `<details class="session-history"><summary>Prompt history (${clip.history.length})</summary>${clip.history.slice().reverse().map((entry) => `
+          <div class="session-history-entry"><div class="hint">${escapeHtml(time(entry.at))} · ${escapeHtml(entry.why)}</div><pre class="job-info-prompt">${escapeHtml(entry.prompt)}</pre></div>`).join("")}</details>` : ""}
+      </div>
+    </details>`;
+  const order = ["writing", "written", "rendered", "verified"];
+  const filters = [["all", `All ${film.clips.length}`], ...order.filter((k) => film.clips.some((c) => c.state === k)).map((k) => [k, `${stateLabel[k]} ${film.clips.filter((c) => c.state === k).length}`])];
+  // References, by what they do (continuation frames, character / scene screenshots, regular references).
+  const REF_KINDS = [["continuation", "Continuation frames", "Each clip's final frame (or its audio tail), handed to the clip that continues it as its first frame"],
+    ["character", "Character references", "Saved screenshots of a fictional character: new shots use them for the character; continuations for identity only"],
+    ["scene", "Scene references", "Saved screenshots of a location: new shots use them for the setting; continuations only for its look"],
+    ["regular", "Regular references", "Your uploads, and pictures or clips Hermes downloaded or edited for this session"]];
+  const assetTile = (ref) => {
+    const thumb = ref.category === "image" ? ref.small_url || ref.preview_url : ref.small_url || ref.thumbnail_url;
+    const used = (ref.used_by || []).length ? `used by clip${ref.used_by.length === 1 ? "" : "s"} ${ref.used_by.join(", ")}` : "not used by a kept clip";
+    return `<a class="session-asset" href="${escapeHtml(ref.preview_url)}" target="_blank" rel="noopener" title="${escapeHtml(`${ref.filename}\n${used}`)}">
+      ${thumb ? `<img src="${escapeHtml(thumb)}" alt="" loading="lazy">` : `<span class="session-asset-icon">${escapeHtml(ref.category)}</span>`}
+      <span>${escapeHtml(ref.alias)}${ref.duration ? ` · ${Number(ref.duration).toFixed(1)}s` : ""}</span>
+      ${ref.origin ? `<small class="session-asset-origin">${escapeHtml(ref.origin)}</small>` : ""}
+      <small class="session-asset-used${(ref.used_by || []).length ? "" : " is-unused"}">${escapeHtml(used)}</small></a>`;
+  };
+  const refCounts = Object.fromEntries(REF_KINDS.map(([k]) => [k, folder.assets.filter((r) => (r.kind || "regular") === k).length]));
+  const assetGroups = REF_KINDS.map(([kind, label, hint]) => {
+    const refs = folder.assets.filter((ref) => (ref.kind || "regular") === kind);
+    return refs.length ? `<div class="session-asset-group is-${kind}"><h4>${escapeHtml(label)} <span class="hint">(${refs.length})</span></h4>
+      <p class="hint">${escapeHtml(hint)}</p><div class="session-assets">${refs.map(assetTile).join("")}</div></div>` : "";
+  }).join("");
+  const directions = film.directions.length ? `<section class="ff-card"><h3>Standing directions <span class="hint">(${film.directions.length})</span></h3>
+      <p class="hint">Lasting changes you asked for. Every clip written from the number given on follows them (later batches too); the newest wins.</p>
+      <ul class="film-directions">${film.directions.map((d) => `<li><b>From clip ${d.from}</b> · ${escapeHtml(d.text)} <small class="hint">${escapeHtml(time(d.at))}</small></li>`).join("")}</ul></section>` : "";
+  const outline = film.outline.length ? `<section class="ff-card"><h3>Outline <span class="hint">· ${film.outline.length} clips, about ${film.outline.reduce((a, o) => a + (o.seconds || 0), 0)} s</span></h3>
+      <ol class="film-outline-list">${film.outline.map((o) => `<li value="${o.n}" class="${o.n <= film.frontier ? "is-done" : ""}">${o.n <= film.frontier ? "✓ " : ""}<span class="hint">(${o.seconds} s)</span> ${escapeHtml(o.beat)}</li>`).join("")}</ol></section>` : "";
+  const tabs = [["film", `Film <span class="ff-tab-n">${film.clips.length}</span>`],
+    ["plan", `Outline & directions <span class="ff-tab-n">${film.outline.length + film.directions.length || "–"}</span>`],
+    ["refs", `References <span class="ff-tab-n">${folder.assets.length}</span>`], ["files", "Files"]];
+  body.innerHTML = `
+    <div class="ff">
+      <header class="ff-head">
+        <div class="ff-head-top"><span class="ff-status is-${folder.busy ? "busy" : longHaul?.stopped ? "stopped" : "idle"}">${escapeHtml(status)}</span>
+          <span class="ff-title">${escapeHtml(folder.master_prompt || "")}</span></div>
+        <div class="ff-progress" title="${pct}% verified"><span style="width:${pct}%"></span></div>
+        <div class="ff-counts">${tally}<span class="ff-total">${total} clip${total === 1 ? "" : "s"}${film.directions.length ? ` · ${film.directions.length} direction${film.directions.length === 1 ? "" : "s"}` : ""}</span></div>
+        <div class="ff-strip">${squares}</div>
+      </header>
+      <nav class="ff-tabs" role="tablist">${tabs.map(([key, label], i) => `<button type="button" role="tab" class="ff-tab" data-tab="${key}" aria-selected="${i === 0}">${label}</button>`).join("")}</nav>
+      <section class="ff-panel" data-panel="film">
+        <details class="ff-card ff-edit">
+          <summary><h3>Edit the film</h3><span class="hint">Tick clips below, describe the change, pick how far it reaches</span></summary>
+          <textarea id="film-edit-notes" rows="3" placeholder="What should change? (empty with 'Only these clips' re-renders them as they are)"></textarea>
+          <div class="film-scope" role="radiogroup" aria-label="How far the change reaches">
+            <label><input type="radio" name="film-scope" value="clip" checked> Only these clips <span class="hint">— clips that continue from them are re-rendered from the new frame</span></label>
+            <label><input type="radio" name="film-scope" value="onward"> These clips and every clip after them <span class="hint">— and later batches</span></label>
+            <label><input type="radio" name="film-scope" value="future"> Only clips not written yet <span class="hint">— a lasting direction; nothing re-renders</span></label>
+          </div>
+          <div class="session-rewrite-actions"><button type="button" class="secondary-button" id="film-pick-all">Tick all</button><button type="button" class="secondary-button" id="film-pick-none">Untick all</button>
+            <button type="button" class="primary-button" id="film-edit-go" ${folder.busy ? 'disabled title="This session is running"' : ""}>Edit</button></div>
+        </details>
+        <div class="ff-filters">${filters.map(([key, label], i) => `<button type="button" class="ff-filter" data-filter="${key}" aria-pressed="${i === 0}">${escapeHtml(label)}</button>`).join("")}</div>
+        <div class="ff-clips">${film.clips.map(clipCard).join("")}</div>
+      </section>
+      <section class="ff-panel" data-panel="plan" hidden>${directions}${outline || `<p class="hint">No outline: this session was planned as one plan (outlines are made for long videos).</p>`}</section>
+      <section class="ff-panel" data-panel="refs" hidden>
+        <div class="ff-ref-summary">${REF_KINDS.map(([k, label]) => `<span class="ff-ref-chip is-${k}">${escapeHtml(label)} <b>${refCounts[k]}</b></span>`).join("")}</div>
+        ${assetGroups || `<p class="hint">No references yet.</p>`}
+      </section>
+      <section class="ff-panel" data-panel="files" hidden>
+        <p class="hint">Kept until the session is deleted. On disk: <code>${escapeHtml(folder.folder)}</code></p>
+        <ul class="ff-files">
+          <li><code>prompts/in-progress/clip-NNN.md</code> drafts that haven't passed the plan checks</li>
+          <li><code>prompts/written/clip-NNN.md</code> validated and reviewed, not yet final</li>
+          <li><code>prompts/verified/clip-NNN.md</code> final renders kept (locked)</li>
+          <li><code>progress.md</code> one line per clip${film.outline.length ? "; <code>outline.md</code> the long-video outline" : ""}</li>
+          <li><code>prompts.md</code> every prompt version · <code>assets/</code> every reference</li>
+        </ul>
+      </section>
+    </div>`;
+  // tabs, filters, strip jumps
+  $$(".ff-tab", body).forEach((tab) => tab.addEventListener("click", () => {
+    $$(".ff-tab", body).forEach((t) => t.setAttribute("aria-selected", String(t === tab)));
+    $$(".ff-panel", body).forEach((panel) => { panel.hidden = panel.dataset.panel !== tab.dataset.tab; });
+  }));
+  $$(".ff-filter", body).forEach((button) => button.addEventListener("click", () => {
+    $$(".ff-filter", body).forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+    $$(".ff-clip", body).forEach((card) => { card.hidden = button.dataset.filter !== "all" && !card.classList.contains(`is-${button.dataset.filter}`); });
+  }));
+  $$(".ff-sq", body).forEach((sq) => sq.addEventListener("click", () => {
+    const card = $(`#ff-clip-${sq.dataset.jump}`, body);
+    if (!card) return toast(`Clip ${sq.dataset.jump} isn't written yet.`);
+    $$(".ff-tab", body)[0].click(); card.hidden = false; card.open = true; card.scrollIntoView({ block: "center", behavior: "smooth" });
+  }));
+  // edits
+  const picks = () => $$(".session-clip-pick", body).filter((box) => box.checked).map((box) => Number(box.value));
+  const scope = () => $('input[name="film-scope"]:checked', body).value;
+  const go = $("#film-edit-go", body);
+  const sync = () => {
+    const n = picks().length, sc = scope(), notes = $("#film-edit-notes", body).value.trim();
+    go.textContent = sc === "future" ? "Save direction" : n ? `Edit ${n} clip${n === 1 ? "" : "s"}` : "Edit";
+    if (n) $(".ff-edit", body).open = true;
+    if (folder.busy) return;
+    go.disabled = sc === "future" ? !notes : !n || (sc === "onward" && !notes);
+    go.title = go.disabled ? (sc === "clip" ? "Tick the clips to edit" : "Write what should change") : "";
+  };
+  $$(".session-clip-pick", body).forEach((box) => { box.addEventListener("click", (e) => e.stopPropagation()); box.addEventListener("change", sync); });
+  $$('input[name="film-scope"]', body).forEach((r) => r.addEventListener("change", sync));
+  $("#film-edit-notes", body).addEventListener("input", sync);
+  $("#film-pick-all", body).addEventListener("click", () => { $$(".session-clip-pick", body).forEach((box) => { box.checked = true; }); sync(); });
+  $("#film-pick-none", body).addEventListener("click", () => { $$(".session-clip-pick", body).forEach((box) => { box.checked = false; }); sync(); });
+  $$("[data-copy-film]", body).forEach((button) => button.addEventListener("click", () => {
+    const clip = film.clips.find((item) => String(item.n) === button.dataset.copyFilm);
+    navigator.clipboard?.writeText(clip.prompt).then(() => toast(`Clip ${clip.n} prompt copied.`), () => toast("Couldn't copy.", "error"));
+  }));
+  go.addEventListener("click", async () => {
+    const clips = picks(), sc = scope(), notes = $("#film-edit-notes", body).value.trim();
+    const what = sc === "future" ? "Save this as a direction for every clip not written yet?"
+      : `Re-render ${sc === "onward" ? `clip ${Math.min(...clips)} and every finished clip after it` : `${clips.length} clip${clips.length === 1 ? "" : "s"} (plus any that continue from them)`}${notes ? " with your change" : " as they are"}?`;
+    if (!confirm(what)) return;
+    go.disabled = true;
+    try {
+      const result = await Api.request(`${API_BASE}/api/agentic/sessions/${encodeURIComponent(sessionId)}/edit`, { method: "POST", body: { clips, notes, scope: sc } });
+      $("#job-info").hidden = true;
+      if (!result.job_id) { toast("Saved: later clips follow this direction."); return; }
+      toast(`Editing clip${result.clips.length === 1 ? "" : "s"} ${result.clips.join(", ")}. Follow it in the Hermes Agent log.`);
+      await adoptAgenticSession({ id: sessionId, kind: "resumed" });
+    } catch (error) { toast(error.message, "error"); go.disabled = false; }
+  });
+  sync();
 }
 
 async function openAgenticSessionInfo(sessionId) {
@@ -5450,6 +6003,7 @@ async function applyRetryRequest(request) {
   });
   renderPromptSnippets(); // checkboxes set directly above fire no "change"
   updateLoraCount();
+  syncSliderRanges();
 
   if (isSeedhunter) {
     state.shFirstFrameId = request.first_frame_id || null;
@@ -5823,8 +6377,10 @@ async function generateOnce() {
   // the same settings snapshot so an in-flight response cannot change size.
   await resolutionUpdatePromise;
   const body = collectSettings();
-  if (body.prompt.includes("::VIDEO")) return toast("This is a multi-clip plan. Press Agentic to queue its clips.", "error");
+  // A pasted ::VIDEO plan: queue its clips exactly as written (no Hermes planning or review).
+  if (/^::VIDEO\b/m.test(body.prompt)) return agentic({direct: true});
   if (!await confirmH3Upscale(body)) return;
+  followShelf("single");
   const button = $("#generate-button");
   button.disabled = true;
   // Generate wakes an offline ComfyUI and waits for it (up to ~90 s server-side).
@@ -5871,21 +6427,71 @@ function setPrompt(text) {
   prompt.dispatchEvent(new Event("input", { bubbles: true })); // highlight, snippets, drafts, session save
 }
 
-async function enhance() {
+// Enhance opens a line for what to change (optional); Enter or the line's Enhance runs it, Esc or ✕ closes it.
+function enhancePanel(open) {
+  $("#enhance-panel").hidden = !open;
+  $("#enhance").setAttribute("aria-expanded", String(open));
+  if (open) $("#enhance-wish").focus();
+}
+
+// Enhance is a server job: a running one is kept in this browser, so leaving it (a phone closing the page while
+// you're in another app) doesn't lose it; the page waits for it again when it's back (resumeEnhance).
+const ENHANCE_PENDING_KEY = "h3-enhance-pending";
+
+function saveEnhancePending(value) {
+  try { value ? localStorage.setItem(ENHANCE_PENDING_KEY, JSON.stringify(value)) : localStorage.removeItem(ENHANCE_PENDING_KEY); }
+  catch { /* storage blocked: this page only */ }
+}
+
+let enhanceView = null;
+
+// The job's log holds the streamed thinking and answer (enhancement stream rows; their first line is a label).
+function enhanceLive(job) {
+  const rows = job.log || [];
+  const last = (kind) => [...rows].reverse().find((row) => row.kind === kind)?.text || "";
+  const strip = (text) => text.replace(/^[^\n]*\n/, "");
+  const phase = job.state === "waiting_for_gpu" ? "waiting" : job.state === "complete" ? "done" : "";
+  return { phase, note: phase ? "" : job.phase, model: job.model || "", thinking: strip(last("thinking")), text: strip(last("stream")) };
+}
+
+async function enhance(resume = null) {
+  enhanceView = null;
   const button = $("#enhance");
-  const body = enhanceRequestBody();
+  const body = resume ? { prompt: resume.before } : enhanceRequestBody();
   if (!body.prompt.trim()) return toast("Write a prompt first - Enhance refines what's there.", "error");
+  // What was typed in the Enhance line comes first; the Agentic instructions (if any) still apply after it.
+  const wish = $("#enhance-wish").value.trim();
+  if (wish && !resume) body.additional_prompt = [`What to change now: ${wish}`, body.additional_prompt.trim()].filter(Boolean).join("\n\n");
   button.disabled = true;
+  $("#enhance-go").disabled = true;
   button.textContent = "Waiting for GPU…";
   try {
-    const { job_id } = await Api.request(`${API_BASE}/api/enhancement/enhance`, { method: "POST", body });
+    let job_id = resume?.job_id;
+    if (!job_id) {
+      ({ job_id } = await Api.uploadRequest(`${API_BASE}/api/enhancement/enhance`, () => body, Api.uploadKey(), "Enhance"));
+      saveEnhancePending({ job_id, before: body.prompt, at: Date.now() });
+    }
     enhanceLogJobId = job_id;
     enhanceLogRenderedCount = -1;
+    const view = enhanceOutput($("#enhance-panel"));
+    enhanceView = view;
     let result;
-    const started = Date.now();
+    const started = resume?.at || Date.now();
+    let failures = 0;
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
-      const job = await Api.request(`${API_BASE}/api/enhancement/jobs/${job_id}`, { cache: "no-store" });
+      await Api.whenVisible();
+      let job;
+      try {
+        job = await Api.request(`${API_BASE}/api/enhancement/jobs/${job_id}`, { cache: "no-store" });
+        failures = 0;
+      } catch (error) {
+        if (error.status === 404) throw new Error("That Enhance isn't known any more (Video restarted). Run it again.");
+        // A dropped poll (the browser was left, the network switched) is retried; a server that stays down isn't.
+        if (document.visibilityState === "visible" && ++failures >= 20) throw error;
+        continue;
+      }
+      view.update(enhanceLive(job));
       if (job.state === "failed") throw new Error(job.error || "Enhancement failed");
       if (job.state === "cancelled") throw new Error("Enhancement cancelled");
       if (job.state === "complete") { result = job.result; break; }
@@ -5894,14 +6500,18 @@ async function enhance() {
         ? `${job.phase || "Reading guides and loading model"}${job.progress?.content_chars ? ` · ${job.progress.content_chars.toLocaleString()} chars` : ""} · ${elapsed}s`
         : `Waiting for GPU… ${elapsed}s`;
     }
+    saveEnhancePending(null);
+    view.finish(true, `Finished in ${result.seconds}s`);
     promptBeforeEnhance = body.prompt;
     setPrompt(result.prompt);
-    if (result.prompt.includes("::VIDEO")) toast("Hermes created a multi-clip plan. Press Agentic to queue its clips.");
+    if (result.prompt.includes("::VIDEO")) toast("Hermes created a multi-clip plan. Press Generate to queue it as written, or Agentic to have Hermes review it.");
     flashRefinedPrompt();
     $("#enhance-undo").hidden = false;
     toast(`Prompt refined by ${result.model} in ${result.seconds}s. Undo puts your version back.`);
-  } catch (error) { toast(error.message, "error"); }
-  finally { button.disabled = false; button.innerHTML = `${uiIcon("sparkles")} Enhance`; }
+    $("#enhance-wish").value = "";
+    enhancePanel(false);   // a failure keeps the line open with what was typed, to try again
+  } catch (error) { saveEnhancePending(null); enhanceView?.finish(false, error.message); toast(error.message, "error"); }
+  finally { button.disabled = false; $("#enhance-go").disabled = false; button.innerHTML = `${uiIcon("sparkles")} Enhance`; }
 }
 
 // One hue per Agentic session: the feed group, its row in Agentic runs and the header chip share it.
@@ -5933,9 +6543,9 @@ function syncAgenticSessionButtons() {
     const active = group.dataset.agenticSessionId === activeAgenticSessionId;
     const button = $(".agentic-resume-button", group);
     if (!button) return;
-    button.textContent = active ? "End Session" : "Resume";
+    button.textContent = active ? "End Session" : "Revise";
     button.classList.toggle("is-active", active);
-    button.setAttribute("aria-label", active ? "End this Agentic session" : "Resume this Agentic session");
+    button.setAttribute("aria-label", active ? "End this Agentic session" : "Revise this Agentic session");
   });
 }
 
@@ -6003,6 +6613,18 @@ async function endAgenticSession() {
   showAgenticResume();
 }
 
+// Pause/Resume an Agentic run (2026-11-04): a pause stops its Hermes step or renders and frees the GPU; Resume
+// reloads the same session (plan, prompts, finished clips) and generates again whatever the pause interrupted.
+async function setAgenticPaused(jobId, sessionId, pause) {
+  try {
+    await Api.request(`${API_BASE}/api/enhancement/jobs/${encodeURIComponent(jobId)}/${pause ? "pause" : "resume"}`, {method: "POST"});
+    toast(pause ? "Agentic run paused. Resume continues this same session." : "Resuming the paused Agentic session.");
+    if (!pause && sessionId) watchAgenticJob(jobId, sessionId);
+  } catch (error) { toast(error.message, "error"); }
+  refreshAgenticQueue();
+  if (document.body.dataset.view === "enhance") refreshEnhancementLog();
+}
+
 async function watchAgenticJob(jobId, sessionId) {
   if (agenticWatchers.has(jobId)) return;
   agenticWatchers.add(jobId);
@@ -6034,6 +6656,7 @@ async function watchAgenticJob(jobId, sessionId) {
         }
         $("#agentic-session-status").title = job.phase || job.state;
       }
+      if (job.state === "paused" && lastState !== null && lastState !== "paused") toast(`Agentic session ${sessionId.slice(-8)} paused.`);
       lastState = job.state;
       if (job.state === "failed") throw new Error(job.error || "Agentic session failed");
       if (job.state === "cancelled") { toast("Agentic session ended."); break; }
@@ -6051,7 +6674,7 @@ async function watchAgenticJob(jobId, sessionId) {
   }
 }
 
-async function resumeAgenticSession(sessionId) {
+async function resumeAgenticSession(sessionId, {quiet = false} = {}) {
   try {
     const session = await Api.request(`${API_BASE}/api/agentic/sessions/${encodeURIComponent(sessionId)}`, {cache: "no-store"});
     setView("studio");
@@ -6061,6 +6684,7 @@ async function resumeAgenticSession(sessionId) {
     const guide = $("#enhance-extra-prompt");
     guide.value = session.guide || "";
     guide.dispatchEvent(new Event("input", {bubbles: true}));
+    if (Array.isArray(session.guide_attachments)) setAgenticAttachments(session.guide_attachments);
     activeAgenticSessionId = session.id;
     activeAgenticSessionKind = "resumed";
     agenticFocusDismissed = false;
@@ -6070,21 +6694,175 @@ async function resumeAgenticSession(sessionId) {
     if (activeAgenticRunJobId) watchAgenticJob(activeAgenticRunJobId, session.id);
     $("#enhance-composer").open = true;
     $("#enhance-composer").scrollIntoView({behavior: "smooth", block: "start"});
-    toast(activeAgenticRunJobId ? "Watching this running Agentic session." : "Agentic session restored. Edit the prompt or guide, then press Agentic to continue.");
-  } catch (error) { toast(error.message, "error"); }
+    if (!quiet) toast(activeAgenticRunJobId ? "Watching this running Agentic session." : "Agentic session restored. Edit the prompt or guide, then press Agentic to continue.");
+    return true;
+  } catch (error) { toast(error.message, "error"); return false; }
 }
+
+// Revise (2026-11-06): the header button of a finished session asks what Hermes should do next (finish the story,
+// add clips, change some), then queues that as a new run in the same session. "Open in composer" is the old
+// Resume: load the session into the Agentic card and edit there.
+let reviseSessionId = null;
+const reviseDraftKey = (id) => `h3-revise-draft:${id}`;
+function openReviseDialog(sessionId, title) {
+  reviseSessionId = sessionId;
+  $("#revise-dialog-session").textContent = title ? `"${title.length > 120 ? title.slice(0, 117) + "…" : title}"` : sessionId.slice(-8);
+  const input = $("#revise-input");
+  try { input.value = sessionStorage.getItem(reviseDraftKey(sessionId)) || ""; } catch { input.value = ""; }
+  $("#revise-dialog").hidden = false;
+  input.focus();
+}
+function closeReviseDialog() { $("#revise-dialog").hidden = true; reviseSessionId = null; }
+
+async function submitRevise(openOnly) {
+  const sessionId = reviseSessionId;
+  if (!sessionId) return;
+  const text = $("#revise-input").value.trim();
+  if (!openOnly && !text) { toast("Say what Hermes should do next, or use Open in composer.", "error"); $("#revise-input").focus(); return; }
+  const submit = $("#revise-submit");
+  submit.disabled = true;
+  try {
+    if (!await resumeAgenticSession(sessionId, {quiet: !openOnly})) return;
+    if (text) {
+      const guide = $("#enhance-extra-prompt");
+      guide.value = text;
+      guide.dispatchEvent(new Event("input", {bubbles: true}));
+    }
+    closeReviseDialog();
+    try { sessionStorage.setItem(reviseDraftKey(sessionId), ""); } catch { /* storage unavailable */ }
+    if (!openOnly) await agentic();
+  } finally { submit.disabled = false; }
+}
+
+$("#revise-form").addEventListener("submit", (event) => { event.preventDefault(); submitRevise(false); });
+$("#revise-open").addEventListener("click", () => submitRevise(true));
+$$("[data-revise-close]").forEach((node) => node.addEventListener("click", closeReviseDialog));
+$("#revise-input").addEventListener("input", (event) => {
+  if (!reviseSessionId) return;
+  try { sessionStorage.setItem(reviseDraftKey(reviseSessionId), event.target.value); } catch { /* storage unavailable */ }
+});
+$("#revise-input").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); submitRevise(false); }
+});
+document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("#revise-dialog").hidden) closeReviseDialog(); });
 
 showAgenticResume();
 
-async function agentic() {
-  const button = $("#agentic");
+// Files attached to the Agentic instructions (2026-11-05): images/videos are uploaded as role "agentic-guide"
+// references Hermes looks at (never sent to H3/Wan); documents come back as text that joins the brief.
+// `var` and a guard: resumeAgenticSession can run before this line on page load.
+var agenticAttachments;
+const AGENTIC_ATTACH_KEY = "h3-agentic-attachments", AGENTIC_ATTACH_MAX = 12;
+function loadAgenticAttachments() {
+  if (agenticAttachments) return agenticAttachments;
+  try { agenticAttachments = JSON.parse(localStorage.getItem(AGENTIC_ATTACH_KEY) || "[]"); } catch { agenticAttachments = []; }
+  if (!Array.isArray(agenticAttachments)) agenticAttachments = [];
+  return agenticAttachments;
+}
+function setAgenticAttachments(items) {
+  agenticAttachments = (items || []).slice(0, AGENTIC_ATTACH_MAX);
+  try { localStorage.setItem(AGENTIC_ATTACH_KEY, JSON.stringify(agenticAttachments)); } catch { /* storage full or unavailable */ }
+  renderAgenticAttachments();
+}
+function renderAgenticAttachments() {
+  const list = $("#agentic-attachments");
+  if (!list) return;
+  const items = loadAgenticAttachments();
+  list.hidden = !items.length;
+  list.replaceChildren(...items.map((item, index) => {
+    const chip = document.createElement("li");
+    chip.className = `agentic-attachment is-${item.kind}`;
+    const size = item.kind === "text" ? `${Math.max(1, Math.round((item.text || "").length / 1000))}k chars${item.truncated ? ", cut" : ""}` : item.kind;
+    chip.innerHTML = (item.thumb ? `<img src="${escapeHtml(item.thumb)}" alt="" loading="lazy">` : `<span class="agentic-attachment-icon">${uiIcon(item.kind === "text" ? "paperclip" : "film")}</span>`)
+      + `<span class="agentic-attachment-name"></span><small>${escapeHtml(size)}</small>`
+      + `<button type="button" class="agentic-attachment-remove" aria-label="Remove" title="Remove this file">&times;</button>`;
+    $(".agentic-attachment-name", chip).textContent = item.name || item.kind;
+    chip.title = item.kind === "text" ? (item.text || "").slice(0, 400) : item.name || "";
+    $(".agentic-attachment-remove", chip).addEventListener("click", () => setAgenticAttachments(loadAgenticAttachments().filter((_, at) => at !== index)));
+    return chip;
+  }));
+}
+async function attachAgenticFiles(files) {
+  files = [...files];
+  if (!files.length) return;
+  const room = AGENTIC_ATTACH_MAX - loadAgenticAttachments().length;
+  if (room <= 0) return toast(`At most ${AGENTIC_ATTACH_MAX} files can be attached to the instructions.`, "error");
+  const failed = [];
+  const button = $("#agentic-attach");
+  button.disabled = true;
+  try {
+    for (const original of files.slice(0, room)) {
+      let file = original;
+      try { file = new File([await original.arrayBuffer()], original.name, {type: original.type, lastModified: original.lastModified}); }
+      catch { failed.push(`${original.name} (couldn't be read; pick it again)`); continue; }
+      try {
+        if (file.type.startsWith("audio/") || AUDIO_FILE_PATTERN.test(file.name)) {
+          failed.push(`${file.name} (Hermes can't listen to audio; add it under Inputs → References instead)`);
+          continue;
+        }
+        let item;
+        const image = file.type.startsWith("image/") || /\.(png|jpe?g|webp|bmp)$/i.test(file.name);
+        const video = !image && (file.type.startsWith("video/") || /\.(mp4|webm|mov|mkv)$/i.test(file.name));
+        if (image || video) {
+          if (!file.type) file = new File([file], file.name, {type: image ? "image/png" : "video/mp4"});
+          const reference = await Api.upload(file, "agentic-guide");
+          item = {kind: image ? "image" : "video", id: reference.id, name: file.name,
+                  thumb: reference.small_url || reference.thumbnail_url || ""};
+        } else {
+          item = await Api.uploadRequest(`${API_BASE}/api/agentic/attachments/text`, () => {
+            const body = new FormData();
+            body.append("file", file);
+            return body;
+          }, Api.uploadKey(), `Reading ${file.name}`);
+          if (item.truncated) toast(`${file.name} is long; Hermes gets its first ${Math.round(item.chars / 1000)}k characters.`);
+        }
+        setAgenticAttachments([...loadAgenticAttachments(), item]);
+      } catch (error) { failed.push(`${file.name} (${error.message})`); }
+    }
+  } finally { button.disabled = false; }
+  if (files.length > room) failed.push(`${files.length - room} more (limit ${AGENTIC_ATTACH_MAX} files)`);
+  if (failed.length) toast(`Not attached: ${failed.join("; ")}`, "error");
+}
+function setupAgenticAttachments() {
+  const input = $("#agentic-attach-input"), editor = $(".guide-editor"), guide = $("#enhance-extra-prompt");
+  if (!input) return;
+  $("#agentic-attach").addEventListener("click", () => input.click());
+  input.addEventListener("change", () => { const files = [...input.files]; input.value = ""; attachAgenticFiles(files); });
+  editor.addEventListener("dragover", (event) => {
+    if (![...event.dataTransfer.types].includes("Files")) return;
+    event.preventDefault();
+    editor.classList.add("is-dropping");
+  });
+  editor.addEventListener("dragleave", () => editor.classList.remove("is-dropping"));
+  editor.addEventListener("drop", (event) => {
+    editor.classList.remove("is-dropping");
+    if (!event.dataTransfer.files.length) return;
+    event.preventDefault();
+    attachAgenticFiles(event.dataTransfer.files);
+  });
+  // Pasting a screenshot (or copied files) into the instructions attaches it; pasted text stays text.
+  guide.addEventListener("paste", (event) => {
+    const files = [...(event.clipboardData?.files || [])];
+    if (!files.length) return;
+    event.preventDefault();
+    attachAgenticFiles(files);
+  });
+  renderAgenticAttachments();
+}
+setupAgenticAttachments();
+
+async function agentic({direct = false} = {}) {
+  const button = direct ? $("#generate-button") : $("#agentic");
+  followShelf("agentic");
   // A run is already going: queue this one as a new session; the GPU queue runs them in turn.
   const queuedBehind = Boolean(activeAgenticRunJobId);
   if (queuedBehind) { activeAgenticSessionId = null; activeAgenticSessionKind = "new"; activeAgenticRunJobId = null; }
   const generation = collectSettings();
   generation.first_frame_id ||= state.firstFrameId;
   generation.last_frame_id ||= state.lastFrameId;
-  const guide = $("#enhance-extra-prompt").value;
+  const attachments = direct ? [] : loadAgenticAttachments();
+  let guide = direct ? "" : $("#enhance-extra-prompt").value;
+  if (!generation.prompt.trim() && !guide.trim() && attachments.length) guide = "Follow the attached files.";
   if (!generation.prompt.trim() && !guide.trim()) return toast("Write a prompt or an Agentic guide first.", "error");
   const guideAsPrompt = !generation.prompt.trim();
   if (guideAsPrompt) generation.prompt = guide.trim();
@@ -6094,8 +6872,9 @@ async function agentic() {
     generation.prompt = expandAliases(generation.prompt);
     const wasResuming = !queuedBehind && Boolean(activeAgenticSessionId);
     const body = { generation, guide, guide_as_prompt: guideAsPrompt,
+      guide_attachments: attachments.map(({kind, name, text, id}) => ({kind, name, text: text || "", id: id || null})),
       available_reference_ids: referencesByRole("references").map((reference) => reference.id),
-      resume_session_id: activeAgenticSessionId };
+      resume_session_id: activeAgenticSessionId, direct };
     const {job_id, session_id} = await Api.request(`${API_BASE}/api/enhancement/agentic`, {method: "POST", body});
     activeAgenticSessionId = session_id;
     activeAgenticSessionKind = wasResuming ? "resumed" : "new";
@@ -6104,15 +6883,15 @@ async function agentic() {
     enhanceLogJobId = job_id;
     enhanceLogRenderedCount = -1;
     watchAgenticJob(job_id, session_id);
-    toast(wasResuming ? "Resumed Agentic session." : queuedBehind ? "Agentic run queued behind the current one." : "Agentic run queued.");
+    toast(direct ? "Plan queued: its clips render in order, as written." : wasResuming ? "Resumed Agentic session." : queuedBehind ? "Agentic run queued behind the current one." : "Agentic run queued.");
     refreshAgenticQueue();
   } catch (error) { toast(error.message, "error"); }
-  finally { button.disabled = false; button.innerHTML = `${uiIcon("sparkles")} Queue Agentic run`; }
+  finally { button.disabled = false; if (direct) button.textContent = "Generate"; else button.innerHTML = `${uiIcon("sparkles")} Queue Agentic run`; }
 }
 
 // Queued Agentic runs (2026-10-18): every unfinished Agentic run, oldest first, in the Agentic card.
 const AGENTIC_QUEUE_LABELS = {waiting_for_gpu: "Waiting for GPU", running: "Planning", queuing: "Queuing clips", rendering: "Rendering",
-  reviewing: "Reviewing", awaiting_approval: "Needs approval"};
+  reviewing: "Reviewing", awaiting_approval: "Needs approval", paused: "Paused"};
 var agenticQueueBusy = false; // var: showAgenticResume() runs (and refreshes the queue) before this line on page load
 
 async function refreshAgenticQueue() {
@@ -6120,7 +6899,7 @@ async function refreshAgenticQueue() {
   agenticQueueBusy = true;
   try {
     const {jobs} = await Api.request(`${API_BASE}/api/enhancement/jobs`, {cache: "no-store"});
-    const runs = (jobs || []).filter((job) => job.agentic && AGENTIC_ACTIVE_STATES.has(job.state))
+    const runs = (jobs || []).filter((job) => job.agentic && (AGENTIC_ACTIVE_STATES.has(job.state) || job.state === "paused"))
       .sort((a, b) => a.created_at - b.created_at);
     const badge = $("#agentic-queue-badge");
     badge.hidden = runs.length < 2;
@@ -6132,12 +6911,17 @@ async function refreshAgenticQueue() {
       const item = document.createElement("li");
       item.className = "agentic-queue-item";
       item.classList.toggle("is-current", job.id === activeAgenticRunJobId);
+      item.classList.toggle("is-plan-run", Boolean(job.direct));
       item.dataset.state = job.state;
       item.style.setProperty("--session-hue", agenticSessionHue(job.session_id));
       const minutes = Math.max(0, Math.floor((Date.now() / 1000 - job.created_at) / 60));
       item.innerHTML = `<span class="agentic-queue-index">${index + 1}</span>`
-        + `<span class="agentic-queue-main"><span class="agentic-queue-prompt"></span><small><span class="agentic-queue-state">${escapeHtml(AGENTIC_QUEUE_LABELS[job.state] || job.state.replaceAll("_", " "))}</span> · ${minutes ? `${minutes} min ago` : "just now"} · ${escapeHtml(job.session_id.slice(-8))}</small></span>`
-        + `<span class="agentic-queue-buttons"><button type="button" class="secondary-button" data-queue-action="watch" title="Open this run's live Hermes log">Watch</button><button type="button" class="secondary-button danger" data-queue-action="stop">Stop</button></span>`;
+        + `<span class="agentic-queue-main"><span class="agentic-queue-prompt"></span><small>${job.direct ? "Plan · " : ""}<span class="agentic-queue-state">${escapeHtml(AGENTIC_QUEUE_LABELS[job.state] || job.state.replaceAll("_", " "))}</span> · ${minutes ? `${minutes} min ago` : "just now"} · ${escapeHtml(job.session_id.slice(-8))}</small></span>`
+        + `<span class="agentic-queue-buttons"><button type="button" class="secondary-button" data-queue-action="watch" title="Open this run's live Hermes log">Watch</button>`
+        + (job.state === "paused"
+          ? `<button type="button" class="secondary-button" data-queue-action="resume" title="Reload this same session and continue; anything the pause interrupted is generated again">Resume</button>`
+          : `<button type="button" class="secondary-button" data-queue-action="pause" title="Pause now and free the GPU; Resume continues this same session">Pause</button>`)
+        + `<button type="button" class="secondary-button danger" data-queue-action="stop">Stop</button></span>`;
       $(".agentic-queue-prompt", item).textContent = job.prompt_preview || "(no prompt)";
       item.dataset.jobId = job.id;
       item.dataset.sessionId = job.session_id;
@@ -6168,6 +6952,9 @@ $("#agentic-queue-list").addEventListener("click", async (event) => {
     enhanceLogJobId = item.dataset.jobId; enhanceLogPinned = true; enhanceLogRenderedCount = -1; enhanceLogFollow = true;
     setView("enhance");
     refreshEnhancementLog();
+  } else if (button.dataset.queueAction === "pause" || button.dataset.queueAction === "resume") {
+    button.disabled = true;
+    await setAgenticPaused(item.dataset.jobId, item.dataset.sessionId, button.dataset.queueAction === "pause");
   } else {
     try {
       await Api.request(`${API_BASE}/api/enhancement/jobs/${encodeURIComponent(item.dataset.jobId)}/cancel`, {method: "POST"});
@@ -6211,13 +6998,18 @@ async function adoptAgenticSession(saved) {
 const guideMenu = { matches: [], index: 0, replace: 0 };
 
 function highlightGuide(text) {
-  let html = "";
-  let last = 0;
-  for (const match of text.matchAll(FINISH_TRIGGER_RE)) {
-    html += escapeHtml(text.slice(last, match.index)) + `<span class="hl-finish">${escapeHtml(match[0])}</span>`;
-    last = match.index + match[0].length;
-  }
-  return html + escapeHtml(text.slice(last)) + "\u200b";
+  const plain = (piece) => {
+    let html = "";
+    let last = 0;
+    for (const match of piece.matchAll(FINISH_TRIGGER_RE)) {
+      html += escapeHtml(piece.slice(last, match.index)) + `<span class="hl-finish">${escapeHtml(match[0])}</span>`;
+      last = match.index + match[0].length;
+    }
+    return html + escapeHtml(piece.slice(last));
+  };
+  // @ calls to the RAG library (window.BunnyRag, shared/ui/h3-studio.js) win over finishing words.
+  const pieces = window.BunnyRag ? window.BunnyRag.split(text) : [{text}];
+  return pieces.map((piece) => piece.rag ? `<span class="${piece.rag === "known" ? "hl-rag" : "hl-rag-unknown"}">${escapeHtml(piece.text)}</span>` : plain(piece.text)).join("") + "\u200b";
 }
 
 function closeGuideMenu() {
@@ -6257,6 +7049,7 @@ function bindGuideHighlight() {
   };
   const update = () => {
     if (textarea.selectionStart !== textarea.selectionEnd) return closeGuideMenu();
+    if (/(?:^|[^\w@])@(?:\{[^}\n]*|[\w.-]*)$/.test(textarea.value.slice(0, textarea.selectionStart))) return closeGuideMenu(); // the RAG menu's turn
     const match = textarea.value.slice(0, textarea.selectionStart).match(FINISH_FRAGMENT);
     const matches = match ? finishSuggestions(match[1]) : [];
     if (!matches.length) return closeGuideMenu();
@@ -6298,6 +7091,7 @@ function bindGuideHighlight() {
     insertGuideSuggestion(guideMenu.matches[Number(option.dataset.guideIndex)]);
   });
   new ResizeObserver(sync).observe(textarea);
+  window.BunnyRag?.attach(textarea, {url: `${API_BASE}/api/agentic/rag`, layer: false, onUpdate: sync});
   sync();
 }
 bindGuideHighlight();
@@ -6316,8 +7110,9 @@ function undoEnhance() {
 // at `speed`, plus `hold_end` seconds of frozen last frame. The preview runs a
 // clock over that timeline (the video covers the trimmed part, a hold phase
 // the rest) and plays the music/voice clips in sync. Color/speed/crop/flip are
-// approximated with CSS; gamma, temperature, sharpen, denoise, grain, reverse,
-// stabilize and interpolation only show up in the render.
+// approximated with CSS, the rest of the look/effects (gamma, sharpen, grain,
+// tone curve, teal & orange, glow, RGB split, pixelate, slow zoom) with an SVG
+// filter; denoise, reverse, stabilize and interpolation only show up in the render.
 
 const PE_DRAFT_KEY = "h3-postedit-draft";
 const PE_LOOK_SLIDERS = [
@@ -6654,6 +7449,101 @@ function peReadForm() {
 }
 
 /* ---- preview ---- */
+// ffmpeg's curves presets (vf_curves.c), as [r, g, b] point lists ("m" = all channels).
+const PE_TONE_CURVES = {
+  lighter: { m: [[0, 0], [0.4, 0.5], [1, 1]] },
+  darker: { m: [[0, 0], [0.5, 0.4], [1, 1]] },
+  increase_contrast: { m: [[0, 0], [0.149, 0.066], [0.831, 0.905], [0.905, 0.98], [1, 1]] },
+  medium_contrast: { m: [[0, 0], [0.286, 0.219], [0.639, 0.643], [1, 1]] },
+  strong_contrast: { m: [[0, 0], [0.301, 0.196], [0.592, 0.6], [0.686, 0.737], [1, 1]] },
+  vintage: { r: [[0, 0.11], [0.42, 0.51], [1, 0.95]], g: [[0, 0], [0.5, 0.48], [1, 1]], b: [[0, 0.22], [0.49, 0.44], [1, 0.8]] },
+  cross_process: { r: [[0, 0], [0.25, 0.156], [0.501, 0.501], [0.686, 0.745], [1, 1]], g: [[0, 0], [0.25, 0.188], [0.38, 0.501], [0.745, 0.815], [1, 0.815]], b: [[0, 0], [0.231, 0.094], [0.709, 0.874], [1, 1]] },
+  color_negative: { r: [[0.129, 1], [0.466, 0.498], [0.725, 0]], g: [[0.109, 1], [0.301, 0.498], [0.517, 0]], b: [[0.098, 1], [0.235, 0.498], [0.423, 0]] },
+};
+
+function peCurveAt(points, v) {
+  if (v <= points[0][0]) return points[0][1];
+  for (let i = 1; i < points.length; i++) {
+    const [x0, y0] = points[i - 1], [x1, y1] = points[i];
+    if (v <= x1) return y0 + (y1 - y0) * (v - x0) / (x1 - x0);
+  }
+  return points[points.length - 1][1];
+}
+
+// The look/effects ffmpeg applies that CSS filters can't, as one SVG filter on
+// the preview video (same order as postedit.py: gamma, sharpen, grain, then
+// tone curve, teal & orange, glow, RGB split, pixelate). Pixel sizes are
+// source pixels, scaled to the preview. Returns false when nothing is needed.
+function peBuildFx() {
+  const edit = pe.edit, video = $("#pe-video");
+  const scale = pe.source?.width && video.clientWidth ? video.clientWidth / pe.source.width : 1;
+  const parts = [];
+  let last = "SourceGraphic", n = 0;
+  const step = (markup) => { const id = `fx${n++}`; parts.push(markup.replace("%IN%", last).replace("%OUT%", id)); last = id; };
+
+  // Per-channel tables: gamma (eq: v^(1/gamma)), tone curve, teal & orange (colorbalance shadows/mids/highlights).
+  const curve = PE_TONE_CURVES[edit.tone_curve];
+  const teal = edit.teal_orange || 0;
+  if (edit.gamma !== 1 || curve || teal) {
+    const shift = { r: [-0.25, 0.06, 0.18], g: [0.04, 0, 0.04], b: [0.25, -0.06, -0.2] };
+    const table = (channel) => Array.from({ length: 33 }, (_, i) => {
+      let v = Math.pow(i / 32, 1 / (edit.gamma || 1));
+      if (curve) v = peCurveAt(curve[channel] || curve.m, v);
+      if (teal) {
+        // vf_colorbalance get_component weights (a=4, b=0.333, scale=0.7), with the channel as lightness.
+        const [rs, rm, rh] = shift[channel], w = (x) => peClamp(x * 4 + 0.5, 0, 1) * 0.7;
+        v += teal * (rs * w(0.333 - v) + rm * w(v - 0.333) * w(0.667 - v) / 0.7 + rh * w(v - 0.667));
+      }
+      return peClamp(v, 0, 1).toFixed(4);
+    }).join(" ");
+    step(`<feComponentTransfer in="%IN%" result="%OUT%"><feFuncR type="table" tableValues="${table("r")}"/><feFuncG type="table" tableValues="${table("g")}"/><feFuncB type="table" tableValues="${table("b")}"/></feComponentTransfer>`);
+  }
+  if (edit.sharpen > 0) {
+    const a = (edit.sharpen * 0.35).toFixed(3), c = (1 + edit.sharpen * 1.4).toFixed(3);
+    step(`<feConvolveMatrix in="%IN%" order="3" preserveAlpha="true" edgeMode="duplicate" kernelMatrix="0 -${a} 0 -${a} ${c} -${a} 0 -${a} 0" result="%OUT%"/>`);
+  }
+  if (edit.grain > 0) {
+    // ffmpeg noise=alls=N is roughly ±N/255; fractal noise spreads ±0.25 around mid-grey.
+    const k = Math.min(1, edit.grain / 255 * 3.5).toFixed(3);
+    parts.push(`<feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="1" seed="${pe.grainSeed || 0}" result="grain_raw"/>`,
+      `<feColorMatrix in="grain_raw" type="matrix" values="0.33 0.33 0.33 0 0  0.33 0.33 0.33 0 0  0.33 0.33 0.33 0 0  0 0 0 0 1" result="grain"/>`);
+    step(`<feComposite in="%IN%" in2="grain" operator="arithmetic" k1="0" k2="1" k3="${k}" k4="${(-k / 2).toFixed(4)}" result="%OUT%"/>`);
+  }
+  if (edit.glow > 0) {
+    // split → gblur → screen blend at all_opacity; screen(a, o·b) = a + o·(screen(a, b) − a).
+    const sigma = Math.max(2, Math.min(pe.source?.width || 0, pe.source?.height || 0) * (0.01 + 0.025 * edit.glow)) * scale;
+    const opacity = (0.25 + 0.5 * edit.glow).toFixed(3);
+    const base = last;
+    parts.push(`<feGaussianBlur in="${base}" stdDeviation="${sigma.toFixed(2)}" edgeMode="duplicate" result="glow_blur"/>`,
+      `<feComponentTransfer in="glow_blur" result="glow_dim"><feFuncR type="linear" slope="${opacity}"/><feFuncG type="linear" slope="${opacity}"/><feFuncB type="linear" slope="${opacity}"/></feComponentTransfer>`);
+    step(`<feBlend in="%IN%" in2="glow_dim" mode="screen" result="%OUT%"/>`);
+  }
+  if (edit.rgb_split > 0) {
+    // rgbashift rh=-N bh=+N: red moves left, blue right.
+    const dx = Math.max(1, edit.rgb_split * scale).toFixed(2), base = last;
+    const only = (row) => `<feColorMatrix in="${base}" type="matrix" values="${row}"/>`;
+    parts.push(only("1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0").replace("/>", ` result="split_r"/>`),
+      `<feOffset in="split_r" dx="-${dx}" result="split_r2"/>`,
+      only("0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0").replace("/>", ` result="split_b"/>`),
+      `<feOffset in="split_b" dx="${dx}" result="split_b2"/>`,
+      only("0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0").replace("/>", ` result="split_g"/>`),
+      `<feComposite in="split_r2" in2="split_g" operator="arithmetic" k2="1" k3="1" result="split_rg"/>`);
+    step(`<feComposite in="split_rg" in2="split_b2" operator="arithmetic" k2="1" k3="1" result="%OUT%"/>`);
+  }
+  if (edit.pixelate > 1) {
+    // Sample one pixel per block (flood + tile mask), then grow it over the block.
+    const size = Math.max(2, Math.round(edit.pixelate * scale)), half = size / 2;
+    parts.push(`<feFlood x="${half}" y="${half}" width="1" height="1" flood-color="#fff" result="pix_dot"/>`,
+      `<feComposite in="pix_dot" in2="pix_dot" width="${size}" height="${size}" result="pix_cell"/>`,
+      `<feTile in="pix_cell" result="pix_grid"/>`,
+      `<feComposite in="${last}" in2="pix_grid" operator="in" result="pix_pick"/>`);
+    step(`<feMorphology in="pix_pick" operator="dilate" radius="${half}" result="%OUT%"/>`);
+  }
+  if (!parts.length) return false;
+  $("#pe-fx").innerHTML = parts.join("");
+  return true;
+}
+
 function peApplyLook() {
   const edit = pe.edit;
   const warmth = peClamp((6500 - edit.temperature) / 5500, 0, 1);
@@ -6664,11 +7554,27 @@ function peApplyLook() {
   ];
   if (warmth) filters.push(`sepia(${(warmth * 0.35).toFixed(3)})`);
   if (edit.sharpen < 0) filters.push(`blur(${(-edit.sharpen * 0.6).toFixed(2)}px)`);
+  if (peBuildFx()) filters.push("url(#pe-fx)");
   const video = $("#pe-video");
   video.style.filter = filters.join(" ");
   const vignette = $("#pe-vignette");
   vignette.hidden = !edit.vignette;
   vignette.style.background = `radial-gradient(ellipse at center, transparent ${Math.round(70 - edit.vignette * 45)}%, rgba(0,0,0,${(0.35 + edit.vignette * 0.55).toFixed(2)}) 100%)`;
+  peAnimateFx(pe.clock.t);
+}
+
+// Animated bits of the look: fresh grain each frame (allf=t) and the slow zoom over the output length.
+function peAnimateFx(t) {
+  const video = $("#pe-video"), frame = $("#pe-frame");
+  if (pe.edit.grain > 0 && pe.clock.playing) {
+    pe.grainSeed = ((pe.grainSeed || 0) + 1) % 997;
+    $("#pe-fx feTurbulence")?.setAttribute("seed", pe.grainSeed);
+  }
+  const z = pe.edit.slow_zoom || 0;
+  frame.style.overflow = z ? "hidden" : "";
+  if (!z) { video.style.transform = ""; return; }
+  const progress = peClamp(t / (peLength() || 1), 0, 1);
+  video.style.transform = `scale(${(1 + Math.abs(z) * (z > 0 ? progress : 1 - progress)).toFixed(4)})`;
 }
 
 function peApplyFrame() {
@@ -6710,14 +7616,9 @@ function peApplyAudioLevels() {
 function peNotes() {
   const notes = [];
   if (pe.edit.reverse) notes.push("reverse");
-  if (pe.edit.gamma !== 1) notes.push("gamma");
-  if (pe.edit.sharpen > 0) notes.push("sharpen");
   if (pe.edit.denoise) notes.push("denoise");
-  if (pe.edit.grain) notes.push("grain");
   if (pe.edit.stabilize) notes.push("stabilize");
   if (pe.edit.fps) notes.push(pe.edit.interpolate ? "interpolation" : "fps");
-  const fx = [["tone_curve", "tone curve"], ["teal_orange", "teal & orange"], ["glow", "glow"], ["rgb_split", "RGB split"], ["pixelate", "pixelate"], ["slow_zoom", "slow zoom"]];
-  for (const [field, label] of fx) if (peDiffers(field)) notes.push(label);
   if (pe.edit.audio_denoise || pe.edit.normalize || (pe.edit.duck && pe.edit.voices.length)
     || Object.keys(PE_AUDIO_FX).some(peDiffers)) notes.push("audio processing");
   if (pe.edit.next_job_id || pe.edit.next_reference_id) notes.push("fade into the next video");
@@ -6852,6 +7753,7 @@ function peTick() {
   const fade = $("#pe-fade");
   fade.style.background = pe.edit.fade_color;
   fade.style.opacity = peFadeLevel(clock.t);
+  peAnimateFx(clock.t);
   setText($("#pe-time"), `${peTime(clock.t)} / ${peTime(length)}`);
   peSyncAudio();
   peRenderOverlays();
@@ -8536,6 +9438,7 @@ function fillEnhancementForm() {
   $("#agentic-stage-enabled").checked = Boolean(config.agentic_stage_enabled);
   $("#agentic-stage-review").checked = Boolean(config.agentic_stage_review);
   $("#agentic-stage-approval").checked = Boolean(config.agentic_stage_approval);
+  $("#agentic-prompt-approval").checked = Boolean(config.agentic_prompt_approval);
   $("#agentic-whisper-check").checked = Boolean(config.agentic_whisper_check);
   for (const [id, key] of AGENTIC_REVIEW_OPTIONS) $(id).checked = Boolean(config[key]);
   $("#agentic-review-cap").checked = config.agentic_review_cap ?? true;
@@ -8599,6 +9502,7 @@ async function saveEnhancement() {
     agentic_full_preset: $("#agentic-full-preset").value,
     agentic_stage_review: $("#agentic-stage-review").checked,
     agentic_stage_approval: $("#agentic-stage-enabled").checked && $("#agentic-stage-approval").checked,
+    agentic_prompt_approval: $("#agentic-prompt-approval").checked,
     agentic_whisper_check: $("#agentic-stage-enabled").checked && $("#agentic-whisper-check").checked,
     ...Object.fromEntries(AGENTIC_REVIEW_OPTIONS.map(([id, key]) => [key, $(id).checked])),
     agentic_final_review: $("#agentic-final-review").checked,
@@ -8671,6 +9575,7 @@ async function refreshEnhancementLog() {
     if (!selected) {
       $("#enhance-log-state").textContent = "Idle";
       $("#enhance-log-cancel").hidden = true;
+      $("#enhance-log-pause").hidden = true;
       $("#enhance-log-foot").textContent = "Waiting for a prompt";
       $("#enhance-log-body").replaceChildren();
       $("#enhance-log-body").append(Object.assign(document.createElement("p"), {className: "enhance-log-empty", textContent: "Run Enhance in the Studio to see its queue and model activity here."}));
@@ -8678,7 +9583,13 @@ async function refreshEnhancementLog() {
       return;
     }
     const job = await Api.request(`${API_BASE}/api/enhancement/jobs/${selected}`, { cache: "no-store" });
-    $("#enhance-log-cancel").hidden = !AGENTIC_ACTIVE_STATES.has(job.state);
+    renderPromptApproval(job);
+    $("#enhance-log-cancel").hidden = !AGENTIC_ACTIVE_STATES.has(job.state) && job.state !== "paused";
+    const pauseButton = $("#enhance-log-pause");
+    pauseButton.hidden = !job.agentic || !(AGENTIC_ACTIVE_STATES.has(job.state) || job.state === "paused");
+    pauseButton.textContent = job.state === "paused" ? "Resume" : "Pause";
+    pauseButton.dataset.action = job.state === "paused" ? "resume" : "pause";
+    pauseButton.dataset.sessionId = job.session_id || "";
     const stateNode = $("#enhance-log-state");
     stateNode.textContent = job.state.replaceAll("_", " ");
     stateNode.dataset.state = job.state;
@@ -8728,6 +9639,78 @@ async function refreshEnhancementLog() {
   } catch (error) {
     $("#enhance-log-foot").textContent = `Log unavailable: ${error.message}`;
   } finally { enhanceLogBusy = false; }
+}
+
+// Prompt approval (Hermes setting "Approve the clip prompts before rendering"): the run waits until you approve the
+// written prompts, reject them with a reason, or flag single clips with what to change in each.
+let promptApprovalKey = "";
+function renderPromptApproval(job) {
+  const box = $("#enhance-prompt-approval");
+  const waiting = job.awaiting === "prompts" && job.state === "awaiting_approval" && (job.clips || []).length;
+  if (!waiting) { box.hidden = true; box.replaceChildren(); promptApprovalKey = ""; return; }
+  const key = `${job.session_run_id || ""}:${job.clips.map((clip) => `${clip.id}:${clip.prompt.length}:${clip.prompt.slice(-40)}`).join("|")}`;
+  box.hidden = false;
+  if (key === promptApprovalKey) return;          // keep what you're typing across polls
+  promptApprovalKey = key;
+  const make = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text != null) node.textContent = text; return node; };
+  const head = make("div", "prompt-approval-head");
+  head.append(make("strong", "", `Approve ${job.clips.length} clip prompt${job.clips.length === 1 ? "" : "s"} before rendering`),
+    make("span", "prompt-approval-hint", "Read them, then approve, reject with a reason, or flag the clips to change"));
+  const list = make("div", "prompt-approval-list");
+  for (const clip of job.clips) {
+    const item = make("details", "prompt-approval-clip");
+    item.dataset.clip = clip.id;
+    const summary = make("summary");
+    const flag = make("label", "prompt-approval-flag");
+    const box2 = make("input"); box2.type = "checkbox"; box2.className = "prompt-approval-check";
+    flag.append(box2, " Flag");
+    flag.addEventListener("click", (event) => event.stopPropagation());
+    summary.append(make("span", "prompt-approval-title", `Clip ${clip.id}`),
+      make("span", "prompt-approval-meta", `${clip.duration || "?"} s · ${clip.action || "NEW"}${clip.source != null && clip.action === "EXTEND" ? ` from ${clip.source}` : ""} · ${({ text: "text", ref2v: "reference", fl2v: "keyframe" })[clip.mode] || clip.mode || ""}`),
+      flag);
+    const text = make("pre", "prompt-approval-text", clip.prompt);
+    const note = make("textarea", "prompt-approval-note"); note.rows = 2; note.maxLength = 2000; note.hidden = true;
+    note.placeholder = `What should change in clip ${clip.id}?`;
+    box2.addEventListener("change", () => { note.hidden = !box2.checked; item.classList.toggle("is-flagged", box2.checked); if (box2.checked) { item.open = true; note.focus(); } updateButtons(); });
+    note.addEventListener("input", updateButtons);
+    item.append(summary, note, text);
+    list.append(item);
+  }
+  const reason = make("textarea", "prompt-approval-reason"); reason.rows = 2; reason.maxLength = 4000;
+  reason.placeholder = "Reason (needed to reject; optional notes when approving or flagging)";
+  reason.addEventListener("input", updateButtons);
+  const actions = make("div", "prompt-approval-actions");
+  const approve = make("button", "primary-button", "Approve and render"); approve.type = "button";
+  const flagged = make("button", "secondary-button", "Change flagged clips"); flagged.type = "button";
+  const reject = make("button", "secondary-button danger", "Reject"); reject.type = "button";
+  actions.append(approve, flagged, reject);
+  function chosen() {
+    return Object.fromEntries($$(".prompt-approval-clip", list).filter((item) => $(".prompt-approval-check", item).checked)
+      .map((item) => [item.dataset.clip, $(".prompt-approval-note", item).value.trim()]));
+  }
+  function updateButtons() {
+    const flags = chosen();
+    const count = Object.keys(flags).length;
+    flagged.disabled = !count || Object.values(flags).some((value) => !value);
+    flagged.textContent = count ? `Change ${count} flagged clip${count === 1 ? "" : "s"}` : "Change flagged clips";
+    flagged.title = !count ? "Tick Flag on a clip first" : flagged.disabled ? "Say what to change in each flagged clip" : "";
+    reject.disabled = !reason.value.trim();
+    reject.title = reject.disabled ? "Write the reason first" : "Hermes revises the whole plan from your reason, then asks again";
+  }
+  async function send(action, button) {
+    const body = { action, notes: reason.value.trim(), clip_notes: action === "flag" ? chosen() : {} };
+    [approve, flagged, reject].forEach((b) => { b.disabled = true; });
+    try {
+      await Api.request(`${API_BASE}/api/agentic/sessions/${encodeURIComponent(job.session_id)}/prompt-decision`, { method: "POST", body });
+      toast(action === "approve" ? "Prompts approved; rendering." : action === "reject" ? "Rejected; Hermes is revising the plan." : "Hermes is rewriting the flagged clips.");
+      box.hidden = true; promptApprovalKey = "";
+    } catch (error) { toast(error.message, "error"); updateButtons(); approve.disabled = false; }
+  }
+  approve.addEventListener("click", () => send("approve", approve));
+  flagged.addEventListener("click", () => send("flag", flagged));
+  reject.addEventListener("click", () => send("reject", reject));
+  box.replaceChildren(head, list, reason, actions);
+  updateButtons();
 }
 
 const STEER_COMMANDS = [
@@ -8845,6 +9828,12 @@ function bindEnhancement() {
     enhanceLogRenderedCount = -1; refreshEnhancementLog();
   });
   setInterval(() => { if (document.body.dataset.view === "enhance") refreshEnhancementLog(); }, 2000);
+  $("#enhance-log-pause").addEventListener("click", async (event) => {
+    if (!enhanceLogJobId) return;
+    event.currentTarget.disabled = true;
+    try { await setAgenticPaused(enhanceLogJobId, event.currentTarget.dataset.sessionId, event.currentTarget.dataset.action === "pause"); }
+    finally { event.currentTarget.disabled = false; }
+  });
   $("#enhance-log-cancel").addEventListener("click", async () => {
     if (!enhanceLogJobId) return;
     try {
@@ -8862,7 +9851,7 @@ function bindEnhancement() {
   $("#agentic-final-review").addEventListener("change", syncAgenticSettingGroups);
   $("#agentic-review-cap").addEventListener("change", syncAgenticSettingGroups);
   ["#agentic-browser-enabled", "#agentic-video-search", "#agentic-manage-references", "#agentic-character-screenshots", "#agentic-lora-gallery", "#agentic-continuation-tail", "#agentic-continuation-tail-audio", "#agentic-scene-screenshots", "#agentic-rushed-dialogue-check", "#agentic-stage-enabled", "#agentic-stage-preset", "#agentic-full-preset",
-   "#agentic-stage-review", "#agentic-stage-approval", "#agentic-whisper-check", "#agentic-final-review", "#agentic-review-cap", "#agentic-review-rounds",
+   "#agentic-stage-review", "#agentic-stage-approval", "#agentic-prompt-approval", "#agentic-whisper-check", "#agentic-final-review", "#agentic-review-cap", "#agentic-review-rounds",
    ...AGENTIC_REVIEW_OPTIONS.map(([id]) => id)].forEach((selector) =>
     $(selector).addEventListener("change", scheduleEnhancementSave));
   $("#agentic-refinement-prompt").addEventListener("input", scheduleEnhancementSave);
@@ -9813,7 +10802,14 @@ function bindUI() {
   $("#generate-form").addEventListener("invalid", (event) => {
     for (let node = event.target.parentElement; node; node = node.parentElement) if (node.tagName === "DETAILS") node.open = true;
   }, true);
-  $("#enhance").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); enhance(); });
+  $("#enhance").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); enhancePanel($("#enhance-panel").hidden); });
+  $("#enhance-go").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); enhance(); });
+  $("#enhance-close").addEventListener("click", (event) => { event.preventDefault(); enhancePanel(false); });
+  $("#enhance-wish").addEventListener("keydown", (event) => {
+    // Inside the Generate form: Enter must run Enhance, never submit a render.
+    if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); if (!$("#enhance-go").disabled) enhance(); }
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); enhancePanel(false); }
+  });
   $("#agentic").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); agentic(); });
   $("#enhance-undo").addEventListener("click", undoEnhance);
   $("#enhance-settings").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); setView("enhance"); });
@@ -9851,6 +10847,15 @@ function bindUI() {
     scheduleEstimate();
   });
 
+  $$("[data-shelf]").forEach((item) => item.classList.toggle("is-active", item.dataset.shelf === state.shelf));
+  $$("[data-shelf]").forEach((button) => button.addEventListener("click", () => setShelf(button.dataset.shelf)));
+  $("#jobs-list").addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-stitch-session]");
+    if (!chip) return;
+    event.preventDefault();
+    event.stopPropagation();
+    showAgenticSessionTile(chip.dataset.stitchSession);
+  });
   $$('[data-filter]').forEach((button) => button.addEventListener("click", () => {
     state.filter = button.dataset.filter;
     $$('[data-filter]').forEach((item) => item.classList.toggle("is-active", item === button));
@@ -10069,12 +11074,23 @@ function fillOptions(id, values) {
 // tooltip lists them, and are tinted while enabled as a reminder to put a
 // trigger in the prompt. Strength starts at the recommended value, which
 // data-default-strength keeps for the Reset button.
+// Slider LoRAs dial one concept both ways: negative weights reverse the effect.
+const SLIDER_LIMIT = 10;
+const strengthMin = (item) => (item.slider ? -SLIDER_LIMIT : 0);
+const strengthMax = (item) => (item.slider ? SLIDER_LIMIT : 2);
+function sliderRangeHtml(item, value, attr) {
+  const span = Math.min(SLIDER_LIMIT, Math.max(2, Math.ceil(Math.abs(Number(item.default_strength) || 1) * 2)));
+  return `<span class="lora-slider-track" title="Slider LoRA: left of 0 reverses the effect"><span class="lora-slider-end">&minus;</span>
+    <input type="range" ${attr} min="${-span}" max="${span}" step="0.05" value="${escapeHtml(String(value))}" list="lora-slider-zero" aria-label="${escapeHtml(item.label)} slider">
+    <span class="lora-slider-end">+</span></span>`;
+}
+
 function loraRowHtml(item, dataAttr, checked) {
   const triggers = item.triggers || [];
   const tip = `Trigger words:\n${triggers.map((word) => `• ${word}`).join("\n")}`;
-  const strengthTitle = `Recommended ${item.default_strength}${item.strength_note ? ` — ${item.strength_note}` : ""}`;
+  const strengthTitle = `Recommended ${item.default_strength}${item.slider ? " (slider: negative values reverse it)" : ""}${item.strength_note ? ` — ${item.strength_note}` : ""}`;
   return `
-    <div class="field-row lora-row${triggers.length ? " has-trigger" : ""}${checked ? " is-enabled" : ""}" ${dataAttr}>
+    <div class="field-row lora-row${triggers.length ? " has-trigger" : ""}${checked ? " is-enabled" : ""}${item.slider ? " is-slider" : ""}" ${dataAttr}>
       <label title="${escapeHtml(item.filename)}">
         <input type="checkbox" data-lora-enabled ${checked ? "checked" : ""}>
         <span class="lora-name">${escapeHtml(item.label)}</span>
@@ -10083,8 +11099,10 @@ function loraRowHtml(item, dataAttr, checked) {
       <span class="lora-badges">
         ${triggers.length ? `<span class="lora-badge lora-badge-trigger" tabindex="0" aria-label="${escapeHtml(tip)}" data-tip="${escapeHtml(tip)}">!</span>` : ""}
         ${item.url ? `<a class="lora-badge" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" title="Open source page — ${escapeHtml(strengthTitle)}">i</a>` : ""}
+        ${item.slider ? `<span class="lora-badge lora-badge-slider" title="Slider LoRA: drag below 0 to reverse the effect">&#8646;</span>` : ""}
       </span>
-      <input type="number" class="lora-strength" data-lora-strength data-default-strength="${item.default_strength}" min="0" max="2" step="0.05" value="${item.default_strength}" title="${escapeHtml(strengthTitle)}">
+      ${item.slider ? sliderRangeHtml(item, item.default_strength, "data-lora-slider") : ""}
+      <input type="number" class="lora-strength" data-lora-strength data-default-strength="${item.default_strength}" min="${strengthMin(item)}" max="${strengthMax(item)}" step="0.05" value="${item.default_strength}" title="${escapeHtml(strengthTitle)}">
     </div>`;
 }
 
@@ -10121,6 +11139,7 @@ function bindLoraList(host, onChange) {
 
 function resetLoraStrengths(host) {
   $$("[data-lora-strength]", host).forEach((input) => { input.value = input.dataset.defaultStrength; });
+  syncSliderRanges();
 }
 
 function renderLoraList(slots) {
@@ -10539,7 +11558,8 @@ function matchingGalleryItems() {
   const group = $("#lora-gallery-group").value;
   const enabledOnly = $("#lora-gallery-enabled-only").checked;
   return galleryItems().filter(({ item, row }) => {
-    if (group && item.group !== group) return false;
+    if (group === "__sliders__") { if (!item.slider) return false; }
+    else if (group && item.group !== group) return false;
     if (enabledOnly && !(row && $("[data-lora-enabled]", row).checked)) return false;
     if (!query) return true;
     const info = gallery.index?.[item.filename] || {};
@@ -10775,8 +11795,9 @@ async function openLoraGallery() {
   const groups = [...new Set(galleryItems().map(({ item }) => item.group).filter(Boolean))];
   const group = $("#lora-gallery-group");
   const previous = group.value;
-  group.innerHTML = `<option value="">All groups</option>` + groups.map((name) => `<option>${escapeHtml(name)}</option>`).join("");
-  group.value = groups.includes(previous) ? previous : "";
+  group.innerHTML = `<option value="">All groups</option>` + (galleryItems().some(({ item }) => item.slider) ? `<option value="__sliders__">&#8646; Sliders only</option>` : "") +
+    groups.map((name) => `<option>${escapeHtml(name)}</option>`).join("");
+  group.value = groups.includes(previous) || previous === "__sliders__" ? previous : "";
   showGalleryGrid();
   if (!gallery.index) {
     $("#lora-gallery-grid").innerHTML = `<p class="hint lora-gallery-empty">Loading…</p>`;
@@ -10892,11 +11913,13 @@ function galleryCardHtml({ item, row }, detail = false) {
             ${source ? `<p class="lora-card-source">${escapeHtml(source)}</p>` : ""}
           </div>
           <div class="lora-card-controls">
-            <input type="number" class="lora-strength" data-gallery-strength min="0" max="2" step="0.05" value="${escapeHtml(String(strength))}" aria-label="Strength" ${row ? "" : "disabled"}>
+            ${item.slider ? sliderRangeHtml(item, strength, `data-gallery-strength ${row ? "" : "disabled"}`) : ""}
+            <input type="number" class="lora-strength" data-gallery-strength min="${strengthMin(item)}" max="${strengthMax(item)}" step="0.05" value="${escapeHtml(String(strength))}" aria-label="Strength" ${row ? "" : "disabled"}>
             <input type="checkbox" data-gallery-toggle ${enabled ? "checked" : ""} ${!row || box.disabled ? "disabled" : ""} aria-label="Use ${escapeHtml(item.label)}">
           </div>
         </div>
         <div class="lora-card-meta">
+          ${item.slider ? `<span class="lora-chip lora-chip-slider" title="Negative strengths reverse the effect">&#8646; Slider</span>` : ""}
           ${item.source === "trainer" ? `<span class="lora-chip lora-trainer-badge" title="LoRA sent from the Trainer after its final epoch">Trainer LoRA</span>` : ""}
           ${detail && item.source === "link" ? `<span class="lora-chip" title="Hermes named the installed file">File: ${escapeHtml(item.filename.split("/").pop())}</span>` : ""}
           ${item.group ? `<span class="lora-chip">${escapeHtml(item.group)}</span>` : ""}
@@ -10905,7 +11928,7 @@ function galleryCardHtml({ item, row }, detail = false) {
           ${triggers.map((trigger) => `<button type="button" class="lora-chip lora-trigger" data-gallery-trigger="${escapeHtml(trigger.replace(/\s*\(.*\)$/, ""))}" title="Add to the prompt">${escapeHtml(trigger)}</button>`).join("")}
         </div>
         <div class="lora-card-aliases" data-gallery-aliases="${escapeHtml(item.filename)}">${galleryAliasesHtml(item.filename)}</div>
-        <p class="lora-card-strength">Recommended ${escapeHtml(String(item.default_strength))}${item.strength_note ? ` &mdash; ${escapeHtml(item.strength_note)}` : ""}</p>
+        <p class="lora-card-strength">Recommended strength ${escapeHtml(String(item.default_strength))}${item.slider && !/^slider/i.test(item.strength_note || "") ? " · slider: try negative values too" : ""}${item.strength_note ? ` &mdash; ${escapeHtml(item.strength_note)}` : ""}</p>
         ${description ? `<p class="lora-card-desc${detail ? " is-open" : ""}">${escapeHtml(description)}</p>` : ""}
         <div class="lora-card-links">
           ${!detail && description ? `<button type="button" class="lora-desc-toggle" data-gallery-open>Show more</button>` : "<span></span>"}
@@ -10915,7 +11938,8 @@ function galleryCardHtml({ item, row }, detail = false) {
         ${detail && gallery.editing ? `<div class="lora-custom-editor" data-custom-editor="${escapeHtml(item.custom_id || "")}" data-edit-filename="${key}">
           <input type="text" data-custom-name maxlength="100" value="${escapeHtml(item.label)}" aria-label="LoRA name" placeholder="LoRA name">
           <select data-custom-group aria-label="Category">${(gallery.catalog?.categories || [item.group]).map((name) => `<option value="${escapeHtml(name)}" ${name === item.group ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select>
-          <input type="number" data-custom-recommended min="0" max="2" step="0.05" value="${escapeHtml(String(item.default_strength))}" aria-label="Recommended strength">
+          <input type="number" data-custom-recommended min="${-SLIDER_LIMIT}" max="${SLIDER_LIMIT}" step="0.05" value="${escapeHtml(String(item.default_strength))}" aria-label="Recommended strength">
+          <label class="lora-slider-flag" title="Slider LoRAs work in both directions: negative strengths reverse the effect"><input type="checkbox" data-custom-slider ${item.slider ? "checked" : ""}> Slider LoRA (allows negative strength)</label>
           <input type="text" data-custom-triggers value="${escapeHtml(triggers.join(", "))}" aria-label="Trigger words" placeholder="Trigger words, comma separated">
           <textarea data-custom-description aria-label="Description" placeholder="Description">${escapeHtml(description)}</textarea>
           <input type="url" data-custom-url value="${escapeHtml(item.url || "")}" aria-label="Source page URL" placeholder="https://source-page…">
@@ -11060,8 +12084,9 @@ async function refreshManagedLoras() {
   await ensureGalleryIndex();
   const groups = [...new Set(galleryItems().map(({ item }) => item.group).filter(Boolean))];
   const group = $("#lora-gallery-group"), selected = group.value;
-  group.innerHTML = `<option value="">All groups</option>` + groups.map((name) => `<option>${escapeHtml(name)}</option>`).join("");
-  group.value = groups.includes(selected) ? selected : "";
+  group.innerHTML = `<option value="">All groups</option>` + (galleryItems().some(({ item }) => item.slider) ? `<option value="__sliders__">&#8646; Sliders only</option>` : "") +
+    groups.map((name) => `<option>${escapeHtml(name)}</option>`).join("");
+  group.value = groups.includes(selected) || selected === "__sliders__" ? selected : "";
   if (gallery.configOpen) { gallery.draft = newGalleryDraft(); renderGalleryConfig(); }
   else if (gallery.detail && galleryEntry(gallery.detail)) openGalleryDetail(gallery.detail, gallery.editing);
   else { showGalleryGrid(); renderLoraGallery(); }
@@ -11230,6 +12255,7 @@ async function saveManagedLora(editor) {
     label: $("[data-custom-name]", editor).value,
     group: $("[data-custom-group]", editor).value,
     default_strength: Number($("[data-custom-recommended]", editor).value),
+    slider: Boolean($("[data-custom-slider]", editor)?.checked),
     triggers: $("[data-custom-triggers]", editor).value.split(",").map((word) => word.trim()).filter(Boolean),
     description: $("[data-custom-description]", editor).value,
     url: $("[data-custom-url]", editor).value,
@@ -11582,6 +12608,8 @@ function bindLoraGallery() {
     } else if (event.target.matches("[data-gallery-strength]")) {
       const strength = $("[data-lora-strength]", row);
       strength.value = event.target.value;
+      event.target.closest(".lora-card")?.querySelectorAll("[data-gallery-strength]").forEach((input) => { if (input !== event.target) input.value = event.target.value; });
+      const range = $("[data-lora-slider]", row); if (range) range.value = event.target.value;
       strength.dispatchEvent(new Event("change", { bubbles: true }));
     }
   });
@@ -11803,6 +12831,7 @@ async function init() {
     if (resetModel || !(await restoreSessionSettings(query))) await applySelectedPreset();
     sessionSettingsReady = true;
     saveSessionSettings();
+    resumeEnhance();
 
     await restoreAgenticSelection();
     loadEnhancement(); // the status pill shows DeepSeek when that's the Enhance provider
@@ -11815,3 +12844,91 @@ async function init() {
 }
 
 document.addEventListener("DOMContentLoaded", init);
+
+// After a reload: an Enhance that was running is waited for again, and lands in the prompt when it's done.
+function resumeEnhance() {
+  let pending = null;
+  try { pending = JSON.parse(localStorage.getItem(ENHANCE_PENDING_KEY) || "null"); } catch { pending = null; }
+  if (!pending?.job_id) return;
+  if (Date.now() - (pending.at || 0) > 3600000) return saveEnhancePending(null);
+  toast("Picking up your Enhance where it was.");
+  enhance(pending);
+}
+
+/* ---------------------------------------------------- enhance output -- */
+// While Enhance runs, the model's own output shows under its box: its thinking (folded once it starts writing)
+// and the text as it's written. It stays after it finishes, until ✕ or the next Enhance.
+const ENHANCE_PHASES = { waiting: "Waiting for the GPU", loading: "Loading the model", thinking: "Thinking", writing: "Writing", done: "Finished" };
+
+function enhanceOutput(anchor) {
+  let box = anchor.nextElementSibling?.classList.contains("enhance-output") ? anchor.nextElementSibling : null;
+  if (!box) {
+    box = document.createElement("div");
+    box.className = "enhance-output";
+    box.setAttribute("aria-live", "polite");
+    box.innerHTML = `<div class="enhance-output-head"><span class="enhance-output-status"></span><span class="enhance-output-model"></span>
+      <button type="button" class="enhance-output-close" aria-label="Hide the model output">&#10005;</button></div>
+      <details class="enhance-output-thinking" hidden><summary>Thinking</summary><pre></pre></details>
+      <pre class="enhance-output-text" hidden></pre>`;
+    box.querySelector(".enhance-output-close").addEventListener("click", () => { box.hidden = true; });
+    // A toggle the page didn't ask for is the user's: from then on it stays as they left it.
+    box.querySelector("details").addEventListener("toggle", (event) => { if (event.target.open !== box.wantOpen) box.dataset.userToggled = "1"; });
+    anchor.after(box);
+  }
+  const status = box.querySelector(".enhance-output-status"), modelTag = box.querySelector(".enhance-output-model");
+  const thinking = box.querySelector("details"), thinkingText = thinking.querySelector("pre"), output = box.querySelector(".enhance-output-text");
+  const fill = (pre, text) => {
+    if (pre.textContent === text) return;
+    const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
+    pre.textContent = text;
+    if (atEnd) pre.scrollTop = pre.scrollHeight;
+  };
+  box.hidden = false;
+  box.classList.remove("is-done", "is-failed");
+  delete box.dataset.userToggled;
+  thinking.hidden = true; box.wantOpen = thinking.open = true; output.hidden = true;
+  thinkingText.textContent = ""; output.textContent = ""; modelTag.textContent = "";
+  status.textContent = "Starting…";
+  return {
+    update({ phase = "", model = "", thinking: thought = "", text = "", note = "" }) {
+      status.textContent = note || ENHANCE_PHASES[phase] || phase || "Working";
+      if (model) modelTag.textContent = model;
+      if (thought) {
+        thinking.hidden = false;
+        thinking.querySelector("summary").textContent = `Thinking · ${thought.length.toLocaleString()} chars`;
+        fill(thinkingText, thought);
+      }
+      if (text) {
+        output.hidden = false;
+        fill(output, text);
+        if (!box.dataset.userToggled && thinking.open) box.wantOpen = thinking.open = false;   // the answer is what matters now
+      }
+    },
+    finish(ok, note) {
+      box.classList.add(ok ? "is-done" : "is-failed");
+      status.textContent = note || (ok ? "Finished" : "Failed");
+    },
+  };
+}
+
+
+function syncSliderRanges() {
+  document.querySelectorAll(".lora-row.is-slider").forEach((row) => {
+    const range = row.querySelector("[data-lora-slider]"), number = row.querySelector("[data-lora-strength]");
+    if (range && number) range.value = number.value;
+  });
+}
+
+// Slider LoRAs: the range control and the number box in a LoRA row are one value (also after presets/reset).
+document.addEventListener("input", (event) => {
+  const row = event.target.closest?.(".lora-row.is-slider");
+  if (!row) return;
+  const number = row.querySelector("[data-lora-strength]"), range = row.querySelector("[data-lora-slider]");
+  if (event.target === range) { number.value = range.value; number.dispatchEvent(new Event("change", { bubbles: true })); }
+  else if (event.target === number && range) range.value = number.value;
+});
+document.addEventListener("change", (event) => {
+  if (!event.target.matches?.("[data-lora-strength]")) return;
+  const range = event.target.closest(".lora-row")?.querySelector("[data-lora-slider]");
+  if (range) range.value = event.target.value;
+});

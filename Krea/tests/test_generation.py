@@ -53,8 +53,30 @@ class GenerationWorkflowTests(unittest.TestCase):
         self.assertEqual(graph["5"]["inputs"]["text"], "blurry")
         self.assertEqual((graph["16"]["inputs"]["steps"], graph["16"]["inputs"]["cfg"]), (50, 3))
         self.assertEqual(graph["18"]["class_type"], "SaveImage")
-        with self.assertRaises(ValueError):
-            GenerationRequest(model="moss", prompt="a fox", use_references=True)
+        with self.assertRaises(ValueError):   # one img2img source only
+            GenerationRequest(model="moss", prompt="a fox", use_references=True,
+                              references=[{"enabled": True, "image": "a.png"}, {"enabled": True, "image": "b.png"}])
+
+    def test_moss_img2img_encodes_reference_and_denoises_partially(self) -> None:
+        source = {"enabled": True, "image": "src.png", "width": 1200, "height": 800}
+        request = GenerationRequest(model="moss", prompt="a fox", seed=1, use_references=True,
+                                    references=[source], moss_denoise=0.55)
+        graph = build_workflows(settings, request)[0][0]
+        self.assertNotIn("6", graph)
+        self.assertEqual(graph["30"]["inputs"]["image"], "src.png")
+        width, height = graph["31"]["inputs"]["width"], graph["31"]["inputs"]["height"]
+        self.assertGreater(width, height)   # follows the 3:2 source
+        self.assertEqual(graph["32"]["class_type"], "VAEEncode")
+        self.assertEqual(graph["16"]["inputs"]["latent_image"], ["32", 0])
+        self.assertEqual(graph["16"]["inputs"]["denoise"], 0.55)
+        kept = build_workflows(settings, request.model_copy(update={"match_reference_size": False}))[0][0]
+        self.assertEqual((kept["31"]["inputs"]["width"], kept["31"]["inputs"]["height"]), (1024, 1024))
+        fast = build_workflows(settings, request.model_copy(update={"speed": "dmad4", "moss_denoise": 0.05}))[0][0]
+        self.assertEqual(fast["33"]["class_type"], "SplitSigmasDenoise")
+        self.assertEqual(fast["33"]["inputs"]["sigmas"], ["20", 2])
+        self.assertEqual(fast["33"]["inputs"]["denoise"], 0.25)   # at least one of the 4 steps
+        self.assertEqual(fast["23"]["inputs"]["sigmas"], ["33", 1])
+        self.assertEqual(fast["23"]["inputs"]["latent_image"], ["32", 0])
 
     def test_moss_and_anima_loras_feed_the_sampler_model(self) -> None:
         MOSS_LORA_SLOTS.append("moss-test.safetensors")

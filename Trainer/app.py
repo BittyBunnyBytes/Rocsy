@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+
+from bunnylock import BunnyLock, PendingStore
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -61,7 +63,7 @@ push = PushService(DATA_DIR)
 
 TERMINAL = {"complete", "failed", "cancelled"}
 active_processes: dict[str, asyncio.subprocess.Process] = {}
-pending_specs: dict[str, dict[str, Any]] = {}
+pending_specs = PendingStore(DATA_DIR / "pending-specs")
 job_tasks: set[asyncio.Task[Any]] = set()
 setup_tasks: dict[str, asyncio.Task[Any]] = {}
 setup_state: dict[str, dict[str, Any]] = {}
@@ -90,7 +92,11 @@ class JobRequest(BaseModel):
     resolution: int = Field(default=512, ge=256, le=1536)
     frames: int = Field(default=25, ge=9, le=121)
     repeats: int = Field(default=1, ge=1, le=100)
+    max_seconds: int = Field(default=60, ge=10, le=300)     # music: longest track a run uses
     learning_rate: str = Field(default="", max_length=16)
+    # Fizgig Krea 2 / Qwen 2.1 / Klein: "" = the recipe's own schedule, "flat" = a fixed LR, "x2"/"x4" = adaptive LR
+    # from the learning rate up to 2x / 4x it (Fizgig's Style presets run flat or in a gentle range).
+    lr_schedule: Literal["", "flat", "x2", "x4"] = ""
     trigger: str = Field(default="", max_length=64)
     # LLM family: a Hugging Face repo id or a model folder under /models, the context length and base quantisation.
     base_model: str = Field(default="", max_length=200)
@@ -121,6 +127,16 @@ def _lr(req: JobRequest, default: str) -> str:
     except ValueError:
         raise HTTPException(422, "Learning rate must be a number like 1e-4.") from None
     return value
+
+
+def _lr_schedule(req: JobRequest, lr: str, default: list[str]) -> list[str]:
+    """Fizgig adaptive-LR flags for the chosen schedule; `default` is the recipe's own when none is chosen."""
+    if not req.lr_schedule:
+        return default
+    if req.lr_schedule == "flat":
+        return []
+    top = f"{float(lr) * (2 if req.lr_schedule == 'x2' else 4):g}"
+    return ["--adaptive_lr", "--adaptive_lr_min", lr, "--adaptive_lr_max", top]
 
 
 def _dataset(value: str) -> Path:
@@ -306,6 +322,89 @@ def _make_aitk_config(dataset: Path, job_id: str, req: JobRequest, fam: families
     return target
 
 
+def _music_prompt(plan: dict[str, Any]) -> tuple[str, str]:
+    """The first training song's style and lyrics: the preview prompt of a music run."""
+    it = plan["included"][0]
+    return it["caption"], it.get("lyrics") or ""
+
+
+def _make_yue2_config(trainset: Path, job_id: str, req: JobRequest, files: dict[str, str | None], plan: dict[str, Any]) -> Path:
+    """AI Toolkit's yue2 model with the settings its UI picks for it (int8 ConvRot base kept as-is, sigmoid
+    timesteps, no caption dropout, latent cache on disk, AR anchored to the base with a KL term)."""
+    style, lyrics = _music_prompt(plan)
+    proc: dict[str, Any] = {
+        "type": "sd_trainer", "training_folder": str(DATA_DIR / "output" / job_id), "device": "cuda:0",
+        "network": {"type": "lora", "linear": req.rank, "linear_alpha": req.rank},
+        "save": {"dtype": "bf16", "save_every": max(100, min(req.steps, 250)), "max_step_saves_to_keep": 6},
+        "datasets": [{"folder_path": str(trainset), "caption_ext": "txt", "caption_dropout_rate": 0,
+                      "cache_latents_to_disk": True, "resolution": [512]}],
+        "train": {"batch_size": 1, "steps": req.steps, "gradient_checkpointing": True, "noise_scheduler": "flowmatch",
+                  "timestep_type": "sigmoid", "optimizer": "adamw8bit", "lr": float(_lr(req, "1e-4")), "dtype": "bf16",
+                  "unload_text_encoder": False},
+        "model": {"name_or_path": files["dit"], "arch": "yue2", "quantize": True, "qtype": "convrot8", "quantize_te": False,
+                  "model_kwargs": {"cot": "full", "abc_dropout": 0.5, "sample_ar_repetition_penalty": 1.2, "ar_kl_weight": 0.2,
+                                   "sheetsage_path": files["sheetsage"]}},
+        # one preview song at the end (the AR writes up to 120 s; it costs minutes, not the whole run)
+        "sample": {"sampler": "flowmatch", "sample_every": req.steps, "width": 1024, "height": 1024, "guidance_scale": 1,
+                   "sample_steps": 32, "duration": 60, "prompts": [style + ("\n[Lyrics]\n" + lyrics if lyrics else "")]},
+    }
+    config = {"job": "extension", "config": {"name": _safe_name(req.name), "process": [proc]}}
+    target = DATA_DIR / "configs" / f"{job_id}.yaml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    return target
+
+
+def _simpletuner_spec(req: JobRequest, fam: families.Family, trainset: Path, job_id: str, name: str,
+                      plan: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
+    """SimpleTuner's minimaxmusic LoRA recipe (its quickstart), with a local audio backend on the job's train set."""
+    root = DATA_DIR / "simpletuner" / job_id
+    out = DATA_DIR / "output" / job_id
+    cache = DATA_DIR / "cache" / job_id
+    root.mkdir(parents=True, exist_ok=True)
+    style, lyrics = _music_prompt(plan)
+    backend = [
+        {"id": "songs", "type": "local", "dataset_type": "audio", "instance_data_dir": str(trainset),
+         "metadata_backend": "discovery", "caption_strategy": "textfile",
+         "audio": {"bucket_strategy": "duration", "duration_interval": 3.0, "max_duration_seconds": req.max_seconds,
+                   "lyrics_filename_format": "{filename}.lyrics"},
+         "cache_dir_vae": str(cache / "vae"), "repeats": 0},
+        {"id": "text-embeds", "dataset_type": "text_embeds", "default": True, "type": "local", "cache_dir": str(cache / "text")},
+    ]
+    (root / "multidatabackend.json").write_text(json.dumps(backend, indent=2), encoding="utf-8")
+    config = {
+        "model_family": "minimaxmusic", "model_type": "lora", "model_flavour": "music3",
+        "pretrained_model_name_or_path": "MiniMaxAI/MiniMax-Music3",
+        "pretrained_vae_model_name_or_path": "SimpleTuner/MiniMax-Music-3-Encoder",
+        "resolution": 512, "mixed_precision": "bf16",
+        # the 2.4B DiT trains in bf16 (fits 24 GB, no quanto kernels on the trained weights); the 8B Qwen3 AR only
+        # encodes captions/lyrics into the text cache, int8
+        "base_model_precision": "no_change", "text_encoder_1_precision": "int8-quanto",
+        "gradient_checkpointing": True, "lora_rank": req.rank, "lora_alpha": req.rank, "lora_format": "comfyui",
+        "optimizer": "adamw_bf16", "learning_rate": float(_lr(req, str(fam.defaults["learning_rate"]))),
+        "lr_scheduler": "constant_with_warmup", "lr_warmup_steps": min(50, req.steps // 10), "max_grad_norm": 1.0,
+        "max_train_steps": req.steps, "num_train_epochs": 0, "train_batch_size": 1, "vae_batch_size": 1, "seed": 42,
+        "checkpoint_step_interval": max(100, min(req.steps, 250)), "checkpoints_total_limit": 6,
+        "data_backend_config": str(root / "multidatabackend.json"), "output_dir": str(out),
+        "report_to": "none", "disable_benchmark": True,
+        # one preview at the end (validation renders cost VRAM and minutes)
+        "validation_prompt": style, "validation_lyrics": lyrics, "validation_audio_duration": 30,
+        "validation_guidance": 1.7, "validation_num_inference_steps": 30, "validation_steps": req.steps,
+        "validation_disable_unconditional": True, "validation_seed": 42,
+    }
+    (root / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+    venv = families.SIMPLETUNER_DIR / ".venv"
+    command = [str(venv / "bin" / "accelerate"), "launch", "--mixed_precision=bf16", "--num_processes=1", "--num_machines=1",
+               "--dynamo_backend=no", str(families.SIMPLETUNER_DIR / "simpletuner" / "train.py")]
+    env = {"CONFIG_BACKEND": "json", "CONFIG_PATH": str(root / "config"), "ENV": "default",
+           "HF_HOME": str(DATA_DIR / "hf-cache"), "PYTHONUNBUFFERED": "1", "TOKENIZERS_PARALLELISM": "false",
+           "PYTORCH_HIP_ALLOC_CONF": "expandable_segments:True", "PYTORCH_ALLOC_CONF": "expandable_segments:True",
+           "TQDM_NCOLS": "125", "SIMPLETUNER_LOG_LEVEL": "INFO"}
+    if os.getenv("HF_TOKEN"):
+        env["HF_TOKEN"] = os.environ["HF_TOKEN"]
+    return command, env
+
+
 def _assert_env(fam: families.Family, backend: str = "") -> Path:
     backend = backend or fam.backend
     python = families.backend_python(backend)
@@ -326,12 +425,14 @@ def _fizgig_spec(req: JobRequest, fam: families.Family, files: dict[str, str | N
     dit, vae, encoder = files["dit"], files["vae"], files["text_encoder"]
     if fam.id == "krea2":
         config = _make_fizgig_config(trainset, job_id, 768)
+        lr = _lr(req, "1e-4")
         train = [
             "--dataset_config", str(config), "--dit", dit,
             "--output_dir", out, "--output_name", name,
             "--network_dim", str(req.rank), "--network_alpha", str(req.rank),
-            "--learning_rate", _lr(req, "1e-4"), "--max_train_epochs", str(req.epochs),
+            "--learning_rate", lr, "--max_train_epochs", str(req.epochs),
             "--save_every_n_epochs", "1", "--quantize_4bit", "--seed", "42",
+            *_lr_schedule(req, lr, []),
         ]
         if req.trigger.strip():
             train += ["--metadata_trigger_phrase", req.trigger.strip()]
@@ -355,7 +456,8 @@ def _fizgig_spec(req: JobRequest, fam: families.Family, files: dict[str, str | N
             "--text_encoder", encoder,   # the loss watch re-encodes repaired captions
             "--output_dir", out, "--output_name", name,
             "--network_dim", str(req.rank), "--network_alpha", str(req.rank),
-            "--learning_rate", lr, "--adaptive_lr", "--adaptive_lr_min", lr, "--adaptive_lr_max", f"{float(lr) * 2:g}",
+            "--learning_rate", lr,
+            *_lr_schedule(req, lr, ["--adaptive_lr", "--adaptive_lr_min", lr, "--adaptive_lr_max", f"{float(lr) * 2:g}"]),
             "--max_train_epochs", str(req.epochs), "--save_every_n_epochs", "1", "--seed", "42",
             "--optimizer_type", "adamw8bit", "--precision", "auto", "--blocks_to_swap", "-1",
             "--compile_blocks", "off", "--ema_decay", "0.98", "--log_per_image_loss", "--save_state_on_train_end",
@@ -413,7 +515,7 @@ def _fizgig_spec(req: JobRequest, fam: families.Family, files: dict[str, str | N
             "--network_dim", str(req.rank), "--network_alpha", str(req.rank),
             "--timestep_sampling", "flux2_shift", "--max_train_epochs", str(req.epochs),
             "--save_every_n_epochs", "1", "--seed", "42", "--output_dir", out, "--output_name", name,
-            "--adaptive_lr", "--adaptive_lr_min", "5e-5", "--adaptive_lr_max", "4e-4",
+            *_lr_schedule(req, _lr(req, "1e-4"), ["--adaptive_lr", "--adaptive_lr_min", "5e-5", "--adaptive_lr_max", "4e-4"]),
         ]
         if req.trigger.strip():
             train += ["--metadata_trigger_phrase", req.trigger.strip()]
@@ -647,7 +749,7 @@ def _prepare_spec(req: JobRequest, job_id: str) -> dict[str, Any]:
         raise HTTPException(422, "LTX frame count must be 8n+1 (for example 25 or 49).")
     # Only captioned, trainer-ready files reach the trainer: uncaptioned clips (and anything it
     # would refuse or silently skip) stay in the dataset but are left out of this run.
-    plan = datasets_router.training_plan(req.dataset, req.model, req.trigger)
+    plan = datasets_router.training_plan(req.dataset, req.model, req.trigger, req.max_seconds if "max_seconds" in fam.knobs else 0)
     if not plan["included"]:
         why = f" ({plan['uncaptioned']} without a caption)" if plan["uncaptioned"] else (
             f": {plan['excluded'][0]['reason']}" if plan["excluded"] else ": the dataset is empty")
@@ -663,11 +765,18 @@ def _prepare_spec(req: JobRequest, job_id: str) -> dict[str, Any]:
     elif fam.backend == families.SDS:
         spec["command"], spec["env"] = _sdscripts_spec(req, fam, files, trainset, job_id, name)
         spec["cwd"] = str(families.SDSCRIPTS_DIR)
+    elif fam.backend == families.SIMPLETUNER:
+        spec["command"], spec["env"] = _simpletuner_spec(req, fam, trainset, job_id, name, plan)
+        spec["cwd"] = str(DATA_DIR / "simpletuner" / job_id)
     else:
-        config = _make_ltx_config(trainset, job_id, req) if fam.id == "ltx25" else _make_aitk_config(trainset, job_id, req, fam)
+        config = (_make_ltx_config(trainset, job_id, req) if fam.id == "ltx25"
+                  else _make_yue2_config(trainset, job_id, req, files, plan) if fam.id == "yue2"
+                  else _make_aitk_config(trainset, job_id, req, fam))
         py = str(families.backend_python(families.AITK))
         spec["command"] = [str(TRAINER_ROOT / "run.sh"), "ltx", str(config)]
         spec["env"] = {"AI_TOOLKIT_PYTHON": py}
+        if fam.id == "yue2":       # the community tokenizer head downloads into <MODELS_PATH>/ai_toolkit (/models is read-only)
+            spec["env"] |= {"MODELS_PATH": str(DATA_DIR / "aitk-models"), "HF_HOME": str(DATA_DIR / "hf-cache")}
     return spec
 
 
@@ -694,8 +803,14 @@ def _job_outputs(item: dict[str, Any]) -> list[dict[str, Any]]:
                    if not any(part == "peft" or part.startswith(".") for part in f.relative_to(folder).parts[:-1]))
     where = (f"models/{folder.relative_to(MODEL_ROOT)}" if folder.is_relative_to(MODEL_ROOT)
              else f"~/AI/Trainer/data/output/{item['id']}")
-    return [{"name": f.name, "size_mb": round(f.stat().st_size / 1048576, 1),
-             "host_path": f"{where}/{f.relative_to(folder)}"} for f in files]
+    out = []
+    for f in files:
+        rel = f.relative_to(folder)
+        match = EPOCH_FILE.search(rel.parts[0] if len(rel.parts) > 1 else f.stem)
+        out.append({"name": f.name, "rel": rel.as_posix(), "size_mb": round(f.stat().st_size / 1048576, 1),
+                    "host_path": f"{where}/{rel}", "epoch": int(match.group(1)) if match else None,
+                    "resume_state": bool(match and match.group(2)), "final": not match and len(rel.parts) == 1})
+    return out
 
 
 def _session_timing(item: dict[str, Any], progress: dict[str, Any]) -> dict[str, Any]:
@@ -719,7 +834,13 @@ def _session_timing(item: dict[str, Any], progress: dict[str, Any]) -> dict[str,
 def _public(item: dict[str, Any]) -> dict[str, Any]:
     request = json.loads(item["request_json"])
     progress = _job_progress(item, request)
+    report_file = DATA_DIR / "output" / item["id"] / "refusals.json"
+    report = None
+    if report_file.is_file():
+        with suppress(OSError, ValueError):
+            report = json.loads(report_file.read_text())
     return {
+        "refusal_report": report,
         "id": item["id"], "model": item["model"], "model_title": families.title(item["model"]),
         "name": item["name"], "dataset": item["dataset"], "state": item["state"],
         "stage": item["stage"], "created_at": item["created_at"], "started_at": item["started_at"],
@@ -785,7 +906,66 @@ BUILTIN_PRESETS["llm"] = {
     "Large dataset, gentle (rank 32, 2 epochs, 1e-4)": {"rank": 32, "epochs": 2, "learning_rate": "1e-4", "max_length": 2048, "quant": "auto"},
     "Small dataset (<200 chats; rank 8, 5 epochs)": {"rank": 8, "epochs": 5, "learning_rate": "2e-4", "max_length": 2048, "quant": "auto"},
 }
-SETTING_FIELDS = {"rank", "epochs", "resolution", "frames", "steps", "max_pixels", "repeats", "learning_rate",
+# Character and Style presets for every image/video family. Fizgig families use Fizgig's own Character/Style
+# recipes (families/*.py in vendor/Fizgig-latest); style captions describe only the content, never the look or
+# the lighting (Fizgig v2.14.0), so the style trains into the LoRA itself. Fizgig's style-only extras that this
+# trainer has no knob for are left out: Klein's Style block area and late timesteps, MOSS's EMA off, H3's
+# still-frame clipping off.
+_CHAR, _STYLE = "Character", "Style"
+for _fam, _presets in {
+    "minimax_h3": {
+        f"{_CHAR} (Fizgig: rank 16, 60 epochs)": {"rank": 16, "epochs": 60, "resolution": 512},
+        f"{_STYLE} (Fizgig: rank 8, 50 epochs)": {"rank": 8, "epochs": 50, "resolution": 512}},
+    "krea2": {
+        f"{_CHAR} (Fizgig Standard: rank 32, flat 1e-4, 64 epochs)":
+            {"rank": 32, "epochs": 64, "learning_rate": "1e-4", "lr_schedule": "flat"},
+        f"{_STYLE} (Fizgig: rank 16, adaptive 5e-5…2e-4, 64 epochs)":
+            {"rank": 16, "epochs": 64, "learning_rate": "5e-5", "lr_schedule": "x4"}},
+    "qwen_image_21": {
+        # Fast is Fizgig's fastest to likeness; Style is flat because Adaptive LR climbs on a style's steady loss
+        # and overbakes it. 30 epochs, every one saved: pick the epoch.
+        f"{_CHAR} (Fizgig Fast: rank 8, adaptive 2e-4…4e-4, 30 epochs)":
+            {"rank": 8, "epochs": 30, "max_pixels": 524288, "learning_rate": "2e-4", "lr_schedule": "x2"},
+        f"{_STYLE} (Fizgig: rank 16, flat 1.5e-4, 30 epochs)":
+            {"rank": 16, "epochs": 30, "max_pixels": 524288, "learning_rate": "1.5e-4", "lr_schedule": "flat"}},
+    "klein9b": {
+        f"{_CHAR} (Fizgig Old Reliable: rank 16, adaptive 1e-4…4e-4, 55 epochs)":
+            {"rank": 16, "epochs": 55, "learning_rate": "1e-4", "lr_schedule": "x4"},
+        f"{_STYLE} (Fizgig: rank 4, 15 epochs)": {"rank": 4, "epochs": 15, "learning_rate": "1e-4", "lr_schedule": ""}},
+    "moss_image": {
+        f"{_CHAR} (Fizgig Standard: rank 32, 1e-4, 70 epochs, 1 MP)":
+            {"rank": 32, "epochs": 70, "max_pixels": 1048576, "learning_rate": "1e-4"},
+        f"{_STYLE} (Fizgig: rank 16, 5e-5, 50 epochs, 1 MP)":
+            {"rank": 16, "epochs": 50, "max_pixels": 1048576, "learning_rate": "5e-5"}},
+    # sd-scripts families run alpha = rank/2, which halves each step against Fizgig's alpha = rank on Anima, so
+    # Anima's rates are doubled to land where Fizgig's do; SDXL's Fizgig presets already use the halved alpha.
+    "anima": {
+        f"{_CHAR} (Fizgig: rank 16, 50 epochs)": {"rank": 16, "epochs": 50, "resolution": 1024, "learning_rate": "2e-4", "repeats": 1},
+        f"{_STYLE} (Fizgig: rank 16, 30 epochs)": {"rank": 16, "epochs": 30, "resolution": 1024, "learning_rate": "1e-4", "repeats": 1}},
+    "sdxl": {
+        f"{_CHAR} (Fizgig Strong: rank 32, 5e-5, 50 epochs)": {"rank": 32, "epochs": 50, "resolution": 1024, "learning_rate": "5e-5", "repeats": 1},
+        f"{_STYLE} (rank 16, 5e-5, 30 epochs)": {"rank": 16, "epochs": 30, "resolution": 1024, "learning_rate": "5e-5", "repeats": 1}},
+    # No Fizgig recipe: common community starting points, untested here.
+    "sd15": {
+        f"{_CHAR} (rank 32, 1e-4, 10×10 repeats)": {"rank": 32, "epochs": 10, "resolution": 512, "learning_rate": "1e-4", "repeats": 10},
+        f"{_STYLE} (rank 32, 1e-4, 10×5 repeats)": {"rank": 32, "epochs": 10, "resolution": 512, "learning_rate": "1e-4", "repeats": 5}},
+    "flux1": {
+        f"{_CHAR} (rank 16, 1e-4, 16 epochs)": {"rank": 16, "epochs": 16, "resolution": 1024, "learning_rate": "1e-4", "repeats": 1},
+        f"{_STYLE} (rank 32, 5e-5, 16 epochs)": {"rank": 32, "epochs": 16, "resolution": 1024, "learning_rate": "5e-5", "repeats": 1}},
+    **{_f: {
+        f"{_CHAR} (rank 16, 1e-4, 20 epochs)": {"rank": 16, "epochs": 20, "resolution": 1024, "learning_rate": "1e-4", "repeats": 1},
+        f"{_STYLE} (rank 32, 5e-5, 15 epochs)": {"rank": 32, "epochs": 15, "resolution": 1024, "learning_rate": "5e-5", "repeats": 1}}
+       for _f in ("sd3", "lumina2", "hunyuan_image21")},
+    "ltx25": {
+        f"{_CHAR} (rank 32, 2000 steps)": {"rank": 32, "steps": 2000, "resolution": 512, "frames": 25},
+        f"{_STYLE} (rank 32, 3000 steps)": {"rank": 32, "steps": 3000, "resolution": 512, "frames": 25}},
+}.items():
+    BUILTIN_PRESETS.setdefault(_fam, {}).update(_presets)
+# Presets apply only the fields they name, so every preset of a family with an LR schedule names it ("" = recipe).
+for _fam in ("krea2", "qwen_image_21", "klein9b"):
+    for _settings in BUILTIN_PRESETS.get(_fam, {}).values():
+        _settings.setdefault("lr_schedule", "")
+SETTING_FIELDS = {"rank", "epochs", "resolution", "frames", "steps", "max_pixels", "repeats", "learning_rate", "lr_schedule",
                   "base_model", "max_length", "quant", "kind", "rotations", "save_every"}
 # Model-file slots of every family (dit, vae, text_encoder, clip_l, t5xxl, ae, gemma2, ...).
 PRESET_FIELDS = SETTING_FIELDS | {slot.key for fam in families.FAMILIES for slot in fam.slots}
@@ -806,20 +986,11 @@ class PresetSave(BaseModel):
     settings: dict[str, Any]
 
 
-async def _queue_request(path: str, body: dict[str, Any] | None = None, *, timeout: float = 10.0) -> httpx.Response:
-    if not QUEUE_SECRET:
-        raise RuntimeError("TRAINER_QUEUE_INTERNAL_SECRET is not configured")
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        return await client.post(QUEUE_URL + path, json=body or {}, headers=LOCK_HEADERS)
-
-
-async def _lock_heartbeat(token: str, stop: asyncio.Event) -> None:
-    while not stop.is_set():
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=20)
-        except asyncio.TimeoutError:
-            with suppress(Exception):
-                await _queue_request("/heartbeat", {"token": token}, timeout=6)
+# The shared GPU queue (bunnylock.py): training runs, auto-tagging, clip finding
+# and epoch reviews get their turns over its stream; held turns are heartbeated
+# by the client.
+gpu = BunnyLock(app="Trainer", url=QUEUE_URL, secret=QUEUE_SECRET)
+job_tokens: dict[str, str] = {}   # running job -> its GPU turn (progress pushes)
 
 
 DESKTOP_VRAM_RESERVE_GB = float(os.environ.get("TRAINER_DESKTOP_RESERVE_GB", "3.5") or 3.5)
@@ -898,6 +1069,8 @@ async def _run_command(job_id: str, command: list[str], env_extra: dict[str, str
     while line := await proc.stdout.readline():
         text = line.decode("utf-8", errors="replace")
         store.append_log(job_id, text)
+        if token := job_tokens.get(job_id):   # the queue page's progress bar (throttled in the client)
+            gpu.progress(token, lambda: _public(store.get(job_id)))
         # A NaN/Inf running loss means the weights are already ruined: every later
         # checkpoint is garbage, so stop now instead of training for hours.
         if diverged is None and (match := NAN_LOSS.search(text)):
@@ -986,24 +1159,25 @@ async def _llm_vram_check(job_id: str) -> None:
 
 
 async def _execute_job(job_id: str, token: str, spec: dict[str, Any]) -> None:
-    stop_heartbeat = asyncio.Event()
-    heartbeat = asyncio.create_task(_lock_heartbeat(token, stop_heartbeat))
     completed = False
+    job_tokens[job_id] = token
     try:
         store.update(job_id, state="preparing", stage="Starting trainer", lock_token=token, started_at=utc_now())
         command = spec["command"]
         if spec.get("note"):
             store.append_log(job_id, spec["note"])
-        if spec["request"].get("model") == "llm":
+        if spec["request"].get("model") == "llm" and spec["request"].get("kind") not in {"uncensor", "refusal_test"}:
             await _llm_vram_check(job_id)
         if command and command[0] == "__fizgig__":
             await _run_command(job_id, _fizgig_command(command), spec["env"],
                                "Caching and fine-tuning" if spec["request"].get("kind") == "finetune" else "Caching and training")
         else:
             title = families.title(store.get(job_id)["model"])
-            stage = "Extracting LoRA" if spec["request"].get("kind") == "extract" else f"Training {title}"
+            stage = ("Removing refusal with " + spec["request"]["method"] if spec["request"].get("kind") == "uncensor"
+                     else "Testing refusals" if spec["request"].get("kind") == "refusal_test"
+                     else "Extracting LoRA" if spec["request"].get("kind") == "extract" else f"Training {title}")
             await _run_command(job_id, command, spec["env"], stage, spec.get("cwd"))
-        gallery_ready = store.get(job_id)["model"] in {"minimax_h3", "ltx25"} and spec["request"].get("kind", "lora") == "lora"
+        gallery_ready = store.get(job_id)["model"] in {"minimax_h3", "ltx25", *MUSIC_GALLERY} and spec["request"].get("kind", "lora") == "lora"
         store.update(job_id, state="complete", stage="Complete · Gallery pending" if gallery_ready else "Complete",
                      completed_at=utc_now(), lock_token=None)
         completed = True
@@ -1014,15 +1188,15 @@ async def _execute_job(job_id: str, token: str, spec: dict[str, Any]) -> None:
         store.append_log(job_id, f"\n[Trainer error] {exc}\n")
         store.update(job_id, state="failed", stage="Failed", completed_at=utc_now(), error=str(exc)[:1000], lock_token=None)
     finally:
-        stop_heartbeat.set()
-        heartbeat.cancel()
-        with suppress(asyncio.CancelledError):
-            await heartbeat
-        with suppress(Exception):
-            await _queue_request("/release", {"token": token}, timeout=6)
+        job_tokens.pop(job_id, None)
+        await gpu.release(token)
         notify_job(job_id)
     if completed:
-        await _publish_final_lora(job_id)
+        if store.get(job_id)["model"] in MUSIC_GALLERY:
+            await _publish_music_lora(job_id)
+        else:
+            await _publish_final_lora(job_id)
+        await _auto_cleanup(job_id)
 
 
 def _nonfinite_tensors(path: Path) -> int:
@@ -1124,7 +1298,62 @@ KREA_URL = os.getenv("TRAINER_KREA_URL", "http://127.0.0.1:8300/Image").rstrip("
 epoch_tests = EpochTests(
     data_dir=DATA_DIR, model_root=MODEL_ROOT, dataset_root=DATASET_ROOT, video_url=H3_GALLERY_URL, image_url=KREA_URL,
     framework_url=os.getenv("BUNNY_FRAMEWORK_URL", "http://127.0.0.1:8700").rstrip("/"), headers=LOCK_HEADERS,
-    get_job=store.get, output_dir=_item_output_dir, log=store.append_log, queue_request=_queue_request)
+    get_job=store.get, output_dir=_item_output_dir, log=store.append_log, gpu=gpu)
+
+
+# Music families -> their folder in the Music studio's LoRA gallery (models/loras/Music/<folder>, writable mount).
+MUSIC_GALLERY = {"yue2": "YuE2", "minimax_music3": "MiniMaxMusic3"}
+AUDIO_EXTS = {".wav", ".flac", ".mp3", ".ogg", ".m4a"}
+
+
+def _music_final(job_id: str, name: str, model: str) -> Path | None:
+    """The finished music LoRA: AI Toolkit's <name>/<name>.safetensors, SimpleTuner's top-level pytorch_lora_weights."""
+    folder = DATA_DIR / "output" / job_id
+    for cand in (folder / name / f"{name}.safetensors", folder / "pytorch_lora_weights.safetensors"):
+        if cand.is_file():
+            return cand
+    return _final_lora(job_id, name)
+
+
+async def _publish_music_lora(job_id: str) -> bool:
+    """Copy a finished YuE2 / MiniMax Music 3 LoRA into the Music studio's gallery folder, with a sidecar
+    (name, trigger, dataset, the run's last preview song). The Music studio reads models/loras itself."""
+    item = store.get(job_id)
+    if not item or item["model"] not in MUSIC_GALLERY or item["state"] != "complete":
+        return False
+    final = _music_final(job_id, item["name"], item["model"])
+    if not final:
+        store.append_log(job_id, "\n[Music gallery] No final .safetensors output was found.\n")
+        return False
+    if await _corrupt_lora(job_id, final, "Music gallery"):
+        store.update(job_id, stage=CORRUPT_STAGE)
+        return False
+    request = json.loads(item["request_json"])
+    folder = MODEL_ROOT / "loras" / "Music" / MUSIC_GALLERY[item["model"]]
+    target = folder / f"{_safe_name(item['name'])}-{job_id[:8]}.safetensors"
+    out = DATA_DIR / "output" / job_id
+    previews = sorted((f for f in out.rglob("*") if f.suffix.lower() in AUDIO_EXTS and f.is_file()), key=lambda f: f.stat().st_mtime)
+    meta = {"name": item["name"], "model": item["model"], "trigger": str(request.get("trigger") or "").strip(),
+            "dataset": item.get("dataset") or request.get("dataset", ""), "job_id": job_id, "made_by": "Trainer",
+            "rank": request.get("rank"), "steps": request.get("steps"), "created": utc_now()}
+    try:
+        if not target.is_file() or target.stat().st_size != final.stat().st_size:
+            await asyncio.to_thread(_copy_for_gallery, final, target)
+        if previews:
+            preview = target.with_name(target.stem + ".preview" + previews[-1].suffix.lower())
+            await asyncio.to_thread(_copy_for_gallery, previews[-1], preview)
+            meta["preview"] = preview.name
+        sidecar = target.with_suffix(".json")
+        sidecar.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        with suppress(OSError):
+            os.chown(sidecar, folder.stat().st_uid, folder.stat().st_gid)
+    except OSError as exc:
+        store.append_log(job_id, f"\n[Music gallery] Could not copy the LoRA: {exc}. Use Publish to Music studio to retry.\n")
+        store.update(job_id, stage="Complete · Gallery pending")
+        return False
+    store.append_log(job_id, f"\n[Music gallery] {target.name} added to the Music studio's LoRA gallery (models/loras/Music/{folder.name}).\n")
+    store.update(job_id, stage="Complete · In music gallery")
+    return True
 
 
 def _copy_for_gallery(source: Path, target: Path) -> None:
@@ -1215,15 +1444,21 @@ async def _setup_worker(key: str, command: list[str], cwd: Path, env_extra: dict
 
 
 async def _recover_stale_jobs() -> None:
-    for item in store.stale():
+    stale = store.stale()
+    # Queued jobs with a saved spec keep their place in the queue.
+    kept = {item["id"] for item in stale if item["state"] == "waiting_for_gpu" and item["id"] in pending_specs}
+    pending_specs.retain(kept)
+    for item in stale:
+        if item["id"] in kept:
+            continue
         token = item.get("lock_token")
         entry_id = item.get("queue_entry_id")
+        # The queue already dropped the previous process's entries when this one
+        # connected; these only cover a queue that was down meanwhile.
         if token:
-            with suppress(Exception):
-                await _queue_request("/release", {"token": token})
+            await gpu.release(token)
         elif entry_id:
-            with suppress(Exception):
-                await _queue_request(f"/dequeue/{entry_id}")
+            await gpu.dequeue(entry_id)
         store.update(item["id"], state="failed", stage="Service restarted", completed_at=utc_now(), error="Trainer service restarted before this job finished.", lock_token=None)
 
 
@@ -1231,7 +1466,12 @@ async def _recover_stale_jobs() -> None:
 async def lifespan(_: FastAPI):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     DATASET_ROOT.mkdir(parents=True, exist_ok=True)
+    gpu.start()
     await _recover_stale_jobs()
+    requeue = asyncio.create_task(gpu.requeue_lost(
+        pending_specs, lambda job_id, entry: store.update(job_id, queue_entry_id=entry["entry_id"])))
+    job_tasks.add(requeue)
+    requeue.add_done_callback(job_tasks.discard)
     gallery_retry = asyncio.create_task(_retry_pending_gallery())
     job_tasks.add(gallery_retry)
     gallery_retry.add_done_callback(job_tasks.discard)
@@ -1246,6 +1486,7 @@ async def lifespan(_: FastAPI):
             task.cancel()
         if job_tasks or batch_trim_tasks:
             await asyncio.gather(*job_tasks, *batch_trim_tasks, return_exceptions=True)
+        await gpu.stop()
         store.close()
 
 
@@ -1276,9 +1517,9 @@ def _give_back(path: Path) -> None:
         os.chown(path, st.st_uid, st.st_gid)
 
 
-tagger_router, tagger_proceed = build_tagger_router(PREFIX, DATASET_ROOT, DATA_DIR, _queue_request, _give_back)
+tagger_router, tagger_proceed = build_tagger_router(PREFIX, DATASET_ROOT, DATA_DIR, gpu, _give_back)
 app.include_router(tagger_router)
-finder_router, finder_proceed = build_finder_router(PREFIX, DATA_DIR, _queue_request, datasets_router)
+finder_router, finder_proceed = build_finder_router(PREFIX, DATA_DIR, gpu, datasets_router)
 app.include_router(finder_router)
 app.include_router(build_rules_router(PREFIX, DATA_DIR, _give_back))
 
@@ -1678,6 +1919,14 @@ async def status() -> dict[str, Any]:
             state = "not_installed"
         backends[key] = {"state": state, "python": str(py), "title": info["title"], "covers": info["covers"],
                          "install": info.get("install"), "note": info.get("note", "")}
+    # Not a training backend: Heretic + Abliteration edit chat-model weights (Uncensor mode of the run form).
+    venv = TRAINER_ROOT / "vendor" / "uncensor"
+    state = await _probe_backend(_uncensor_python("heretic"))
+    if state == "ready" and not (_uncensor_python("abliteration").is_file() and (venv / "abliteration" / "abliterate.py").is_file()):
+        state = "not_installed"
+    backends["uncensor"] = {"state": state, "python": str(_uncensor_python("heretic")), "title": "Uncensor tools",
+                            "covers": "Heretic · Abliteration → uncensored chat models", "install": "uncensor",
+                            "note": "Separate venvs on the container's ROCm PyTorch; edits a copy of the weights."}
     datasets = sorted(path.name for path in DATASET_ROOT.iterdir() if path.is_dir() and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", path.name))
     return {"rocm": "ROCm is required; CUDA/CPU training is disabled.", "backends": backends, "datasets": datasets, "setups": setup_state}
 
@@ -1721,7 +1970,7 @@ async def get_family_file(family_id: str, slot_key: str) -> dict[str, Any]:
 
 @app.post(p("/api/setup/{backend}"), status_code=202)
 async def setup_backend(backend: str) -> dict[str, str]:
-    if backend not in {"fizgig", "ltx", "llm"}:
+    if backend not in {"fizgig", "ltx", "llm", "uncensor", "simpletuner"}:
         raise HTTPException(404, "Unknown trainer environment.")
     async with state_guard:
         task = setup_tasks.get(backend)
@@ -1731,6 +1980,15 @@ async def setup_backend(backend: str) -> dict[str, str]:
             command = ["bash", "./install_fizgig_rocm.sh"]
             cwd = TRAINER_ROOT / "vendor" / "Fizgig"
             env = {"ROCM_CHANNEL": "stable"}
+        elif backend == "uncensor":
+            target = TRAINER_ROOT / "vendor" / "uncensor"
+            target.mkdir(parents=True, exist_ok=True)
+            command = ["bash", str(BASE_DIR / "install_uncensor.sh"), str(target)]
+            cwd, env = target, {}
+        elif backend == "simpletuner":
+            families.SIMPLETUNER_DIR.parent.mkdir(parents=True, exist_ok=True)
+            command = ["bash", str(BASE_DIR / "install_simpletuner.sh"), str(families.SIMPLETUNER_DIR)]
+            cwd, env = families.SIMPLETUNER_DIR.parent, {}
         elif backend == "llm":
             families.LLM_DIR.mkdir(parents=True, exist_ok=True)
             command = ["bash", str(BASE_DIR / "install_llm_trainer.sh"), str(families.LLM_DIR)]
@@ -1744,6 +2002,83 @@ async def setup_backend(backend: str) -> dict[str, str]:
     return {"state": "installing"}
 
 
+class UncensorRequest(BaseModel):
+    base_model: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=64)
+    method: Literal["heretic", "abliteration"]
+
+
+class RefusalTestRequest(BaseModel):
+    prompts: list[str] = Field(min_length=1, max_length=12)
+    max_tokens: int = Field(default=256, ge=32, le=1024)
+
+
+def _uncensor_python(method: str) -> Path:
+    return TRAINER_ROOT / "vendor" / "uncensor" / (method + "-venv") / "bin" / "python"
+
+
+async def _enqueue_llm_tool(name: str, request: dict[str, Any], command: list[str], label: str) -> dict[str, Any]:
+    job_id = request["job_id"]
+    row = {"id": job_id, "model": "llm", "name": name, "dataset": "—", "state": "waiting_for_gpu",
+           "stage": "Waiting for GPU queue", "created_at": utc_now(), "request": request}
+    store.create(row)
+    pending_specs[job_id] = {"name": name, "label": label, "request": {"model": "llm", **request}, "command": command,
+                             "env": {"HF_HOME": str(DATA_DIR / "hf-cache"), "PYTHONUNBUFFERED": "1"}}
+    try:
+        entry = await gpu.enqueue(job_id, label, uses_llm=False)
+        if entry is None:
+            raise RuntimeError("The GPU queue is not reachable.")
+        store.update(job_id, queue_entry_id=entry["entry_id"])
+    except Exception as exc:
+        pending_specs.pop(job_id, None)
+        store.update(job_id, state="failed", stage="Queue error", completed_at=utc_now(), error=str(exc)[:1000])
+        raise HTTPException(503, "Could not reach the shared GPU queue.") from exc
+    return _public(store.get(job_id))
+
+
+@app.post(p("/api/uncensor"), status_code=202)
+async def create_uncensor(request: UncensorRequest) -> dict[str, Any]:
+    base = _llm_base(request.base_model)
+    name = _safe_name(request.name)
+    python = _uncensor_python(request.method)
+    if not python.is_file():
+        raise HTTPException(503, "Install the uncensor tools first.")
+    job_id = uuid.uuid4().hex
+    out = DATA_DIR / "output" / job_id
+    command = [str(python), str(BASE_DIR / "llm_uncensor.py"), "--method", request.method,
+               "--base", base, "--out", str(out)]
+    if request.method == "abliteration":
+        command += ["--repo", str(TRAINER_ROOT / "vendor" / "uncensor" / "abliteration")]
+    return await _enqueue_llm_tool(name, {"kind": "uncensor", "method": request.method,
+                                   "base_model": base, "job_id": job_id}, command,
+                                   f"Uncensor ({request.method}): {name}")
+
+
+@app.post(p("/api/jobs/{source_id}/refusal-test"), status_code=202)
+async def create_refusal_test(source_id: str, request: RefusalTestRequest) -> dict[str, Any]:
+    source = store.get(source_id) if re.fullmatch(r"[0-9a-f]{32}", source_id) else None
+    if not source or source["state"] != "complete" or json.loads(source["request_json"]).get("kind") != "uncensor":
+        raise HTTPException(422, "Choose a completed uncensor job.")
+    prompts = [p.strip() for p in request.prompts]
+    if any(not p or len(p) > 2000 for p in prompts):
+        raise HTTPException(422, "Each prompt must be 1–2000 characters.")
+    python = _uncensor_python("heretic")
+    if not python.is_file():
+        raise HTTPException(503, "Install the uncensor tools first.")
+    job_id = uuid.uuid4().hex
+    out = DATA_DIR / "output" / job_id
+    out.mkdir(parents=True, exist_ok=True)
+    prompt_file = out / "prompts.json"
+    prompt_file.write_text(json.dumps(prompts, ensure_ascii=False))
+    model = str(DATA_DIR / "output" / source_id / "model")
+    if not (Path(model) / "config.json").is_file():
+        raise HTTPException(422, "The completed job has no saved model to test.")
+    command = [str(python), str(BASE_DIR / "llm_uncensor.py"), "--method", "test", "--base", model,
+               "--out", str(out), "--prompts", str(prompt_file), "--max-tokens", str(request.max_tokens)]
+    return await _enqueue_llm_tool(source["name"] + " refusal test", {"kind": "refusal_test", "source_job": source_id,
+                                    "max_tokens": request.max_tokens, "job_id": job_id}, command, f"Refusal test: {source['name']}")
+
+
 @app.post(p("/api/jobs"), status_code=202)
 async def create_job(request: JobRequest) -> dict[str, Any]:
     job_id = uuid.uuid4().hex
@@ -1754,11 +2089,12 @@ async def create_job(request: JobRequest) -> dict[str, Any]:
         "request": request.model_dump(),
     }
     store.create(row)
+    spec["label"] = f"{'Fine-tune' if request.kind == 'finetune' else 'LoRA'}: {families.title(request.model)} / {spec['name']}"
     pending_specs[job_id] = spec
     try:
-        response = await _queue_request("/enqueue", {"app": "Trainer", "job_id": job_id, "label": f"{'Fine-tune' if request.kind == 'finetune' else 'LoRA'}: {families.title(request.model)} / {spec['name']}"})
-        response.raise_for_status()
-        entry = response.json()
+        entry = await gpu.enqueue(job_id, spec["label"], uses_llm=False)
+        if entry is None:
+            raise RuntimeError("The GPU queue is not reachable.")
         store.update(job_id, queue_entry_id=entry["entry_id"])
     except Exception as exc:
         pending_specs.pop(job_id, None)
@@ -1767,43 +2103,50 @@ async def create_job(request: JobRequest) -> dict[str, Any]:
     return _public(store.get(job_id))
 
 
-@app.post(p("/api/internal/queue/proceed/{job_id}"))
-async def queue_proceed(job_id: str, request: Request) -> dict[str, bool]:
-    client_host = request.client.host if request.client else None
-    if client_host not in {"127.0.0.1", "::1"} or request.headers.get("X-Queue-Internal-Secret") != QUEUE_SECRET:
-        raise HTTPException(403, "This internal callback is only available to the local queue coordinator.")
-    body = await request.json()
-    token = body.get("token")
+async def queue_grant(job_id: str, entry_id: str, token: str) -> bool:
+    """bunny-lock granted a turn (over the client's stream). True = started."""
     if job_id.startswith("erv"):
         # An epoch test's agent review (epoch_tests.py) also runs in the Trainer's GPU-queue slot.
-        accepted = bool(token) and epoch_tests.review_proceed(job_id[3:], token)
-        if not accepted and token:
-            with suppress(Exception):
-                await _queue_request("/release", {"token": token})
-        return {"accepted": accepted}
+        return epoch_tests.review_proceed(job_id[3:], token)
     if job_id.startswith(("tag", "find")):
         # Auto-tagging (tagger.py) and clip-finder (finder.py) jobs share the Trainer's GPU-queue slot.
-        accepted = bool(token) and (finder_proceed if job_id.startswith("find") else tagger_proceed)(job_id, token)
-        if not accepted and token:
-            with suppress(Exception):
-                await _queue_request("/release", {"token": token})
-        return {"accepted": accepted}
+        return (finder_proceed if job_id.startswith("find") else tagger_proceed)(job_id, token)
     for _ in range(100):
         item = store.get(job_id)
         if item and item.get("queue_entry_id"):
             break
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.02)
     item = store.get(job_id)
     spec = pending_specs.pop(job_id, None)
-    if not item or item["state"] != "waiting_for_gpu" or not spec or not token:
-        if token:
-            with suppress(Exception):
-                await _queue_request("/release", {"token": token})
-        return {"accepted": False}
+    if not item or item["state"] != "waiting_for_gpu" or not spec:
+        return False
     task = asyncio.create_task(_execute_job(job_id, token, spec))
     job_tasks.add(task)
     task.add_done_callback(job_tasks.discard)
-    return {"accepted": True}
+    return True
+
+
+async def queue_cancel(job_id: str, entry_id: str):
+    """The Queue page's Cancel for a training job (others: None = not handled here)."""
+    if not store.get(job_id):
+        return None
+    try:
+        return 200, await cancel_job(job_id)
+    except HTTPException as exc:
+        return exc.status_code, {"detail": exc.detail}
+
+
+async def queue_adopt(job_id: str, entry_id: str, active: bool, token: str | None) -> bool:
+    """After a restart: a saved queued job keeps its place (or starts now if its
+    turn came). Running jobs died with the old process; tagging etc. were in memory."""
+    item = store.get(job_id)
+    if not item or item["state"] != "waiting_for_gpu" or job_id not in pending_specs:
+        return False
+    store.update(job_id, queue_entry_id=entry_id)
+    return await queue_grant(job_id, entry_id, token) if active and token else True
+
+
+gpu.on_grant, gpu.on_cancel, gpu.on_adopt = queue_grant, queue_cancel, queue_adopt
 
 
 @app.get(p("/api/jobs"))
@@ -1988,19 +2331,28 @@ async def delete_epoch_test(job_id: str) -> dict[str, bool]:
 
 
 @app.get(p("/api/jobs/{job_id}/epoch-test/media/{filename}"))
-async def epoch_test_media(job_id: str, filename: str) -> FileResponse:
+async def epoch_test_media(job_id: str, filename: str, thumb: int = 0) -> FileResponse:
     _epoch_job(job_id)
     if not re.fullmatch(r"[a-z0-9_]{1,80}\.(mp4|png|webp|jpg)", filename):
         raise HTTPException(404, "Render not found.")
     path = epoch_tests.folder(job_id) / filename
     if not path.is_file():
         raise HTTPException(404, "Render not found.")
+    if thumb in epoch_tests_mod.THUMB_SIZES and not filename.endswith(".mp4"):
+        with suppress(OSError, ValueError):
+            path = await asyncio.to_thread(epoch_tests.thumb, job_id, filename, thumb)
     return FileResponse(path, headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.post(p("/api/jobs/{job_id}/publish-lora"))
 async def publish_job_lora(job_id: str, request: Request) -> dict[str, Any]:
     item = store.get(job_id)
+    if item and item["state"] == "complete" and item["model"] in MUSIC_GALLERY:
+        if not await _publish_music_lora(job_id):
+            if _refused_as_corrupt(job_id):
+                raise HTTPException(422, "This LoRA has NaN/Inf weights (training diverged), so it wasn't published.")
+            raise HTTPException(502, "Could not add the LoRA to the Music studio's gallery; check the job log and retry.")
+        return _public(store.get(job_id))
     if item and item["state"] == "complete" and item["model"] in IMAGE_GALLERY:
         body = await request.json() if int(request.headers.get("content-length") or 0) else {}
         checkpoint = str(body.get("checkpoint") or "") if isinstance(body, dict) else ""
@@ -2011,7 +2363,7 @@ async def publish_job_lora(job_id: str, request: Request) -> dict[str, Any]:
             raise HTTPException(502, "Could not add the final LoRA to the Image studio's gallery; check the job log and retry.")
         return _public(store.get(job_id))
     if not item or item["state"] != "complete" or item["model"] not in {"minimax_h3", "ltx25"}:
-        raise HTTPException(422, "Only completed H3, LTX, Krea 2, Qwen Image 2.1, MOSS-Image and Anima jobs can be published.")
+        raise HTTPException(422, "Only completed H3, LTX, Krea 2, Qwen Image 2.1, MOSS-Image, Anima, YuE2 and MiniMax Music 3 jobs can be published.")
     if not await _publish_final_lora(job_id):
         if _refused_as_corrupt(job_id):
             raise HTTPException(422, "This LoRA has NaN/Inf weights (training diverged), so it wasn't published.")
@@ -2057,11 +2409,13 @@ async def extract_lora(job_id: str, body: ExtractRequest) -> dict[str, Any]:
     }
     store.create({"id": new_id, "model": item["model"], "name": name, "dataset": item["dataset"],
                   "state": "waiting_for_gpu", "stage": "Waiting for GPU queue", "created_at": utc_now(), "request": spec["request"]})
+    spec["label"] = f"Extract LoRA: {item['name']}"
     pending_specs[new_id] = spec
     try:
-        response = await _queue_request("/enqueue", {"app": "Trainer", "job_id": new_id, "label": f"Extract LoRA: {item['name']}"})
-        response.raise_for_status()
-        store.update(new_id, queue_entry_id=response.json()["entry_id"])
+        entry = await gpu.enqueue(new_id, spec["label"], uses_llm=False)
+        if entry is None:
+            raise RuntimeError("The GPU queue is not reachable.")
+        store.update(new_id, queue_entry_id=entry["entry_id"])
     except Exception as exc:
         pending_specs.pop(new_id, None)
         store.update(new_id, state="failed", stage="Queue error", completed_at=utc_now(), error=f"Could not enqueue: {exc}")
@@ -2151,9 +2505,7 @@ async def cancel_job(job_id: str) -> dict[str, Any]:
         return _public(item)
     if item["state"] == "waiting_for_gpu":
         entry_id = item.get("queue_entry_id")
-        if entry_id:
-            with suppress(Exception):
-                await _queue_request(f"/dequeue/{entry_id}")
+        await gpu.dequeue(entry_id)
         store.update(job_id, state="cancelled", stage="Cancelled", completed_at=utc_now())
         pending_specs.pop(job_id, None)
     else:
@@ -2274,6 +2626,11 @@ async def delete_run_file(job: str, rel: str) -> dict[str, Any]:
     if item and item["state"] not in TERMINAL:
         raise HTTPException(409, "This run is still training; cancel it before deleting its files.")
     folder = _item_output_dir(item) if item else DATA_DIR / "output" / job
+    return {"deleted": rel, "freed": _delete_output(folder, rel, remove_empty_run=not item)}
+
+
+def _delete_output(folder: Path, rel: str, remove_empty_run: bool = False) -> int:
+    """Delete one .safetensors/.gguf output of a run (and its .sha256); returns the bytes freed."""
     target = (folder / rel).resolve()
     if not target.is_relative_to(folder.resolve()) or target.suffix.lower() not in (".safetensors", ".gguf") or not target.is_file():
         raise HTTPException(404, "That file is not one of this run's outputs.")
@@ -2285,9 +2642,123 @@ async def delete_run_file(job: str, rel: str) -> dict[str, Any]:
     while parent != folder.resolve() and parent.is_relative_to(folder.resolve()) and not any(parent.rglob("*.safetensors")):
         shutil.rmtree(parent, ignore_errors=True)
         parent = parent.parent
-    if not item and folder.is_dir() and not any(folder.rglob("*.safetensors")) and not any(folder.rglob("*.gguf")):
+    if remove_empty_run and folder.is_dir() and not any(folder.rglob("*.safetensors")) and not any(folder.rglob("*.gguf")):
         shutil.rmtree(folder, ignore_errors=True)
-    return {"deleted": rel, "freed": size}
+    return size
+
+
+# ---- Epoch cleanup: Trainer settings -> what to delete of a run's saved epochs ----
+# on_demand: nothing automatic (delete from the run's card); every_nth: when a run completes, keep
+# every Nth epoch; all_but_final: keep only the final LoRA. Always kept: the final file (or, when a
+# trainer wrote none, the newest epoch) and epochs starred in Test epochs. Gallery copies are copies.
+SETTINGS_FILE = DATA_DIR / "settings.json"
+CLEANUP_MODES = ("on_demand", "every_nth", "all_but_final")
+DEFAULT_SETTINGS = {"epoch_cleanup": {"mode": "on_demand", "every": 5}}
+
+
+class EpochCleanup(BaseModel):
+    mode: Literal["on_demand", "every_nth", "all_but_final"] = "on_demand"
+    every: int = Field(default=5, ge=2, le=500)
+
+
+class TrainerSettings(BaseModel):
+    epoch_cleanup: EpochCleanup = EpochCleanup()
+
+
+class CleanupRequest(BaseModel):
+    mode: Literal["every_nth", "all_but_final"]
+    every: int = Field(default=5, ge=2, le=500)
+    dry_run: bool = False
+
+
+def _settings() -> dict[str, Any]:
+    try:
+        saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        return TrainerSettings.model_validate({**DEFAULT_SETTINGS, **saved}).model_dump()
+    except (OSError, ValueError):
+        return json.loads(json.dumps(DEFAULT_SETTINGS))
+
+
+def _cleanup_plan(item: dict[str, Any], mode: str, every: int) -> dict[str, Any]:
+    folder = _item_output_dir(item)
+    files = _run_files(folder) if folder.is_dir() else []
+    epochs = sorted({f["epoch"] for f in files if f["epoch"] is not None})
+    keep: set[int] = set()
+    for label in epoch_tests.stars(item["id"]):
+        if (m := re.fullmatch(r"Epoch (\d+)", label)):
+            keep.add(int(m.group(1)))
+    if epochs and not any(f["final"] for f in files):
+        keep.add(epochs[-1])  # no final file: the newest epoch is the result
+    if mode == "every_nth":
+        keep |= {e for e in epochs if e % every == 0}
+    elif mode != "all_but_final":
+        keep |= set(epochs)
+    doomed = [f for f in files if f["epoch"] is not None and f["epoch"] not in keep]
+    return {"folder": folder, "delete": doomed, "kept_epochs": [e for e in epochs if e in keep],
+            "deleted_epochs": sorted({f["epoch"] for f in doomed}), "bytes": sum(f["size"] for f in doomed)}
+
+
+def _cleanup_refusal(item: dict[str, Any]) -> str:
+    if item["state"] not in TERMINAL:
+        return "This run is still training; its epochs can be cleaned up once it ends."
+    test = epoch_tests.summary(item["id"]) if epoch_tests.supported(item) else None
+    if test and (test["state"] in epoch_tests_mod.ACTIVE or test["review"] in epoch_tests_mod.REVIEW_ACTIVE):
+        return "Test epochs is still running on this run; clean up after it finishes."
+    return ""
+
+
+def _run_cleanup(item: dict[str, Any], mode: str, every: int, tag: str) -> dict[str, Any]:
+    plan = _cleanup_plan(item, mode, every)
+    freed = 0
+    for f in plan["delete"]:
+        with suppress(HTTPException, OSError):  # already gone (removed with its resume-state folder)
+            freed += _delete_output(plan["folder"], f["rel"])
+    if plan["delete"]:
+        kept = ", ".join(map(str, plan["kept_epochs"])) or "none"
+        store.append_log(item["id"], f"\n[{tag}] Deleted epochs {', '.join(map(str, plan['deleted_epochs']))} "
+                                     f"({freed / 1073741824:.1f} GB); kept the final LoRA and epochs: {kept}.\n")
+    return {"deleted_epochs": plan["deleted_epochs"], "kept_epochs": plan["kept_epochs"], "freed": freed}
+
+
+async def _auto_cleanup(job_id: str) -> None:
+    """After a run completes (and its gallery copy is made), apply Trainer settings' epoch cleanup."""
+    rule = _settings()["epoch_cleanup"]
+    item = store.get(job_id)
+    if rule["mode"] == "on_demand" or not item or item["state"] != "complete" or _cleanup_refusal(item):
+        return
+    try:
+        await asyncio.to_thread(_run_cleanup, item, rule["mode"], rule["every"], "Epoch cleanup")
+    except Exception as exc:  # noqa: BLE001 - never fails the finished run
+        store.append_log(job_id, f"\n[Epoch cleanup] Skipped: {exc}\n")
+
+
+@app.get(p("/api/settings"))
+async def get_settings() -> dict[str, Any]:
+    return _settings()
+
+
+@app.put(p("/api/settings"))
+async def put_settings(body: TrainerSettings) -> dict[str, Any]:
+    data = body.model_dump()
+    tmp = SETTINGS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, SETTINGS_FILE)
+    return data
+
+
+@app.post(p("/api/jobs/{job_id}/epochs/cleanup"))
+async def cleanup_epochs(job_id: str, body: CleanupRequest) -> dict[str, Any]:
+    """Delete saved epochs now by a rule (dry_run: what it would delete). The final LoRA and starred epochs stay."""
+    item = store.get(job_id)
+    if not item:
+        raise HTTPException(404, "Job not found.")
+    if (reason := _cleanup_refusal(item)):
+        raise HTTPException(409, reason)
+    if body.dry_run:
+        plan = await asyncio.to_thread(_cleanup_plan, item, body.mode, body.every)
+        return {"deleted_epochs": plan["deleted_epochs"], "kept_epochs": plan["kept_epochs"], "freed": plan["bytes"],
+                "files": len(plan["delete"])}
+    return await asyncio.to_thread(_run_cleanup, item, body.mode, body.every, "Clean up epochs")
 
 
 @app.exception_handler(Exception)

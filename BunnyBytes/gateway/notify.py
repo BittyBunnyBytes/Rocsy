@@ -204,11 +204,21 @@ class NotificationHub:
 _TERMINAL = {"complete", "failed", "cancelled"}
 
 
+# url -> (ETag, parsed body): the GPU queue answers 304 when nothing changed.
+_etag_cache: dict[str, tuple[str, Any]] = {}
+
+
 async def _poll_jobs(client: httpx.AsyncClient, url: str, key: str = "jobs") -> list[dict[str, Any]] | None:
     try:
-        response = await client.get(url)
-        response.raise_for_status()
-        data = json.loads(response.content, strict=False)  # prompts can hold raw control chars
+        cached = _etag_cache.get(url)
+        response = await client.get(url, headers={"if-none-match": cached[0]} if cached else None)
+        if response.status_code == 304 and cached:
+            data = cached[1]
+        else:
+            response.raise_for_status()
+            data = json.loads(response.content, strict=False)  # prompts can hold raw control chars
+            if etag := response.headers.get("etag"):
+                _etag_cache[url] = (etag, data)
     except Exception:  # noqa: BLE001 - a service being down is normal
         return None
     jobs = data if isinstance(data, list) else data.get(key) if isinstance(data, dict) else None

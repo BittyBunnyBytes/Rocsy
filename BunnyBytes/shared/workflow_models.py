@@ -149,22 +149,32 @@ def file_folder(class_type: str, input_name: str) -> str:
     return CLASS_FOLDERS.get(class_type) or INPUT_FOLDERS.get(input_name) or ""
 
 
+def _nodes_that_run(graph: dict[str, Any], infos: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """The nodes feeding an output node, as ComfyUI validates them. A template's other modes stay in the
+    graph unlinked (H3's ref2v loader on a Text render), so their files aren't needed. A class ComfyUI
+    doesn't know counts as an output, so it still gets reported. No known output in the graph: every node."""
+    nodes = {key: node for key, node in graph.items() if isinstance(node, dict) and isinstance(node.get("inputs"), dict)}
+    specs = {key: infos.get(str(node.get("class_type"))) for key, node in nodes.items()}
+    if not any(spec and spec.get("output_node") for spec in specs.values()):
+        return list(nodes.values())
+    pending = [key for key, spec in specs.items() if not spec or spec.get("output_node")]
+    seen = set(pending)
+    while pending:
+        for value in nodes[pending.pop()]["inputs"].values():
+            if isinstance(value, list) and len(value) == 2 and str(value[0]) in nodes and str(value[0]) not in seen:
+                seen.add(str(value[0]))
+                pending.append(str(value[0]))
+    return [nodes[key] for key in seen]
+
+
 async def missing_files(comfy_url: str, graphs: list[dict[str, Any]]) -> dict[str, list[dict[str, str]]]:
     """Model files these API graphs load that ComfyUI doesn't offer, plus loader
     nodes ComfyUI doesn't have. Asked fresh (no cache), so a file linked or
     downloaded a moment ago counts. Both lists are empty when ComfyUI can't be
     asked: the studio's own offline error says more than a guess would."""
-    wanted: dict[str, list[tuple[str, str]]] = {}
-    for graph in graphs:
-        for node in graph.values():
-            if not isinstance(node, dict) or not isinstance(node.get("inputs"), dict):
-                continue
-            class_type = str(node.get("class_type") or "")
-            for name, value in node["inputs"].items():
-                if class_type and is_model_file(value) and (name, value) not in wanted.setdefault(class_type, []):
-                    wanted[class_type].append((name, value))
-    wanted = {key: value for key, value in wanted.items() if value}
-    if not wanted:
+    classes = {str(node.get("class_type")) for graph in graphs for node in graph.values()
+               if isinstance(node, dict) and node.get("class_type")}
+    if not classes:
         return {"files": [], "nodes": []}
     base = comfy_url.rstrip("/")
     try:
@@ -173,9 +183,17 @@ async def missing_files(comfy_url: str, graphs: list[dict[str, Any]]) -> dict[st
                 response = await client.get(f"{base}/object_info/{class_type}")
                 response.raise_for_status()
                 return (response.json() or {}).get(class_type) or {}
-            infos = dict(zip(wanted, await asyncio.gather(*(info(c) for c in wanted))))
+            infos = dict(zip(classes, await asyncio.gather(*(info(c) for c in classes))))
     except (httpx.HTTPError, ValueError):
         return {"files": [], "nodes": []}
+    wanted: dict[str, list[tuple[str, str]]] = {}
+    for graph in graphs:
+        for node in _nodes_that_run(graph, infos):
+            class_type = str(node.get("class_type") or "")
+            for name, value in node["inputs"].items():
+                if class_type and is_model_file(value) and (name, value) not in wanted.setdefault(class_type, []):
+                    wanted[class_type].append((name, value))
+    wanted = {key: value for key, value in wanted.items() if value}
     files: dict[str, dict[str, str]] = {}
     nodes = []
     for class_type, pairs in wanted.items():

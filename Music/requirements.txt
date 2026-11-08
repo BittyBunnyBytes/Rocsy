@@ -6,3 +6,7 @@ python-multipart==0.0.32
 pydantic==2.11.7
 Jinja2==3.1.6
 starlette==1.7.0
+# Custom voices from a YouTube link. Unpinned on purpose: YouTube changes break old yt-dlp releases, so every
+# image build takes the newest. Deno is the JS runtime yt-dlp needs for YouTube.
+yt-dlp[default]
+deno

@@ -163,6 +163,8 @@ def display_size(request: GenerationRequest) -> tuple[int, int]:
     """Best-known output size for the job card before any enhancer pass."""
     if request.is_qwen and not request.prompt_enhancer:
         return qwen.resolve_size(request) or qwen.reference_output_size(request) or request.normalized_size()
+    if request.model == MODEL_MOSS:
+        return moss.output_size(request)
     return request.normalized_size()
 
 

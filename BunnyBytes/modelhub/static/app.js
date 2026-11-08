@@ -54,7 +54,7 @@ function toast(message, kind = '') {
   node.className = 'toast' + (kind ? ' is-' + kind : '');
   node.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { node.hidden = true; }, 4200);
+  toastTimer = setTimeout(() => { node.hidden = true; }, kind === 'error' ? 9000 : 4200);
 }
 
 function fitBadge(fit) {
@@ -602,7 +602,8 @@ $('fits').addEventListener('change', () => {
   search(true);
 });
 // "Supported only" keeps cards a studio template, a saved ComfyUI workflow or llama.cpp can run.
-try { state.supportedOnly = localStorage.getItem('models.supportedOnly') === '1'; } catch { state.supportedOnly = false; }
+// On by default: a new user first sees only models Rocsy's studios can actually run.
+try { state.supportedOnly = localStorage.getItem('models.supportedOnly') !== '0'; } catch { state.supportedOnly = true; }
 $('supported-only').checked = state.supportedOnly;
 $('supported-only').addEventListener('change', () => {
   state.supportedOnly = $('supported-only').checked;
@@ -980,7 +981,10 @@ function renderVersion(holder, detail, version, dirs) {
   const visionHeads = variants.filter(v => v.role === 'Vision head');
   const extras = variants.filter(v => v.role && !HEADS.includes(v.role));
   const pickFrom = main.length ? main : extras.length ? extras : [...mtpHeads, ...visionHeads];
-  if (main.length) holder.append(headSupport(main, mtpHeads, visionHeads));
+  // MTP/vision heads only mean something for language models (GGUF files or an LLM listing).
+  const isLlm = detail.type === 'LLM' || detail.kind === 'llm' || mtpHeads.length || visionHeads.length ||
+    main.some(v => (v.files || []).some(f => /\.gguf$/i.test(f.name || '')));
+  if (main.length && isLlm) holder.append(headSupport(main, mtpHeads, visionHeads));
   holder.append(quantPicker(detail, version, pickFrom, dirs));
   if (main.length) {
     const auto = visionHeads.find(v => v.auto);
@@ -1195,6 +1199,7 @@ function downloadControls(detail, version, variant, dirs, info) {
         dest: dest.value, schedule: !!locked});
       const scheduled = result.jobs?.[0]?.state === 'scheduled';
       button.textContent = scheduled ? 'Scheduled' : 'Queued';
+      for (const job of result.jobs || []) if (job.id) seenJobStates.set(job.id, job.state || 'queued');
       toast(scheduled ? `Scheduled: starts by itself on ${untilText(version.paywall.ends)}` : `Downloading ${variant.file_label || variant.files[0].name}`, 'ok');
       refreshState();
     } catch (error) {
@@ -1280,7 +1285,7 @@ function setSub(sub) {
   if (sub === 'updates') { loadLibrary(); loadComfyUpdate(); loadComfyNodes(); }
   if (sub === 'installed') loadInstalled();
   if (sub === 'downloads') renderDownloads(state.downloads || []);
-  if (sub === 'core') { loadCore(); loadRuntime(); loadComfySetup(); loadComfyNodes(); }
+  if (sub === 'core') { loadCore(); loadRuntime(); loadComfySetup(); loadComfyNodes(); loadPlugins(); }
 }
 $('subtabs').addEventListener('click', event => {
   const tab = event.target.closest('[data-sub]');
@@ -1294,6 +1299,7 @@ function setCoreGroup(group) {
   document.querySelectorAll('#core-nav [data-group]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.group === group)));
   document.querySelectorAll('.core-group').forEach(g => { g.hidden = g.dataset.group !== group; });
   try { localStorage.setItem('models.coreGroup', group); } catch { /* private mode */ }
+  if (group === 'plugins' && typeof loadPlugins === 'function') loadPlugins();
 }
 $('core-nav').addEventListener('click', event => {
   const jump = event.target.closest('[data-jump]');
@@ -1314,6 +1320,571 @@ const coreSpy = new IntersectionObserver(entries => {
   });
 }, {rootMargin: '-80px 0px -60% 0px'});
 document.querySelectorAll('#core-nav [data-jump]').forEach(link => { const target = $(link.dataset.jump); if (target) coreSpy.observe(target); });
+
+// ---- core backend: plugins (gateway /api/plugins + /api/services, plugins.py / hostctl) -----
+// Your own services from core-backend-extras/plugins: whether each answers, its container, and
+// Start / Stop / Restart through the Services helper. The gateway reads plugin.json at start.
+
+const PLUGIN_SVG = 'http://www.w3.org/2000/svg';
+let pluginTimer = null;
+let pluginKey = '';
+let pluginBusy = false;
+
+function pluginIcon(plugin, size = 26) {
+  const tile = el('span', 'plugin-icon');
+  tile.style.setProperty('--plugin', plugin.color || '#a3b0bd');
+  if (plugin.icon_url) {
+    const img = el('img');
+    img.src = plugin.icon_url; img.alt = ''; img.width = size + 6; img.height = size + 6; img.decoding = 'async';
+    tile.classList.add('has-img');
+    tile.append(img);
+    return tile;
+  }
+  const svg = document.createElementNS(PLUGIN_SVG, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', size); svg.setAttribute('height', size);
+  svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.7'); svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  // plugins.py only lets plain shapes through (path, circle, rect, …; no handlers, hrefs or url()).
+  const parsed = new DOMParser().parseFromString(`<svg xmlns="${PLUGIN_SVG}">${plugin.icon || ''}</svg>`, 'image/svg+xml');
+  const allowed = new Set(['path', 'circle', 'rect', 'ellipse', 'line', 'polyline', 'polygon', 'g']);
+  const ok = !parsed.querySelector('parsererror') && [...parsed.documentElement.querySelectorAll('*')].every(n => allowed.has(n.localName)
+    && [...n.attributes].every(a => !/^on/i.test(a.name) && !/href/i.test(a.name) && !/url\(|javascript:/i.test(a.value)));
+  if (ok) [...parsed.documentElement.childNodes].forEach(n => svg.append(document.importNode(n, true)));
+  else svg.innerHTML = '<rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M9 12h6M12 9v6"/>';
+  tile.append(svg);
+  return tile;
+}
+
+function pluginFact(label, value, className = '') {
+  const row = el('div', 'plugin-fact ' + className);
+  row.append(el('dt', '', label), el('dd', '', value));
+  return row;
+}
+
+function pluginUptime(since) {
+  if (!since) return '';
+  const s = Math.max(0, Date.now() / 1000 - since);
+  if (s < 90) return 'up just now';
+  if (s < 5400) return `up ${Math.round(s / 60)} min`;
+  if (s < 172800) return `up ${Math.round(s / 3600)} h`;
+  return `up ${Math.round(s / 86400)} days`;
+}
+
+async function pluginAction(item, action, force = false) {
+  const verbs = {start: 'Starting', stop: 'Stopping', restart: 'Restarting'};
+  if (!force && action !== 'start' && !confirm(`${action === 'stop' ? 'Stop' : 'Restart'} ${item.name}?${action === 'stop' ? ' It stays off until you start it again.' : ''}`)) return;
+  pluginBusy = true;
+  const task = $('plugins-task');
+  task.hidden = false; task.textContent = `${verbs[action]} ${item.name}…`;
+  try {
+    const response = await fetch(`/api/services/${encodeURIComponent(item.id)}/${action}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json', 'X-BB-Action': '1'}, body: JSON.stringify({force})});
+    if (response.status === 401) { location.href = '/login?next=/Models/%23core-plugins'; return; }
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 409 && data.can_force && confirm(`${data.error}\n\nDo it anyway?`)) { pluginBusy = false; return pluginAction(item, action, true); }
+    if (!response.ok) throw Error(data.error || `HTTP ${response.status}`);
+    task.textContent = data.message || 'Done';
+  } catch (error) {
+    task.textContent = `${item.name}: ${error.message}`;
+  } finally {
+    pluginBusy = false;
+    pluginKey = '';
+    loadPlugins();
+  }
+}
+
+function pluginCard(plugin, service) {
+  const running = service ? service.running : null;
+  const stateName = plugin.up ? 'up' : running === false ? 'stopped' : 'down';
+  const card = el('article', `plugin-card is-${stateName}`);
+  card.style.setProperty('--plugin', plugin.color || '#a3b0bd');
+  const head = el('div', 'plugin-card-head');
+  const title = el('div', 'plugin-title');
+  title.append(el('h3', '', plugin.name), el('p', '', plugin.note || `plugins/${plugin.folder}`));
+  const pill = el('span', `plugin-state is-${stateName}`, plugin.up ? 'Answering' : running === false ? 'Stopped' : 'Not answering');
+  head.append(pluginIcon(plugin), title, pill);
+
+  const facts = el('dl', 'plugin-facts');
+  facts.append(pluginFact('Opens at', `${plugin.path}/`), pluginFact('Upstream', plugin.upstream));
+  if (plugin.container) {
+    const where = service ? [service.state, pluginUptime(service.since)].filter(Boolean).join(' · ') : 'Services helper not reachable';
+    facts.append(pluginFact('Container', `${plugin.container}${where ? ` — ${where}` : ''}`));
+  }
+  facts.append(pluginFact('Folder', `core-backend-extras/plugins/${plugin.folder}`));
+
+  const tags = el('div', 'plugin-tags');
+  tags.append(el('span', 'tag', plugin.home ? `Home card · ${plugin.group}` : 'URL only'));
+  if (plugin.gpu_queue) tags.append(el('span', 'tag plugin-tag-gpu', 'GPU queue'));
+  if (plugin.themed === false) tags.append(el('span', 'tag', 'Own theme'));
+  if (plugin.strip_prefix) tags.append(el('span', 'tag', 'Prefix stripped'));
+  if (service?.boot) tags.append(el('span', 'tag', 'Starts at boot'));
+
+  const actions = el('div', 'plugin-actions');
+  const open = el('a', 'primary-button plugin-open', 'Open');
+  open.href = `${plugin.path}/`;
+  actions.append(open, pluginSettingsButton(plugin.folder));
+  if (service) {
+    const verbs = running ? [['restart', 'Restart'], ['stop', 'Stop']] : [['start', 'Start']];
+    verbs.forEach(([action, label]) => {
+      const button = el('button', 'secondary-button', label);
+      button.type = 'button';
+      const rule = service.actions?.[action];
+      button.disabled = pluginBusy || (rule && !rule.allowed);
+      if (rule?.reason) button.title = rule.reason;
+      button.addEventListener('click', () => pluginAction(service, action));
+      actions.append(button);
+    });
+  }
+  if (plugin.version) tags.append(el('span', 'tag', `v${String(plugin.version).replace(/^v/i, '')}`));
+  const parts = [head, facts, tags];
+  if (plugin.updates) parts.push(pluginUpdateRow(plugin));
+  card.append(...parts, actions);
+  return card;
+}
+
+// Update status per plugin, asked once per page visit (the gateway caches checks for hours).
+const pluginUpdateResults = {};
+function pluginUpdateRow(plugin, force = false) {
+  const row = el('div', 'plugin-update');
+  const text = el('span', 'plugin-update-text', 'Checking for updates…');
+  const links = el('span', 'plugin-update-links');
+  const again = el('button', 'link-button', 'Check now');
+  again.type = 'button';
+  row.append(text, links, again);
+  const paint = result => {
+    const line = updateLine(result);
+    row.dataset.kind = line.kind;
+    text.textContent = line.text || 'No update source';
+    text.title = line.notes || '';
+    links.replaceChildren();
+    if (line.url) {
+      const a = el('a', '', line.kind === 'new' ? 'Release notes' : 'Releases');
+      a.href = line.url; a.target = '_blank'; a.rel = 'noopener';
+      links.append(a);
+    }
+  };
+  const run = async (fresh) => {
+    again.disabled = true;
+    if (fresh) text.textContent = 'Checking for updates…';
+    try {
+      const response = await fetch(`/api/plugins/${encodeURIComponent(plugin.folder)}/updates${fresh ? '?force=1' : ''}`, {cache: 'no-store'});
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw Error(data.error || `HTTP ${response.status}`);
+      pluginUpdateResults[plugin.folder] = data;
+      paint(data);
+    } catch (error) {
+      paint({configured: true, error: `Couldn't check: ${error.message}`});
+    } finally { again.disabled = false; }
+  };
+  again.addEventListener('click', () => run(true));
+  if (pluginUpdateResults[plugin.folder] && !force) paint(pluginUpdateResults[plugin.folder]);
+  else run(force);
+  return row;
+}
+
+function pluginOffCard(plugin) {
+  const card = el('article', 'plugin-card is-off');
+  card.style.setProperty('--plugin', plugin.color || '#a3b0bd');
+  const head = el('div', 'plugin-card-head');
+  const title = el('div', 'plugin-title');
+  title.append(el('h3', '', plugin.name), el('p', '', plugin.note || `plugins/${plugin.folder}`));
+  head.append(pluginIcon(plugin), title, el('span', 'plugin-state is-off', 'Off'));
+  const facts = el('dl', 'plugin-facts');
+  if (plugin.path) facts.append(pluginFact('Would open at', `${plugin.path}/`));
+  facts.append(pluginFact('Folder', `core-backend-extras/plugins/${plugin.folder}`));
+  const actions = el('div', 'plugin-actions');
+  const on = el('button', 'primary-button', 'Turn on');
+  on.type = 'button';
+  on.addEventListener('click', () => setPluginEnabled(plugin.folder, true));
+  actions.append(on, pluginSettingsButton(plugin.folder));
+  card.append(head, facts, actions);
+  return card;
+}
+
+function pluginSettingsButton(folder) {
+  const button = el('button', 'secondary-button plugin-settings-button');
+  button.type = 'button';
+  button.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>';
+  button.append('Settings');
+  button.addEventListener('click', () => openPluginSettings(folder));
+  return button;
+}
+
+async function loadPlugins() {
+  // setCoreGroup can run at start-up, before this file's timers exist: bail out on the view first.
+  if (state.view !== 'manager' || state.sub !== 'core' || $('core-plugins-card').closest('.core-group').hidden) return;
+  clearTimeout(pluginTimer);
+  if (pluginBusy) return;
+  try {
+    const [pluginResponse, services] = await Promise.all([
+      fetch('/api/plugins', {cache: 'no-store'}),
+      fetch('/api/services', {cache: 'no-store'}).then(r => (r.ok ? r.json() : null)).catch(() => null)]);
+    if (pluginResponse.status === 401) { location.href = '/login?next=/Models/%23core-plugins'; return; }
+    if (!pluginResponse.ok) throw Error(`HTTP ${pluginResponse.status}`);
+    const data = await pluginResponse.json();
+    const byId = Object.fromEntries((services?.items || []).map(item => [item.id, item]));
+    const key = JSON.stringify([data, services?.items?.filter(i => i.group === 'Plugins'), Math.floor(Date.now() / 60000)],
+      (k, v) => (k === 'since' && v ? Math.round(v / 60) : v));
+    if (key !== pluginKey) {
+      pluginKey = key;
+      const list = data.plugins || [];
+      const up = list.filter(p => p.up).length;
+      const summary = $('plugin-summary');
+      summary.hidden = !list.length && !(data.disabled || []).length;
+      summary.replaceChildren(
+        ...[[list.length, 'loaded'], [up, 'answering', 'good'], [list.length - up, 'not answering', list.length - up ? 'bad' : ''],
+            [(data.disabled || []).length, 'turned off'], [(data.errors || []).length, 'broken', (data.errors || []).length ? 'bad' : '']]
+          .filter(([n], i) => i < 2 || n)
+          .map(([n, label, kind]) => { const s = el('span', `plugin-stat ${kind || ''}`); s.append(el('strong', '', String(n)), el('span', '', label)); return s; }));
+      $('plugin-grid').replaceChildren(...(list.length ? list.map(p => pluginCard(p, p.container ? byId[p.container] : null))
+        : [el('p', 'empty', 'No plugins yet. The guide below shows how to add one.')]));
+      $('plugin-off').hidden = !(data.disabled || []).length;
+      $('plugin-off-grid').replaceChildren(...(data.disabled || []).map(pluginOffCard));
+      $('plugin-broken').hidden = !(data.errors || []).length;
+      $('plugin-broken-list').replaceChildren(...(data.errors || []).map(item => {
+        const row = el('div', 'plugin-broken-row');
+        row.append(el('strong', '', `plugins/${item.folder}`), el('span', '', item.error));
+        const fix = el('button', 'link-button', 'Edit plugin.json');
+        fix.type = 'button';
+        fix.addEventListener('click', async () => { await openPluginSettings(item.folder); if ($('plugin-dialog').open && pd.mode === 'form') pdMode('json'); });
+        row.append(fix);
+        return row;
+      }));
+      $('plugin-pending').hidden = !data.pending_restart;
+      const down = list.length - up + (data.errors || []).length;
+      $('core-plugins-badge').hidden = !down;
+      $('core-plugins-badge').textContent = down ? String(down) : '';
+    }
+    if (!pluginBusy && $('plugins-task').textContent.startsWith("Couldn't")) $('plugins-task').hidden = true;
+  } catch (error) {
+    $('plugins-task').hidden = false;
+    $('plugins-task').textContent = `Couldn't ask the gateway: ${error.message}`;
+  }
+  pluginTimer = setTimeout(loadPlugins, 10000);
+}
+$('plugins-refresh').addEventListener('click', () => { pluginKey = ''; loadPlugins(); });
+
+// ---- core backend: plugin settings (gateway /api/plugins/<folder>/config, written by hostctl) ----
+// The form edits the common keys; the plugin.json tab edits the whole file. Unknown keys are kept.
+const pd = {folder: '', config: {}, mode: 'form'};
+
+function pdError(message) { $('pd-error').textContent = message || ''; }
+
+function pdFill(config) {
+  const home = config.home && typeof config.home === 'object' ? config.home : (config.home ? {} : null);
+  $('pd-enabled').checked = config.enabled !== false;
+  $('pd-name').value = config.name || '';
+  $('pd-id').value = config.id || '';
+  $('pd-note').value = config.note || '';
+  $('pd-path').value = config.path || '';
+  $('pd-path').placeholder = config.id ? `/${config.id}` : '/Name';
+  $('pd-upstream').value = config.upstream || '';
+  $('pd-health').value = config.health || '';
+  $('pd-container').value = config.container || '';
+  $('pd-strip').checked = !!config.strip_prefix;
+  $('pd-gpu').checked = !!config.gpu_queue;
+  $('pd-themed').checked = config.themed !== false;
+  const color = /^#[0-9a-f]{6}$/i.test(config.color || '') ? config.color.toLowerCase() : '#a3b0bd';
+  $('pd-color').value = color; $('pd-color-hex').value = config.color || '';
+  $('pd-icon-src').value = config.icon || '';
+  $('pd-home').checked = !!home;
+  $('pd-group').value = home?.group === 'Create' ? 'Create' : 'Tools';
+  $('pd-experimental').checked = !!home?.experimental;
+  $('pd-desc').value = home?.desc || '';
+  $('pd-status').value = home?.status || '';
+  $('pd-background').value = ['image', 'video', 'recent', 'plugin'].includes(home?.background) ? home.background : 'none';
+  $('pd-bgurl').value = home?.background_url || '';
+  $('pd-bgurl').placeholder = `${config.path || (config.id ? `/${config.id}` : '/Name')}/api/home-art`;
+  $('pd-slideshow').checked = !!home?.slideshow;
+  const updates = config.updates && typeof config.updates === 'object' ? config.updates : {};
+  $('pd-version').value = config.version || '';
+  $('pd-upd-source').value = updates.github ? 'github' : updates.url ? 'url' : 'none';
+  $('pd-upd-github').value = updates.github || '';
+  $('pd-upd-url').value = updates.url || '';
+  $('pd-upd-current').value = updates.current_url || '';
+  $('pd-upd-current').placeholder = `${config.path || (config.id ? `/${config.id}` : '/Name')}/api/version`;
+  $('pd-upd-pre').checked = !!updates.prereleases;
+  $('pd-upd-result').textContent = '';
+  pdUpdateFields();
+  pd.iconFile = config.icon_file || '';
+  pd.iconBust = Date.now();
+  pdBackgroundFields();
+  $('pd-home-fields').hidden = !home;
+  pdPreview();
+}
+
+// Form -> plugin.json, on top of the loaded file so keys the form doesn't know survive.
+function pdCollect() {
+  const config = {...pd.config};
+  const set = (key, value) => { if (value === '' || value === undefined || value === null) delete config[key]; else config[key] = value; };
+  set('id', $('pd-id').value.trim());
+  set('name', $('pd-name').value.trim());
+  set('note', $('pd-note').value.trim());
+  set('path', $('pd-path').value.trim().replace(/\/+$/, ''));
+  set('upstream', $('pd-upstream').value.trim().replace(/\/+$/, ''));
+  set('health', $('pd-health').value.trim());
+  set('container', $('pd-container').value.trim());
+  set('color', $('pd-color-hex').value.trim().toLowerCase());
+  set('icon', $('pd-icon-src').value.trim());
+  if ($('pd-strip').checked) config.strip_prefix = true; else delete config.strip_prefix;
+  if ($('pd-gpu').checked) config.gpu_queue = true; else delete config.gpu_queue;
+  if ($('pd-themed').checked) delete config.themed; else config.themed = false;
+  if ($('pd-home').checked) {
+    const home = {group: $('pd-group').value};
+    if ($('pd-desc').value.trim()) home.desc = $('pd-desc').value.trim();
+    if ($('pd-status').value.trim()) home.status = $('pd-status').value.trim();
+    if ($('pd-experimental').checked) home.experimental = true;
+    const background = $('pd-background').value;
+    if (background !== 'none') home.background = background;
+    if (background === 'plugin' && $('pd-bgurl').value.trim()) home.background_url = $('pd-bgurl').value.trim();
+    if (background !== 'none' && $('pd-slideshow').checked) home.slideshow = true;
+    // Keys the form doesn't show survive inside home too.
+    const before = pd.config.home && typeof pd.config.home === 'object' ? pd.config.home : {};
+    for (const [key, value] of Object.entries(before))
+      if (!['group', 'desc', 'status', 'experimental', 'background', 'background_url', 'slideshow'].includes(key)) home[key] = value;
+    config.home = home;
+  } else config.home = false;
+  if ($('pd-enabled').checked) delete config.enabled; else config.enabled = false;
+  if (pd.iconFile) config.icon_file = pd.iconFile; else delete config.icon_file;
+  set('version', $('pd-version').value.trim());
+  const source = $('pd-upd-source').value;
+  const before = pd.config.updates && typeof pd.config.updates === 'object' ? pd.config.updates : {};
+  const updates = Object.fromEntries(Object.entries(before).filter(([key]) => !['github', 'url', 'current_url', 'prereleases'].includes(key)));
+  if (source === 'github' && $('pd-upd-github').value.trim()) updates.github = $('pd-upd-github').value.trim();
+  if (source === 'github' && $('pd-upd-pre').checked) updates.prereleases = true;
+  if (source === 'url' && $('pd-upd-url').value.trim()) updates.url = $('pd-upd-url').value.trim();
+  if (source !== 'none' && $('pd-upd-current').value.trim()) updates.current_url = $('pd-upd-current').value.trim();
+  if (Object.keys(updates).length) config.updates = updates; else delete config.updates;
+  return config;
+}
+
+function pdUpdateFields() {
+  const source = $('pd-upd-source').value;
+  $('pd-upd-github-field').hidden = source !== 'github';
+  $('pd-upd-pre-row').hidden = source !== 'github';
+  $('pd-upd-url-field').hidden = source !== 'url';
+  $('pd-upd-current-field').hidden = source === 'none';
+  $('pd-upd-check-row').hidden = source === 'none';
+}
+
+// One line about an update check result, shared by the cards and the dialog.
+function updateLine(result) {
+  if (!result || !result.configured) return {text: '', kind: ''};
+  if (result.error) return {text: result.error, kind: 'bad'};
+  const current = result.current ? `v${String(result.current).replace(/^v/i, '')}` : 'unknown version';
+  const latest = result.latest ? `v${String(result.latest).replace(/^v/i, '')}` : '';
+  if (result.available === true) return {text: `Update available: ${latest} (installed ${current})`, kind: 'new', url: result.url, notes: result.notes};
+  if (result.available === false) return {text: `Up to date · ${current}`, kind: 'good', url: result.url};
+  if (latest) return {text: `Newest is ${latest}; set the installed version to compare`, kind: '', url: result.url};
+  return {text: `Installed ${current}`, kind: ''};
+}
+
+function pdBackgroundFields() {
+  const background = $('pd-background').value;
+  $('pd-bgurl-field').hidden = background !== 'plugin';
+  $('pd-slideshow-row').hidden = background === 'none' || background === 'image' || background === 'video';
+}
+
+function pdPreview() {
+  const hex = $('pd-color-hex').value.trim();
+  $('pd-iconfile-name').textContent = pd.iconFile ? pd.iconFile : 'None: drawn from the SVG shapes below';
+  $('pd-iconfile-clear').hidden = !pd.iconFile;
+  $('pd-icon-src-field').classList.toggle('is-muted', !!pd.iconFile);
+  const tile = pluginIcon({icon: $('pd-icon-src').value, color: /^#[0-9a-f]{6}$/i.test(hex) ? hex : '#a3b0bd',
+                           icon_url: pd.iconFile ? `/api/plugins/${encodeURIComponent(pd.folder)}/icon?file=${encodeURIComponent(pd.iconFile)}&t=${pd.iconBust}` : ''});
+  $('pd-icon').replaceWith(Object.assign(tile, {id: 'pd-icon'}));
+}
+
+function pdMode(mode) {
+  if (mode === pd.mode) return;
+  if (mode === 'json') {
+    $('pd-json').value = JSON.stringify(pdCollect(), null, 2);
+  } else {
+    let parsed;
+    try { parsed = JSON.parse($('pd-json').value); } catch (error) { pdError(`plugin.json isn't valid JSON: ${error.message}`); return; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) { pdError('plugin.json must be a JSON object'); return; }
+    pd.config = parsed; pdFill(parsed);
+  }
+  pdError('');
+  pdShow(mode);
+}
+
+function pdShow(mode) {
+  pd.mode = mode;
+  document.querySelectorAll('[data-pd-mode]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.pdMode === mode)));
+  $('pd-form-body').hidden = mode !== 'form';
+  $('pd-json-body').hidden = mode !== 'json';
+}
+
+async function openPluginSettings(folder) {
+  pdError('');
+  try {
+    const response = await fetch(`/api/plugins/${encodeURIComponent(folder)}/config`, {cache: 'no-store'});
+    if (response.status === 401) { location.href = '/login?next=/Models/%23core-plugins'; return; }
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw Error(data.error || `HTTP ${response.status}`);
+    pd.folder = folder;
+    $('pd-where').textContent = `core-backend-extras/plugins/${folder}/plugin.json`;
+    if (data.config) {
+      pd.config = data.config;
+      $('pd-title').textContent = `${data.config.name || data.config.id || folder} settings`;
+      pdFill(data.config);
+      pdShow('form');
+    } else {
+      // Not valid JSON: only the raw editor makes sense until it parses again.
+      pd.config = {};
+      $('pd-title').textContent = `${folder} settings`;
+      $('pd-json').value = data.raw || '';
+      pdShow('json');
+      pdError(data.error || '');
+    }
+    $('plugin-dialog').showModal();
+  } catch (error) {
+    $('plugins-task').hidden = false;
+    $('plugins-task').textContent = `Couldn't open ${folder}'s settings: ${error.message}`;
+  }
+}
+
+async function savePluginConfig(config) {
+  const response = await fetch(`/api/plugins/${encodeURIComponent(pd.folder)}/config`, {
+    method: 'POST', headers: {'Content-Type': 'application/json', 'X-BB-Action': '1'}, body: JSON.stringify({config})});
+  if (response.status === 401) { location.href = '/login?next=/Models/%23core-plugins'; throw Error('Signed out'); }
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+$('pd-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  let config;
+  if (pd.mode === 'json') {
+    try { config = JSON.parse($('pd-json').value); } catch (error) { pdError(`plugin.json isn't valid JSON: ${error.message}`); return; }
+  } else {
+    if (!$('pd-id').value.trim() || !$('pd-upstream').value.trim()) { pdError('ID and Upstream URL are required.'); return; }
+    config = pdCollect();
+  }
+  $('pd-save').disabled = true; pdError('');
+  try {
+    const result = await savePluginConfig(config);
+    $('plugin-dialog').close();
+    $('plugins-task').hidden = false;
+    $('plugins-task').textContent = result.changed === false ? 'Nothing changed.' : `${config.name || config.id}: saved.`;
+    pluginKey = ''; loadPlugins();
+  } catch (error) {
+    pdError(error.message);
+  } finally { $('pd-save').disabled = false; }
+});
+document.querySelectorAll('[data-pd-mode]').forEach(b => b.addEventListener('click', () => pdMode(b.dataset.pdMode)));
+$('pd-close').addEventListener('click', () => $('plugin-dialog').close());
+$('pd-cancel').addEventListener('click', () => $('plugin-dialog').close());
+$('pd-home').addEventListener('change', () => { $('pd-home-fields').hidden = !$('pd-home').checked; });
+$('pd-color').addEventListener('input', () => { $('pd-color-hex').value = $('pd-color').value; pdPreview(); });
+$('pd-color-hex').addEventListener('input', () => {
+  const hex = $('pd-color-hex').value.trim();
+  if (/^#[0-9a-f]{6}$/i.test(hex)) $('pd-color').value = hex.toLowerCase();
+  pdPreview();
+});
+$('pd-icon-src').addEventListener('input', pdPreview);
+$('pd-background').addEventListener('change', pdBackgroundFields);
+$('pd-upd-source').addEventListener('change', pdUpdateFields);
+$('pd-upd-check').addEventListener('click', async () => {
+  const button = $('pd-upd-check');
+  button.disabled = true; $('pd-upd-result').textContent = 'Checking…'; $('pd-upd-result').dataset.kind = '';
+  try {
+    const config = pd.mode === 'json' ? JSON.parse($('pd-json').value) : pdCollect();
+    const response = await fetch(`/api/plugins/${encodeURIComponent(pd.folder)}/updates`, {
+      method: 'POST', headers: {'Content-Type': 'application/json', 'X-BB-Action': '1'}, body: JSON.stringify({config})});
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw Error(data.error || `HTTP ${response.status}`);
+    const line = updateLine(data);
+    $('pd-upd-result').textContent = line.text || 'Nothing to check';
+    $('pd-upd-result').dataset.kind = line.kind;
+  } catch (error) {
+    $('pd-upd-result').textContent = error.message; $('pd-upd-result').dataset.kind = 'bad';
+  } finally { button.disabled = false; }
+});
+$('pd-iconfile-upload').addEventListener('click', () => $('pd-iconfile-input').click());
+$('pd-iconfile-clear').addEventListener('click', () => { pd.iconFile = ''; pdPreview(); });
+$('pd-iconfile-input').addEventListener('change', async () => {
+  const file = $('pd-iconfile-input').files[0];
+  $('pd-iconfile-input').value = '';
+  if (!file) return;
+  if (file.size > 512 * 1024) { pdError('The picture is over 512 KB.'); return; }
+  pdError('');
+  const button = $('pd-iconfile-upload');
+  button.disabled = true; button.textContent = 'Uploading…';
+  try {
+    const data = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+      reader.onerror = () => reject(Error("Couldn't read the file"));
+      reader.readAsDataURL(file);
+    });
+    const response = await fetch(`/api/plugins/${encodeURIComponent(pd.folder)}/icon`, {
+      method: 'POST', headers: {'Content-Type': 'application/json', 'X-BB-Action': '1'}, body: JSON.stringify({data})});
+    const reply = await response.json().catch(() => ({}));
+    if (!response.ok) throw Error(reply.error || `HTTP ${response.status}`);
+    // The file is in place; the dialog points plugin.json at it on Save.
+    pd.iconFile = reply.icon_file;
+    pd.config = {...pd.config, icon_file: reply.icon_file};
+    pd.iconBust = Date.now();
+    pdPreview();
+  } catch (error) {
+    pdError(`Icon upload failed: ${error.message}`);
+  } finally { button.disabled = false; button.textContent = 'Upload picture'; }
+});
+$('pd-id').addEventListener('input', () => { $('pd-path').placeholder = `/${$('pd-id').value.trim() || 'Name'}`; });
+
+// Quick on/off from a card: the same save, with only "enabled" changed.
+async function setPluginEnabled(folder, on) {
+  try {
+    const response = await fetch(`/api/plugins/${encodeURIComponent(folder)}/config`, {cache: 'no-store'});
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw Error(data.error || `HTTP ${response.status}`);
+    pd.folder = folder;
+    const config = {...data.config};
+    if (on) delete config.enabled; else config.enabled = false;
+    await savePluginConfig(config);
+    $('plugins-task').hidden = false;
+    $('plugins-task').textContent = `${config.name || config.id}: turned ${on ? 'on' : 'off'}. Apply to finish.`;
+  } catch (error) {
+    $('plugins-task').hidden = false;
+    $('plugins-task').textContent = `Couldn't change ${folder}: ${error.message}`;
+  }
+  pluginKey = ''; loadPlugins();
+}
+
+// Apply: the gateway restarts (through the Services helper), then this page reloads.
+$('plugin-apply').addEventListener('click', async () => {
+  const button = $('plugin-apply');
+  if (!confirm('Restart the gateway now? Every open Rocsy page reconnects after a few seconds; running jobs are not affected.')) return;
+  button.disabled = true; button.textContent = 'Restarting…';
+  try {
+    const response = await fetch('/api/plugins/apply', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-BB-Action': '1'}, body: '{}'});
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw Error(data.error || `HTTP ${response.status}`);
+  } catch (error) {
+    button.disabled = false; button.textContent = 'Apply now';
+    $('plugins-task').hidden = false; $('plugins-task').textContent = `Couldn't restart the gateway: ${error.message}`;
+    return;
+  }
+  // Wait for it to go away, then come back.
+  const started = Date.now();
+  let wentDown = false;
+  while (Date.now() - started < 90000) {
+    await new Promise(r => setTimeout(r, 1500));
+    try {
+      const r = await fetch('/api/plugins', {cache: 'no-store'});
+      if (!r.ok) { wentDown = true; continue; }
+      const data = await r.json();
+      if (wentDown || !data.pending_restart) { location.hash = 'core-plugins'; location.reload(); return; }
+    } catch { wentDown = true; }
+  }
+  button.disabled = false; button.textContent = 'Apply now';
+  $('plugins-task').hidden = false; $('plugins-task').textContent = 'The gateway is taking long to come back; reload the page in a moment.';
+});
 
 // ---- core backend: llama.cpp releases converted to RDNA Boost (built on the host) -----------
 
@@ -1358,7 +1929,7 @@ async function loadCore(fresh = false) {
     (state.coreExtras && (state.coreExtras.comfy.download_running || state.coreExtras.comfy.update_running ||
       state.coreExtras.flash.running || state.coreExtras.hermes.download_running || state.coreExtras.hermes.update_running ||
       state.coreExtras.personal_hermes?.update_running || state.coreExtras.motion?.install_running ||
-      state.coreExtras.rea?.install_running || state.coreExtras.rea?.checking || state.coreExtras.ytdlp?.running)) ||
+      state.coreExtras.rea?.install_running || state.coreExtras.rea?.checking || state.coreExtras.ytdlp?.running || state.coreExtras.rsp?.running)) ||
     (state.swap && (state.swap.building || state.swap.fetch.running)) ||
     (state.engines && (state.engines.strata.installing || state.engines.strata.ngram?.running || state.engines.rocmfpx.building || state.engines.hipblaslt.running)) ||
     state.voiceEngines?.engines?.some(engine => engine.running || engine.deepspeed?.running || engine.flash?.running);
@@ -1392,6 +1963,8 @@ async function scanCoreOnRefresh() {
 }
 
 async function coreExtraAction(job) {
+  if (job === 'comfy-update' && !confirm('Update ComfyUI to its newest commit?\n\nComfyUI restarts when nothing is rendering; ' +
+      'custom nodes are not updated (use "Update" next to ComfyUI custom nodes for those).')) return;
   if (job.startsWith('hermes-')) {
     const installingPersonal = job === 'hermes-download' && !state.coreExtras?.personal_hermes?.installed;
     const summary = installingPersonal ? 'Install clean Personal Hermes and a separate Rocsy Hermes + Rocsy Addons?' :
@@ -1445,6 +2018,7 @@ async function checkCoreUpdates() {
     renderComfyUpdate(state.coreExtras);
     renderHermes(state.coreExtras, 'hermes-updates'); renderRea(state.coreExtras, 'rea-updates', true);
     if (state.view === 'manager' && state.sub === 'core') renderCoreExtras();
+    toast('Core software checked. Anything with an update now shows an Update button.', 'ok');
   } catch (error) { toast(error.message, 'error'); }
   finally {
     button.disabled = false;
@@ -1478,6 +2052,7 @@ const VIEW_LOGS = {
       'comfy-supervisor': state.coreExtras?.comfy?.supervisor_running,
       'trainer-install': state.coreExtras?.trainer?.install_running,
       'ytdlp-install': state.coreExtras?.ytdlp?.running,
+      'rsp-install': state.coreExtras?.rsp?.running,
       'rea-install': state.coreExtras?.rea?.install_running,
       'rea-update': state.coreExtras?.rea?.install_running,
       'rea-godot-download': state.coreExtras?.rea?.godot?.running,
@@ -1850,6 +2425,41 @@ function renderRea(data, target, compact) {
   }
 }
 
+function renderCoreRsp() {
+  const r = state.coreExtras?.rsp;
+  if (!r || !$('core-rsp')) return;
+  const row = el('div', 'lib-row core-build');
+  const info = el('div', 'core-info');
+  const nodeText = {missing: 'RSP not in ComfyUI yet', outdated: 'RSP in ComfyUI is older than Rocsy’s',
+    current: 'RSP up to date', linked: 'RSP linked to Rocsy’s copy', absent: 'RSP is missing from this Rocsy'}[r.rsp] || '';
+  const parts = [r.yue2_pack ? 'YuE2 pack installed' : 'YuE2 pack not installed', nodeText,
+    r.seedvc_env ? 'Seed-VC environment ready' : 'Seed-VC environment not set up'];
+  const pct = r.total ? ` ${Math.floor(100 * r.done / r.total)}%` : '';
+  const detail = r.running ? (r.phase === 'models' && r.current ? `Downloading ${r.current}${pct}…` :
+      r.phase === 'seed-vc' ? 'Setting up Seed-VC…' : r.phase === 'queued' ? 'Queued…' : 'Installing the node packs…') :
+    r.phase === 'failed' ? `Failed: ${r.error || 'see log'}` :
+    r.ready ? 'Everything in place' : `${parts.join(' · ')}${r.missing_bytes ? ` · ${size(r.missing_bytes)} to download` : ''}`;
+  info.append(el('strong', '', 'YuE2 + RSP + Seed-VC'), el('p', `hint${r.phase === 'failed' ? ' error' : ''}`, detail));
+  if (r.ready && !r.running && r.phase === 'ready') info.append(el('p', 'hint', 'Restart ComfyUI once while it’s idle so it loads RSP.'));
+  const actions = el('div', 'dl-actions');
+  actions.append(coreExtraButton(r.ready ? 'Check & repair' : r.missing_bytes ? `Install & download ${size(r.missing_bytes)}` : 'Install',
+    'rsp-install', r.running || !r.comfy_ready));
+  actions.append(coreExtraLog('rsp-install'));
+  row.append(info, actions);
+  const list = el('div', 'core-file-list');
+  for (const file of r.files || []) {
+    const line = el('div', 'lib-row');
+    const text = el('div', 'core-info');
+    text.append(el('strong', '', `${file.label} · ${size(file.size)}`),
+      el('p', 'hint', `${file.on_disk ? 'On disk' : 'Missing'} · ${file.use}`));
+    text.title = file.path;
+    line.append(text);
+    list.append(line);
+  }
+  const blocked = r.comfy_ready ? null : el('p', 'hint error', 'Set up ComfyUI first (ComfyUI source, above).');
+  $('core-rsp').replaceChildren(...[row, blocked, viewLogPre('extras', 'rsp-install'), list].filter(Boolean));
+}
+
 function renderCoreYtdlp() {
   const y = state.coreExtras?.ytdlp;
   if (!y || !$('core-ytdlp')) return;
@@ -1872,6 +2482,7 @@ function renderCoreYtdlp() {
 
 function renderCoreExtras() {
   renderCoreYtdlp();
+  renderCoreRsp();
   const {comfy, flash, hermes, motion} = state.coreExtras;
   if (motion) {
     const row = el('div', 'lib-row core-build');
@@ -2560,6 +3171,8 @@ function renderNodesUpdate(data) {
 }
 
 async function swapAction(action, body = {}) {
+  if (action === 'build' && !confirm(`Download llama-swap ${body.tag} and build it with the Rocsy Addons patch?\n\n` +
+      'It is built next to the version in use; nothing switches until you choose it under Core Backend → llama-swap.')) return;
   try {
     const reply = await post(`core/swap/${action}`, body);
     toast(reply.message || 'Started', 'ok');
@@ -2690,17 +3303,36 @@ function renderEngines() {
   const fpxRow = el('div', 'lib-row core-build');
   const fpxInfo = el('div', 'core-info');
   fpxInfo.append(el('strong', '', `ROCmFPX · ${fpx.arch || 'AMD GPU not detected'}`),
-    el('p', 'hint', fpx.job?.phase === 'failed' ? fpx.job.error :
+    el('p', 'hint' + (fpx.job?.phase === 'failed' ? ' error' : ''), fpx.job?.phase === 'failed'
+      ? `Build failed: ${String(fpx.job.error || '').replace(/^Command \[.*?\] returned non-zero exit status \d+\.?$/, 'a build step exited with an error')}. Use Log to see why, then try again.` :
       fpx.job?.phase === 'ready' ? `Build ${fpx.job.id} is ready. Select it in llama.cpp above.` :
       fpx.building ? `Building · ${fpx.job?.phase || 'starting'}` : 'Download and build the ROCmFPX llama.cpp fork for this card.'));
   const fpxActions = el('div', 'dl-actions');
   const build = el('button', 'primary-button', 'Download & build ROCmFPX');
   build.type = 'button'; build.disabled = !fpx.arch || fpx.building;
-  build.addEventListener('click', () => engineAction('rocmfpx-build'));
+  build.addEventListener('click', () => {
+    if (confirm(`Download the ROCmFPX llama.cpp fork and build it for ${fpx.arch}?\n\nIt takes several minutes and about 1.5 GB. ` +
+        'Your current llama.cpp build stays in use until you pick ROCmFPX for a model.')) engineAction('rocmfpx-build');
+  });
   fpxActions.append(build);
   if (fpx.building) {
     const cancel = el('button', 'link-button', 'Cancel'); cancel.type = 'button';
     cancel.addEventListener('click', () => engineAction('rocmfpx-cancel')); fpxActions.append(cancel);
+  }
+  if (fpx.job?.phase) {   // the engines' shared install log: ROCmFPX writes its section into it
+    const logButton = el('button', 'link-button', 'Log'); logButton.type = 'button';
+    logButton.addEventListener('click', async () => {
+      let pre = fpxInfo.querySelector('pre.core-log');
+      if (pre) { pre.remove(); return; }
+      pre = el('pre', 'core-log', 'Loading…'); fpxInfo.append(pre);
+      try {
+        const text = (await api('core/engines/log')).log || '';
+        const start = text.lastIndexOf('=== ROCmFPX');
+        pre.textContent = (start >= 0 ? text.slice(start) : text).slice(-20000) || '(empty)';
+        pre.scrollTop = pre.scrollHeight;
+      } catch (error) { pre.textContent = error.message; }
+    });
+    fpxActions.append(logButton);
   }
   fpxRow.append(fpxInfo, fpxActions);
   $('core-rocmfpx').replaceChildren(fpxRow);
@@ -3998,12 +4630,24 @@ $('clear-finished').addEventListener('click', async () => {
 
 const finishedUpdateJobs = new Set();
 let updateLibraryRefreshTimer;
+// Tell the user when a download they watched start ends badly, wherever they are in Models.
+const seenJobStates = new Map();
+function announceDownloadFailures(jobs) {
+  for (const job of jobs) {
+    const before = seenJobStates.get(job.id);
+    if (before && before !== 'failed' && job.state === 'failed')
+      toast(`Download failed: ${job.name} — ${job.error || 'see Manager → Downloads'}`, 'error');
+    seenJobStates.set(job.id, job.state);
+  }
+}
+
 async function refreshState() {
   try {
     const data = await api('state');
     state.hw = data.hardware;
     state.settings = data.settings;
     state.downloads = data.downloads;
+    announceDownloadFailures(data.downloads || []);
     let updateFinished = false;
     for (const job of data.downloads) {
       if (!job.update_batch) continue;
@@ -4031,6 +4675,8 @@ async function refreshState() {
     const updateCount = (data.updates || 0) + (data.node_updates || 0);
     $('updates-badge').hidden = $('sub-updates-badge').hidden = !updateCount;
     $('updates-badge').textContent = $('sub-updates-badge').textContent = updateCount;
+    $('updates-badge').title = $('sub-updates-badge').title =
+      `${data.updates || 0} model/LoRA update${data.updates === 1 ? '' : 's'} · ${data.node_updates || 0} ComfyUI node pack update${data.node_updates === 1 ? '' : 's'}`;
     $('sub-dl-badge').hidden = !data.active;
     $('sub-dl-badge').textContent = data.active;
     $('llama-pending').hidden = !data.llama_restart?.pending;
@@ -4084,7 +4730,7 @@ function renderLibrary() {
   const updates = items.filter(i => i.status === 'update').length;
   const unknown = items.filter(i => ['unknown', 'not_found'].includes(i.status)).length;
   const local = items.filter(i => i.status === 'local').length;
-  $('lib-summary').textContent = `${items.length} files · ${updates} update${updates === 1 ? '' : 's'} · ${local ? local + ' made here · ' : ''}${unknown} of unknown source · last checked ${ago(state.lastCheck)}`;
+  $('lib-summary').textContent = `${items.length} files · ${updates} model/LoRA update${updates === 1 ? '' : 's'} (ComfyUI nodes are under Core software below) · ${local ? local + ' made here · ' : ''}${unknown} of unknown source · last checked ${ago(state.lastCheck)}`;
   const query = $('lib-q').value.trim().toLowerCase();
   const shown = items.filter(item => {
     if (state.libFilter === 'updates' && item.status !== 'update') return false;
@@ -4416,6 +5062,8 @@ function startDrafterSearch() {
   let start = startDrafterSearch() ? 'models' : location.hash.slice(1);
   // Links straight to a Manager sub-tab (the home page's Updates chip uses #updates).
   if (['updates', 'installed', 'downloads', 'settings', 'core'].includes(start)) { state.sub = start; start = 'manager'; }
+  // #core-plugins (Settings → Services links here): Core Backend → Plugins.
+  if (start === 'core-plugins') { setCoreGroup('plugins'); state.sub = 'core'; start = 'manager'; }
   setView(['models', 'loras', 'hermes', 'manager', 'hardware'].includes(start) ? start : 'models', {push: false});
   scanCoreOnRefresh();
   setInterval(() => { if (!document.hidden) refreshState(); }, 3000);

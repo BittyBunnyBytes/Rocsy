@@ -7,6 +7,7 @@ login page and status 200, so HTML responses fail with a hint about the API key.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -368,8 +369,7 @@ class Downloads:
                         if locked is not None:
                             raise locked
                     if response.status_code in (401, 403):
-                        raise RuntimeError("Access denied: this file needs an API key/token (Manager -> Settings), "
-                                           "or accepting the model's terms on its page")
+                        raise RuntimeError(await _access_denied(response, bool(self._headers(job).get("Authorization"))))
                     if response.status_code == 416:
                         # A 416 alone does not mean the local partial is complete.
                         # In particular, setup downloads can have no known size or hash.
@@ -514,3 +514,21 @@ def _same_identity(path: Path, identity: dict) -> bool:
     except OSError:
         return False
     return all(getattr(stat, field) == value for field, value in identity.items())
+
+
+async def _access_denied(response: httpx.Response, had_token: bool) -> str:
+    """Why the host refused the file, in its own words when it says (e.g. Civitai's
+    "The creator of this asset has disabled downloads on this file")."""
+    reason = ""
+    with contextlib.suppress(Exception):
+        await response.aread()
+        if "json" in response.headers.get("content-type", ""):
+            data = response.json()
+            reason = str(data.get("message") or data.get("error") or "").strip()
+    if reason and "disabled downloads" in reason.lower():
+        return f"Not downloadable: {reason}. Rocsy can't get this file; pick another version or model."
+    if had_token:
+        return (f"Access denied{f' ({reason})' if reason else ''}: your saved key was sent but the host refused it. "
+                "The file may need its terms accepted or a purchase on its page, or the key may lack access.")
+    return (f"Access denied{f' ({reason})' if reason else ''}: this file needs an API key/token (Manager → Settings), "
+            "or accepting the model's terms on its page")

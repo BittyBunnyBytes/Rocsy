@@ -8,6 +8,7 @@ import json
 import os
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -20,6 +21,8 @@ UP = {
     "Motion": os.getenv("MOTION_UPSTREAM", "http://127.0.0.1:8970").rstrip("/"),      # loopback only, no gateway route
     "Voice": os.getenv("VOICE_UPSTREAM", "http://127.0.0.1:8950").rstrip("/") + "/Voice",
 }
+# Gateway route ("Video") -> its upstream base URL, for output URLs like /Video/api/outputs/ID/stream.
+ROUTES = {urlsplit(u).path.strip("/"): u for u in UP.values() if urlsplit(u).path.strip("/")}
 SERVICES = ("Vid", "Krea", "Mus", "Trainer", "Motion", "Voice")
 ACTIVE = {"bundling", "encoding", "waiting_for_gpu", "preparing", "queued", "rendering", "running", "finalizing", "cancelling", "uploading", "training", "queuing"}
 DONE = {"complete", "completed", "failed", "cancelled", "canceled", "error", "interrupted"}
@@ -223,8 +226,30 @@ async def agentic_video(prompt: str, guide: str, duration: float | None, aspect:
     return await _call("POST", f"{UP['Vid']}/api/enhancement/agentic", body, timeout=90)
 
 
+async def agentic_edit(session_id: str, clips: list[int], notes: str, scope: str) -> dict[str, Any]:
+    """Edit a finished film by overall clip number (Vid's prompt ledger): scope clip | onward | future."""
+    return await _call("POST", f"{UP['Vid']}/api/agentic/sessions/{session_id}/edit",
+                       {"clips": clips, "notes": notes, "scope": scope}, timeout=60)
+
+
+async def agentic_prompt_decision(session_id: str, action: str, notes: str, clip_notes: dict[str, str]) -> dict[str, Any]:
+    """The user's verdict on the clip prompts Vid is waiting on: approve | reject (notes = reason) | flag (clip_notes)."""
+    return await _call("POST", f"{UP['Vid']}/api/agentic/sessions/{session_id}/prompt-decision",
+                       {"action": action, "notes": notes, "clip_notes": clip_notes}, timeout=30)
+
+
 async def agentic_cancel(run_id: str, timeout: float = 30) -> Any:
     return await _call("POST", f"{UP['Vid']}/api/enhancement/jobs/{run_id}/cancel", {}, timeout=timeout)
+
+
+async def agentic_pause(run_id: str) -> dict[str, Any]:
+    """Pause a Vid Agentic run: its Hermes step or renders stop now and the GPU is free; the session is kept."""
+    return await _call("POST", f"{UP['Vid']}/api/enhancement/jobs/{run_id}/pause", {}, timeout=120)
+
+
+async def agentic_resume(run_id: str) -> dict[str, Any]:
+    """Resume a paused Vid Agentic run in its own session; what the pause interrupted is generated again."""
+    return await _call("POST", f"{UP['Vid']}/api/enhancement/jobs/{run_id}/resume", {}, timeout=60)
 
 
 async def agentic_stage_decision(session_id: str, run_id: str, action: str, notes: str = "") -> dict[str, Any]:
@@ -236,7 +261,14 @@ async def agentic_job(session_id: str, run_id: str) -> dict[str, Any]:
     """An Agentic run seen as one job: its state, what it is doing as the stage, and the clips
     it kept (the finished Post-Edit/Stitch, else the final clips, else the staging previews)."""
     session = await _call("GET", f"{UP['Vid']}/api/agentic/sessions/{session_id}")
+    chain = _long_haul_chain(session, run_id)
+    if chain:
+        return await _long_haul_job(session, chain)
     run = next((r for r in session.get("runs") or [] if r.get("job_id") == run_id), None) or {}
+    return await _agentic_run_view(session, run, run_id)
+
+
+async def _agentic_run_view(session: dict[str, Any], run: dict[str, Any], run_id: str) -> dict[str, Any]:
     state = str(run.get("state") or session.get("state") or "running")
     ids: list[str] = []
     if run.get("finished_job_id"):
@@ -285,15 +317,105 @@ async def agentic_job(session_id: str, run_id: str) -> dict[str, Any]:
         live = await _call("GET", f"{UP['Vid']}/api/enhancement/jobs/{run_id}")    # pruned after a while
     except StudioError:
         pass
-    stage = ("Staging previews are waiting for your approval in Vid" if state == "awaiting_approval"
+    awaiting = run.get("awaiting") if state == "awaiting_approval" else None
+    stage = ("Clip prompts are waiting for your approval" if awaiting == "prompts"
+             else "Staging previews are waiting for your approval in Vid" if state == "awaiting_approval"
              else str(live.get("phase") or ""))
     planned = len(run.get("clips") or [])
-    return {"id": run_id, "state": state, "stage": stage[:160], "renders": renders,
+    prompts = [{"id": clip.get("id"), "prompt": clip.get("prompt", ""), "duration": clip.get("duration"), "action": clip.get("action"),
+                "mode": clip.get("mode"), "source": clip.get("source")} for clip in run.get("clips") or []] if awaiting == "prompts" else None
+    return {"id": run_id, "state": state, "stage": stage[:160], "renders": renders, "overview": session.get("overview"),
+            "awaiting": awaiting, "prompts": prompts, "prompt_offset": int(run.get("clip_offset") or 0),
             "full_output": bool(run.get("finished_job_id")),
             "iterations": iterations,
             "log": live.get("log") or [], "log_revision": live.get("log_revision"),
             "progress": round(100 * len(renders) / planned) if planned and state in AGENTIC_ACTIVE else None,
             "error": str(live.get("error") or session.get("error") or "")}
+
+
+# Long-haul sessions (Vid writes a long request in batches, one run each, numbered across the session; see
+# Video/backend/ledger.py): the Master Agent's one job follows every batch run from the one it started.
+_finished_run_views: dict[str, dict[str, Any]] = {}
+_CLIP_NUMBER = re.compile(r"\b((?:Staging|Full|staging|full) clip |Clip |clip )(\d+)\b")
+
+
+def _long_haul_chain(session: dict[str, Any], run_id: str) -> list[dict[str, Any]]:
+    runs = session.get("runs") or []
+    if not session.get("long_haul") and not (session.get("ledger") or {}).get("outline"):
+        return []
+    start = next((i for i, r in enumerate(runs) if r.get("job_id") == run_id), None)
+    return runs[start:] if start is not None else []
+
+
+async def _long_haul_job(session: dict[str, Any], chain: list[dict[str, Any]]) -> dict[str, Any]:
+    book = session.get("ledger") or {}
+    outline = book.get("outline") or []
+    clips = book.get("clips") or {}
+    reached = lambda entry: entry.get("status") == "verified" or bool(entry.get("was_verified"))   # Video's ledger.reached
+    done = 0
+    while reached(clips.get(str(done + 1)) or {}):
+        done += 1
+    # The outline may start after clips the session already had (Video: ledger.outline_total).
+    total = (int(book.get("outline_start") or 0) + len(outline)) if outline else 0
+    views = []
+    for run in chain:
+        rid = run.get("job_id") or ""
+        if rid in _finished_run_views and run.get("state") in ("complete", "completed", "failed", "cancelled"):
+            views.append((run, _finished_run_views[rid]))
+            continue
+        view = await _agentic_run_view(session, run, rid)
+        if run.get("state") in ("complete", "completed", "failed", "cancelled"):
+            _finished_run_views[rid] = view
+        views.append((run, view))
+    latest_run, latest = views[-1]
+    long_haul = session.get("long_haul") or {}
+    state = latest["state"]
+    more = bool(total) and done < total and not long_haul.get("stopped")
+    if state in ("complete", "completed") and more:
+        state = "running"                       # between batches: the next run is starting
+    elif state in ("complete", "completed") and total and done < total and long_haul.get("stopped"):
+        state = "failed"                        # a batch kept nothing: stopped rather than looping on it
+    # The film's clips in story order, each its newest kept render (an edit re-renders a clip in place; runs append).
+    by_id = {render.get("id"): render for _, view in views for render in view["renders"] if not view["full_output"]}
+    ordered = [by_id[entry["render"]] for entry in sorted(clips.values(), key=lambda e: e["n"])
+               if reached(entry) and entry.get("render") in by_id]
+    renders = latest["renders"] if latest["full_output"] else (ordered or list(by_id.values()))
+    iterations = []
+    for run, view in views:
+        offset = int(run.get("clip_offset") or 0)
+        for item in view["iterations"]:
+            iterations.append({**item, "clip": (int(item["clip"]) + offset) if str(item.get("clip")).isdigit() else item.get("clip")})
+    # The live log of the batch running now, its clip numbers moved to overall numbers, after one line per clip
+    # that earlier batches finished, so the chat's clip strip covers the whole film.
+    offset = int(latest_run.get("clip_offset") or 0)
+    if latest_run.get("mode") == "edit":      # an edit run's clips carry overall numbers; it covers only the edited ones
+        covered = {int(n) for n in latest_run.get("edit_clips") or []}
+    else:
+        covered = set(range(offset + 1, offset + len(latest_run.get("clips") or []) + 1)) or set(range(offset + 1, done + 1 if done > offset else offset + 1))
+    lines = [{"kind": "ok", "text": f"Validated {total or done} clip(s)"}]
+    for n in range(1, done + 1):
+        if n not in covered:
+            lines += [{"kind": "tool", "text": f"Full clip {n}, attempt 1: queued earlier"}, {"kind": "ok", "text": f"Clip {n} finished: earlier run"}]
+    for entry in latest["log"]:
+        text = str(entry.get("text") or "")
+        text = re.sub(r"\bValidated (\d+) clip\(s\)", r"Batch validated \1 clip(s)", text)
+        text = _CLIP_NUMBER.sub(lambda m: m.group(1) + str(int(m.group(2)) + offset), text) if offset else text
+        lines.append({**entry, "text": text})
+    batches = max(1, -(-len(outline) // int(long_haul.get("batch") or 10))) if outline else len(chain)
+    batch_no = sum(1 for run in chain if not run.get("mode")) or 1      # edit/rewrite runs aren't batches
+    stage = (f"Batch {min(batch_no, batches)} of {batches} · {done}/{total} clips verified" if total else f"Run {len(chain)}")
+    if latest["stage"]:
+        stage += " · " + latest["stage"]
+    elif state == "running" and latest["state"] in ("complete", "completed"):
+        stage += " · starting the next batch"
+    if long_haul.get("stopped"):
+        stage += f" · stopped: {long_haul['stopped']}"
+    return {"id": chain[0].get("job_id"), "state": state, "stage": stage[:160], "renders": renders, "overview": session.get("overview"),
+            "awaiting": latest.get("awaiting"), "prompts": latest.get("prompts"), "prompt_offset": latest.get("prompt_offset", 0),
+            "full_output": latest["full_output"] and not more, "iterations": iterations,
+            "log": lines, "log_revision": f"{len(chain)}:{latest.get('log_revision')}:{done}",
+            "progress": round(100 * done / total) if total and state in AGENTIC_ACTIVE | {"running"} else latest["progress"],
+            "error": latest["error"] or (f"Stopped at {done}/{total} clips: {long_haul['stopped']}" if long_haul.get("stopped") and not more and done < total else "")}
 
 
 # Vid's private Agentic pool: no 9-image cap, kept out of the user's Reference picker, and
@@ -390,12 +512,16 @@ async def train(dataset: str, name: str, trigger: str | None, model: str | None)
 async def fetch_output(url: str, path: str) -> str:
     """Save a job's output (a gateway URL like /Image/api/outputs/ID/stream?index=0) to path;
     returns its content type."""
-    service = url.strip("/").split("/")[0]
-    if service not in UP:
+    # Output URLs carry the gateway route (/Video, /Image, /Music, /Voice, ...), not the service id
+    # (Vid, Krea, Mus): match on the route; old /Vid/ /Krea/ /Mus/ URLs map onto today's routes.
+    route, _, rest = url.lstrip("/").partition("/")
+    base = ROUTES.get(route) or UP.get(route)
+    if not base or not urlsplit(base).path.strip("/"):
         raise StudioError(f"can't fetch {url}")
+    service = route
     try:
         async with httpx.AsyncClient(timeout=300) as client:
-            async with client.stream("GET", UP[service][: -len(service) - 1] + url) as response:
+            async with client.stream("GET", base + "/" + rest) as response:
                 if response.status_code >= 400:
                     raise StudioError(f"{service} output {response.status_code}")
                 with open(path, "wb") as handle:
@@ -520,3 +646,146 @@ async def status(allowed: set[str]) -> dict[str, Any]:
     except StudioError as exc:
         out["gpu_queue"] = f"offline ({exc})"
     return out
+
+
+# ---------------- Agents page: every studio's Agentic sessions ----------------
+# Video runs its own Agentic sessions; Image/Music/Voice run theirs in the shared framework,
+# which the Master Agent reaches directly with the internal secret (as the studios' proxies do).
+FRAMEWORK = os.getenv("BUNNY_FRAMEWORK_URL", "http://127.0.0.1:8700").rstrip("/")
+FW_SECRET = os.getenv("QUEUE_INTERNAL_SECRET", "")
+AGENT_STUDIOS = {"video": "Video", "image": "Image", "music": "Music", "voice": "Voice"}
+FW_ACTIVE = {"planning", "reviewing_plan", "queued", "rendering", "reviewing_output", "retrying"}
+
+
+async def _fw(method: str, path: str, body: Any = None, timeout: float = 30) -> Any:
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.request(method, FRAMEWORK + path, json=body, headers={"X-Queue-Internal-Secret": FW_SECRET})
+    except httpx.HTTPError as exc:
+        raise StudioError(f"The Agentic framework is not reachable ({type(exc).__name__})") from exc
+    try:
+        data = json.loads(response.content or b"null", strict=False)
+    except ValueError:
+        data = None
+    if response.status_code >= 400:
+        detail = data.get("detail") if isinstance(data, dict) else None
+        raise StudioError(str(detail or response.text[:300]))
+    return data
+
+
+def _busy(studio: str, state: str) -> bool:
+    return state in (AGENTIC_ACTIVE if studio == "video" else FW_ACTIVE | {"awaiting_approval", "awaiting_feedback"})
+
+
+async def agent_sessions(studio: str) -> list[dict[str, Any]]:
+    """Light rows: {studio, id, title, state, busy, created, updated, runs, ...}."""
+    if studio == "video":
+        rows = (await _call("GET", f"{UP['Vid']}/api/agentic/sessions", timeout=15) or {}).get("sessions") or []
+        return [{**r, "studio": "video", "busy": _busy("video", r.get("state", ""))} for r in rows]
+    rows = await _fw("GET", f"/v1/agentic/{studio}/sessions?limit=0", timeout=15) or []
+    return [{"studio": studio, "id": r["id"], "title": " ".join(str(r.get("request") or "").split())[:140] or "Agentic session",
+             "state": r.get("state") or "", "stage": str(r.get("stage") or "")[:200], "busy": _busy(studio, r.get("state") or ""),
+             "created": float(r.get("created") or 0), "updated": float(r.get("updated") or r.get("created") or 0),
+             "runs": 1, "parent": r.get("parent_session_id") or "",
+             "model": str((r.get("settings") or {}).get("model") or "")} for r in rows if isinstance(r, dict) and r.get("id")]
+
+
+def _log_rows(entries: list[Any]) -> list[dict[str, Any]]:
+    out = []
+    for e in entries or []:
+        if isinstance(e, dict):
+            out.append({"t": e.get("t") or e.get("at"), "kind": str(e.get("kind") or "system"), "text": str(e.get("text") or "")[:20000]})
+    return out
+
+
+async def agent_session(studio: str, sid: str) -> dict[str, Any]:
+    """One session with its log (Video: every run whose log Video still keeps, oldest first)."""
+    if studio == "video":
+        session = await _call("GET", f"{UP['Vid']}/api/agentic/sessions/{sid}", timeout=20)
+        runs = session.get("runs") or []
+        log: list[dict[str, Any]] = []
+        run_state = ""
+        for n, run in enumerate(runs, 1):
+            rid = run.get("job_id")
+            if not rid:
+                continue
+            log.append({"kind": "run", "text": f"Run {n}" + (f" · {run['mode']}" if run.get("mode") else ""), "t": run.get("created_at")})
+            try:
+                live = await _call("GET", f"{UP['Vid']}/api/enhancement/jobs/{rid}", timeout=15)
+            except StudioError:
+                log.append({"kind": "system", "text": "Video no longer keeps this run's log (it keeps the latest 20 runs).", "t": run.get("created_at")})
+                if run.get("input_prompt"):
+                    log.append({"kind": "user", "text": str(run["input_prompt"])[:20000], "t": run.get("created_at")})
+                continue
+            log += _log_rows(live.get("log"))
+            if n == len(runs):
+                run_state = str(live.get("state") or "")
+        last = runs[-1] if runs else {}
+        state = run_state or str(last.get("state") or session.get("state") or "")
+        title = " ".join(str(session.get("master_prompt") or "").split())[:300]
+        return {"studio": "video", "id": sid, "title": title or "Agentic session", "state": state,
+                "busy": _busy("video", state), "paused": state == "paused", "run_id": last.get("job_id") or sid,
+                "stage": "", "log": log[-1500:], "open": "/Video/",
+                "can_pause": _busy("video", state), "can_resume": state == "paused",
+                "help": "Plain text steers a running run, or starts a new run of this session once it has finished. "
+                        "Running runs also take /status, /plan, /clip N <text>, /accept, /exclude, /help."}
+    row = await _fw("GET", f"/v1/agentic/{studio}/sessions/{sid}", timeout=20)
+    state = str(row.get("state") or "")
+    return {"studio": studio, "id": sid, "title": " ".join(str(row.get("request") or "").split())[:300] or "Agentic session",
+            "state": state, "busy": _busy(studio, state), "paused": state == "paused", "stage": str(row.get("stage") or "")[:300],
+            "log": _log_rows(row.get("log"))[-1500:], "open": f"/{AGENT_STUDIOS[studio]}/",
+            "can_pause": state in FW_ACTIVE, "can_resume": state == "paused",
+            "help": "Plain text steers the next Hermes step, or continues a finished session in a new one. "
+                    "Also /status, /plan, /approve, /revise <notes>, /retry, /keep, /help."}
+
+
+async def agent_message(studio: str, sid: str, text: str) -> dict[str, Any]:
+    """Talk to a session: steer it while it runs, or continue it once it has finished.
+    Returns {session_id} (a framework continuation is a new session) and an optional reply."""
+    if studio == "video":
+        session = await _call("GET", f"{UP['Vid']}/api/agentic/sessions/{sid}", timeout=20)
+        runs = session.get("runs") or []
+        rid = (runs[-1] if runs else {}).get("job_id")
+        state = ""
+        if rid:
+            try:
+                state = str((await _call("GET", f"{UP['Vid']}/api/enhancement/jobs/{rid}", timeout=15)).get("state") or "")
+            except StudioError:
+                state = ""
+        if rid and (state in AGENTIC_ACTIVE or state == "paused" or text.startswith("/")):
+            if not state:
+                return {"session_id": sid, "reply": "Video no longer has this run loaded; type plain text to start a new run of the session."}
+            r = await _call("POST", f"{UP['Vid']}/api/enhancement/jobs/{rid}/steer", {"text": text}, timeout=120)
+            return {"session_id": sid, "reply": r.get("reply", "")}
+        r = await _call("POST", f"{UP['Vid']}/api/agentic/sessions/{sid}/continue", {"text": text}, timeout=90)
+        return {"session_id": r.get("session_id") or sid, "reply": "Started a new run of this session."}
+    r = await _fw("POST", f"/v1/agentic/{studio}/sessions/{sid}/steer", {"text": text}, timeout=60)
+    return {"session_id": r.get("session_id") or sid, "reply": ""}
+
+
+async def agent_control(studio: str, sid: str, action: str) -> dict[str, Any]:
+    """pause | resume | stop."""
+    if studio == "video":
+        session = await _call("GET", f"{UP['Vid']}/api/agentic/sessions/{sid}", timeout=20)
+        rid = ((session.get("runs") or [{}])[-1]).get("job_id") or sid
+        path = {"pause": "pause", "resume": "resume", "stop": "cancel"}[action]
+        return await _call("POST", f"{UP['Vid']}/api/enhancement/jobs/{rid}/{path}", {}, timeout=120)
+    path = {"pause": "pause", "resume": "resume", "stop": "cancel"}[action]
+    return await _fw("POST", f"/v1/agentic/{studio}/sessions/{sid}/{path}", {}, timeout=60)
+
+
+async def agent_delete(studio: str, sid: str) -> str:
+    """deleted | busy | gone | error: <why>. Video deletes the session with its renders (its own trash button)."""
+    try:
+        if studio == "video":
+            await _call("DELETE", f"{UP['Vid']}/api/agentic/sessions/{sid}", timeout=120)
+        else:
+            await _fw("DELETE", f"/v1/agentic/{studio}/sessions/{sid}", timeout=60)
+        return "deleted"
+    except StudioError as exc:
+        text = str(exc)
+        if text.startswith("409") or "busy" in text.lower() or "active" in text.lower() or "end this" in text.lower() or "running" in text.lower():
+            return "busy"
+        if text.startswith("404") or "not found" in text.lower():
+            return "gone"
+        return "error: " + text[:200]

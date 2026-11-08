@@ -130,6 +130,45 @@
     if (trainerArt.slides.length > 1 && !stillMotion()) trainerArt.timer = setTimeout(() => nextSlide(art), SLIDE_MS);
   }
 
+  // Plugin cards (plugin.json "home.background"): one picture per visit, or a crossfading
+  // slideshow when the plugin asks for one. Same layers as the Trainer card.
+  const pluginArt = {};
+  function paintPluginArt(all) {
+    for (const [id, show] of Object.entries(all || {})) {
+      const art = document.querySelector(`.h-studio[data-card="${CSS.escape(id)}"] .h-studio-art`);
+      if (!art || !show?.pictures?.length) continue;
+      const state = pluginArt[id] ||= { key: null, slides: [], index: -1, timer: null };
+      const key = show.slideshow ? show.pictures.join("|") : `one:${show.pictures[0]}`;
+      if (state.key === key) continue;  // same pictures: leave the running show alone
+      state.key = key;
+      clearTimeout(state.timer);
+      art.classList.toggle("h-art-slideshow", !!show.slideshow);
+      state.slides = show.slideshow ? show.pictures : [show.pictures[0]];
+      state.index = -1;
+      const next = () => {
+        clearTimeout(state.timer);
+        if (!state.slides.length) return;
+        state.index = (state.index + 1) % state.slides.length;
+        const src = state.slides[state.index];
+        const img = new Image();
+        img.decoding = "async";
+        img.onload = () => {
+          const slide = document.createElement("span");
+          slide.className = "h-art-slide";
+          slide.style.backgroundImage = `url("${src.replace(/"/g, "%22")}")`;
+          art.append(slide);
+          art.classList.add("has-art");
+          requestAnimationFrame(() => requestAnimationFrame(() => slide.classList.add("on")));
+          setTimeout(() => [...art.querySelectorAll(".h-art-slide")].slice(0, -1).forEach((old) => old.remove()), 1800);
+        };
+        img.onerror = () => { state.slides = state.slides.filter((item) => item !== src); };
+        img.src = src;
+        if (state.slides.length > 1 && !stillMotion()) state.timer = setTimeout(next, SLIDE_MS);
+      };
+      next();
+    }
+  }
+
   function paintTrainer(info) {
     const art = $('.h-studio[data-studio="Trainer"] .h-studio-art');
     const show = info?.art;
@@ -283,11 +322,14 @@
       const n = models.updates || 0;
       setChip("updates", !models.online ? "Models offline" : n ? `${n} update${n === 1 ? "" : "s"} available` : "Models up to date",
               !models.online ? "offline" : n ? "waiting" : "idle", models.href);
+      const chip = $('[data-chip="updates"]');
+      if (chip) chip.title = models.update_detail || "";
     }
     $("#h-summary").textContent = summary(data);
     renderStrip(data.recent);
     paintArt(data.latest);
     paintTrainer(data.studios.Trainer);
+    paintPluginArt(data.plugin_art);
     paintVoice(data.studios.Voice);
     paintMusic(data.studios.Mus);
     paintCode(data.code_activity);

@@ -74,7 +74,7 @@ body.cache-body { min-height: 100vh; background: var(--bg); color: var(--text); 
 .cache-body .view-bar { position: sticky; top: 0; z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 0; background: var(--bg); border-bottom: 1px solid var(--border); }
 .cache-body .view-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; flex: 1 1 auto; min-width: 0; }
 .cache-body .view-tools input[type=search] { flex: 0 1 230px; width: 230px; min-width: 120px; padding: 6px 10px; font-size: 13px; }
-@media (min-width: 1181px) { .cache-body .view-bar, .cache-body .view-tools { flex-wrap: nowrap; } .cache-body #tab-seg, .cache-body .view-tools > :not(input) { flex: none; } .cache-body .view-tools .seg { flex-wrap: nowrap; } }
+@media (min-width: 1600px) { .cache-body .view-bar, .cache-body .view-tools { flex-wrap: nowrap; } .cache-body #tab-seg, .cache-body .view-tools > :not(input) { flex: none; } .cache-body .view-tools .seg { flex-wrap: nowrap; } }
 .cache-body #select-mode[aria-pressed=true] { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
 
 .cache-body .block { display: grid; gap: 10px; }

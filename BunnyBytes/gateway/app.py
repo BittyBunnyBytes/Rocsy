@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import asyncio
 import contextlib
 import hmac
@@ -53,6 +54,8 @@ import code_agent
 import code_history
 import datasaver
 import honeypot
+import plugins
+import plugin_updates
 from notify import CATALOG as NOTIFY_CATALOG, NotificationHub, watch_services
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -225,7 +228,7 @@ upload_cache = cache_service.UploadCache(settings.storage_user_uploads_dir, BASE
                                         reference_db_path=Path("/storage/h3-data/h3-machine.sqlite3"))
 # Our own studios get the site theme injected and their CSS colours rewritten
 # to theme tokens (restyle.py); Llama and Hermes get token overrides only.
-THEMED_APPS = themes.STUDIO_APPS
+THEMED_APPS = set(themes.STUDIO_APPS)  # + themed plugins, added by _register_plugin
 
 
 def theme_href(app_name: str = "home") -> str:
@@ -813,6 +816,155 @@ async def proxy_rea(request: Request, path: str):
 @app.get("/Voices")
 async def voices_old_link() -> RedirectResponse:
     return RedirectResponse(url="/Voice", status_code=301)
+
+
+@app.get("/api/plugins")
+async def plugin_list(request: Request):
+    """Models -> Manager -> Core Backend -> Plugins: what loaded, what didn't, what is switched
+    off, and whether each one answers. Read at gateway start, so changes need a gateway restart."""
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    async def status(plugin: plugins.Plugin) -> dict:
+        url = f"{plugin.upstream}{plugin.health or (plugin.path if not plugin.strip_prefix else '') + '/'}"
+        try:
+            response = await shared_client().get(url, timeout=3.0)
+            up = response.status_code < 500
+        except httpx.HTTPError:
+            up = False
+        return {**plugin.public(), "up": up}
+
+    return {"folder": "core-backend-extras/plugins", "plugins": await asyncio.gather(*(status(p) for p in PLUGINS)),
+            "errors": PLUGIN_ERRORS, "disabled": plugins.disabled(settings.plugins_dir),
+            "pending_restart": plugins.snapshot(settings.plugins_dir) != PLUGIN_SNAPSHOT}
+
+
+@app.get("/api/plugins/{folder}/config")
+async def plugin_config(request: Request, folder: str):
+    """Core Backend -> Plugins -> Settings: the plugin.json as it is on disk now."""
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if not plugins.FOLDER.match(folder) or folder.startswith((".", "_")):
+        return JSONResponse({"error": "No such plugin"}, status_code=404)
+    try:
+        data = plugins.read_config(settings.plugins_dir, folder)
+    except FileNotFoundError:
+        return JSONResponse({"error": "No such plugin"}, status_code=404)
+    except ValueError as exc:
+        # Broken JSON: hand back the text so it can be fixed in the plugin.json editor.
+        try:
+            raw = (settings.plugins_dir / folder / "plugin.json").read_text(encoding="utf-8")[:24000]
+        except OSError:
+            raw = ""
+        return JSONResponse({"folder": folder, "config": None, "raw": raw, "error": f"plugin.json isn't valid: {exc}",
+                             "groups": list(plugins.GROUPS)}, headers={"Cache-Control": "no-store"})
+    except OSError as exc:
+        return JSONResponse({"error": f"plugin.json can't be read: {exc}"}, status_code=422)
+    return JSONResponse({"folder": folder, "config": data, "groups": list(plugins.GROUPS)},
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/plugins/{folder}/config")
+async def plugin_config_save(request: Request, folder: str):
+    """Validated here (Rocsy's own names and paths are known only to the gateway), written by
+    the Services helper (the plugins folder is mounted read-only). Applies on gateway restart."""
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1" or not plugins.FOLDER.match(folder):
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    body = await _json_body(request) or {}
+    data = body.get("config")
+    try:
+        plugins.validate(settings.plugins_dir, folder, data, *PLUGIN_RESERVED)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    return await _hostctl("POST", "/plugins/config", {"folder": folder, "data": data})
+
+
+@app.get("/api/plugins/{folder}/icon")
+async def plugin_icon(request: Request, folder: str):
+    """A plugin's own icon picture (plugin.json "icon_file"), for the top bar, favicon and cards.
+    Sandboxed, so an SVG opened directly can't run anything on Rocsy's origin."""
+    if not _has_valid_session(request):
+        return Response(status_code=401)
+    if not plugins.FOLDER.match(folder) or folder.startswith((".", "_")):
+        return Response(status_code=404)
+    picture = await asyncio.to_thread(plugins.icon_picture, settings.plugins_dir, folder,
+                                      str(request.query_params.get("file") or ""))
+    if picture is None:
+        return Response(status_code=404)
+    versioned = bool(request.query_params.get("v"))
+    return Response(picture[0], media_type=picture[1], headers={
+        "Cache-Control": "private, max-age=604800, immutable" if versioned else "no-cache",
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox",
+        "X-Content-Type-Options": "nosniff"})
+
+
+@app.post("/api/plugins/{folder}/icon")
+async def plugin_icon_upload(request: Request, folder: str):
+    """Core Backend -> Plugins -> Settings -> Upload icon: written next to plugin.json by the
+    Services helper. The dialog then saves "icon_file" with the rest of the settings."""
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1" or not plugins.FOLDER.match(folder) or folder.startswith((".", "_")):
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    body = await _json_body(request) or {}
+    try:
+        blob = base64.b64decode(str(body.get("data") or ""), validate=True)
+    except ValueError:
+        return JSONResponse({"error": "The picture didn't arrive intact"}, status_code=400)
+    kind = plugins.sniff_icon(blob)
+    if kind is None:
+        return JSONResponse({"error": "Use a PNG, SVG, WebP or JPEG picture"}, status_code=415)
+    if len(blob) > plugins.ICON_MAX:
+        return JSONResponse({"error": "The picture is over 512 KB"}, status_code=413)
+    if not (settings.plugins_dir / folder / "plugin.json").is_file():
+        return JSONResponse({"error": "No such plugin"}, status_code=404)
+    return await _hostctl("POST", "/plugins/icon", {"folder": folder, "name": f"icon.{kind}",
+                                                    "data": base64.b64encode(blob).decode()})
+
+
+@app.get("/api/plugins/{folder}/updates")
+async def plugin_updates_check(request: Request, folder: str, force: int = 0):
+    """Core Backend -> Plugins: is there a newer release than the installed version?
+    Uses plugin.json "version" / "updates" as they are on disk now (plugin_updates.py)."""
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if not plugins.FOLDER.match(folder) or folder.startswith((".", "_")):
+        return JSONResponse({"error": "No such plugin"}, status_code=404)
+    try:
+        config = plugins.read_config(settings.plugins_dir, folder)
+    except (OSError, ValueError):
+        return JSONResponse({"error": "plugin.json can't be read"}, status_code=404)
+    upstream = str(config.get("upstream") or "").rstrip("/")
+    result = await plugin_updates.check(folder, config, upstream, force=bool(force))
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/plugins/{folder}/updates")
+async def plugin_updates_try(request: Request, folder: str):
+    """Settings dialog -> Check now: tries the update source in the form before it is saved."""
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1" or not plugins.FOLDER.match(folder):
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    config = (await _json_body(request) or {}).get("config")
+    try:
+        plugin = plugins.validate(settings.plugins_dir, folder, config, *PLUGIN_RESERVED)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    result = await plugin_updates.check(f"try:{folder}", config, plugin.upstream, force=True)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/plugins/apply")
+async def plugin_apply(request: Request):
+    """Restart the gateway (through the Services helper) so saved plugin settings take effect."""
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1":
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    return await _hostctl("POST", "/plugins/apply", {})
 
 
 @app.get("/api/settings")
@@ -1809,8 +1961,8 @@ async def _handle_app_proxy(request: Request, app_name: str, path: str, *, strip
 
     # GPU access is no longer gated here: every generate-trigger route accepts
     # the request immediately and the owning app queues it itself via the
-    # bunny-lock/queue coordinator (waiting_for_gpu state + proceed callback).
-    # See BunnyBytes/lock/app.py.
+    # bunny-lock/queue coordinator (waiting_for_gpu state, turns over the
+    # shared client's stream). See BunnyBytes/lock/PROTOCOL.md.
     extra_headers = None
     if app_name == "Llama":
         # llama-swap enforces its own apiKeys check independent of this
@@ -2253,6 +2405,54 @@ async def proxy_llama_root_v1(request: Request, path: str):
 @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
 async def proxy_llama_api(request: Request, path: str):
     return await _handle_app_proxy(request, "Llama", path, strip_prefix=False)
+
+
+# Custom services from core-backend-extras/plugins/ (plugins.py; the manifest is documented in
+# plugins/README.md). Registered after every built-in route, and a plugin may not reuse a
+# path or name Rocsy already has, so a plugin can never take over a Rocsy page.
+def _register_plugin(plugin: plugins.Plugin) -> None:
+    UPSTREAMS[plugin.id] = plugin.upstream
+    APP_PATHS[plugin.id] = plugin.path
+    if plugin.themed:
+        THEMED_APPS.add(plugin.id)
+    topbar.APPS[plugin.id] = (plugin.name, plugin.icon)
+    favicons.COLORS[plugin.id] = plugin.color
+    if plugin.icon_url:
+        topbar.IMAGES[plugin.id] = plugin.icon_url
+        favicons.IMAGES[plugin.id] = (plugin.icon_url, plugins.ICON_TYPES[plugin.icon_file.rsplit(".", 1)[1].lower()])
+    if plugin.home and plugin.home["background"] != "none":
+        home_data.PLUGIN_ART[plugin.id] = {
+            "background": plugin.home["background"], "path": plugin.path, "slideshow": plugin.home["slideshow"],
+            "url": f"{plugin.upstream}{plugin.home['background_url']}" if plugin.home["background"] == "plugin" else ""}
+    if plugin.home:
+        themes.MODULES[plugin.id] = {"group": plugin.home["group"], "label": plugin.name,
+                                     "note": plugin.note or plugin.home["desc"], "tag": "Plugin"}
+        PLUGIN_CARDS[plugin.id] = plugins.home_card(plugin)
+
+    async def plugin_root(request: Request):
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(url=f"{plugin.path}/{query}", status_code=302)
+
+    async def plugin_proxy(request: Request, path: str):
+        return await _handle_app_proxy(request, plugin.id, path, strip_prefix=plugin.strip_prefix)
+
+    app.add_api_route(plugin.path, plugin_root, methods=["GET"], include_in_schema=False)
+    app.add_api_route(f"{plugin.path}/{{path:path}}", plugin_proxy, include_in_schema=False,
+                      methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+
+
+PLUGIN_CARDS: dict[str, dict] = {}
+templates.env.globals["plugin_cards"] = PLUGIN_CARDS
+_ROCSY_PATHS = {"/" + route.path.strip("/").split("/")[0] for route in app.routes if getattr(route, "path", "").strip("/")}
+# Rocsy's own names and paths, before any plugin registers: settings edits are checked against them.
+PLUGIN_RESERVED = (
+    set(UPSTREAMS) | set(themes.MODULES) | set(topbar.APPS) | set(favicons.COLORS) | {"Settings", "Framework", "Strata", "Code", "Cache"},
+    _ROCSY_PATHS | set(APP_PATHS.values()) | set(LEGACY_APP_PATHS) | {"/static", "/login", "/logout", "/Settings"},
+)
+PLUGIN_SNAPSHOT = plugins.snapshot(settings.plugins_dir)
+PLUGINS, PLUGIN_ERRORS = plugins.load(settings.plugins_dir, *PLUGIN_RESERVED)
+for _plugin in PLUGINS:
+    _register_plugin(_plugin)
 
 
 if __name__ == "__main__":

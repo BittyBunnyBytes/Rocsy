@@ -258,7 +258,8 @@ class Store:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def delete_unfinished_jobs(self) -> int:
+    def delete_unfinished_jobs(self, keep: set[str] | frozenset[str] = frozenset()) -> int:
+        # keep: jobs waiting for the GPU with a saved submission (they survive a restart).
         """Drops jobs a restart interrupts (GPU-queue waits, submissions, ffmpeg
         Post-Edit/Stitch passes). Prompts already handed to ComfyUI are kept: it
         keeps rendering through an app restart, and the monitor picks the result
@@ -268,9 +269,10 @@ class Store:
         with self._lock, self._conn:
             cursor = self._conn.execute(
                 f"""DELETE FROM jobs WHERE state IN ({placeholders})
+                    AND id NOT IN ({", ".join("?" for _ in keep)})
                     AND NOT (state IN ('queued', 'rendering', 'finalizing') AND prompt_id IS NOT NULL
                              AND model NOT IN ('stitch', 'postedit'))""",
-                UNFINISHED_JOB_STATES,
+                (*UNFINISHED_JOB_STATES, *keep),
             )
         return cursor.rowcount
 

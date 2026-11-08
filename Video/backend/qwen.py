@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from .comfy import ComfyService, ServiceError
+from .enhancer import model_guide
 from .config import Settings
 from .generation import reference_category, reference_token
 from .models import EnhanceRequest, MODEL_LABELS, MODE_LABELS
@@ -135,9 +136,10 @@ class QwenService:
         if request.model == "wan_2_2":
             system = (
                 "You improve prompts for local Wan 2.2 video generation. Return only one production-ready prompt "
-                "in natural prose (about 80-120 words) describing a single shot: subject, scene, motion, camera "
+                "in natural prose (60-200 words; 100 or fewer in Keyframe mode) describing a single shot: subject, scene, motion, camera "
                 "movement, lighting and style. Wan has no audio, so leave out dialogue and sound. Preserve the "
                 "user's intent and any LoRA trigger words exactly; do not add headings or commentary."
+                f"\n\nWAN 2.2 PROMPT GUIDE (follow it):\n{model_guide('wan_2_2')}"
             )
         elif request.model == "ltx_2_5":
             system = (
@@ -145,6 +147,7 @@ class QwenService:
                 "in natural prose. Describe a single continuous shot, visible subjects and actions, camera movement, "
                 "lighting, style, dialogue, sound effects, ambience, and music when relevant. Preserve the user's "
                 "intent and any @First or @Last aliases exactly; do not add headings or commentary."
+                f"\n\nLTX 2.5 PROMPT GUIDE (follow it):\n{model_guide('ltx_2_5')}"
             )
         else:
             system = (

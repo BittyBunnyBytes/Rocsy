@@ -19,9 +19,11 @@ import subprocess
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Callable, Literal
 
 import httpx
+
+from bunnylock import BunnyLock
 import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -306,7 +308,7 @@ def duration_of(path: Path) -> float:
 
 
 def build_router(prefix: str, dataset_root: Path, data_dir: Path,
-                 queue_request: Callable[..., Awaitable[httpx.Response]], give_back: Callable[[Path], None]):
+                 gpu: BunnyLock, give_back: Callable[[Path], None]):
     router = APIRouter(prefix=prefix)
     settings_file = data_dir / "tagging.json"
     jobs: dict[str, dict[str, Any]] = {}
@@ -510,16 +512,6 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path,
     async def run(job_id: str, token: str) -> None:
         job = jobs[job_id]
         ev(job, "system", f"GPU queue slot acquired after {time.time() - job['created']:.0f}s")
-        stop = asyncio.Event()
-
-        async def heartbeat():
-            while not stop.is_set():
-                try:
-                    await asyncio.wait_for(stop.wait(), timeout=20)
-                except asyncio.TimeoutError:
-                    with suppress(Exception):
-                        await queue_request("/heartbeat", {"token": token}, timeout=6)
-        hb = asyncio.create_task(heartbeat())
         settings = load_settings()
         headers = {"Authorization": f"Bearer {LLAMA_KEY}"} if LLAMA_KEY else {}
         job["settings"], job["headers"] = settings, headers
@@ -573,14 +565,13 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path,
             job.update(state="failed", stage="Failed", error=str(exc)[:400])
             ev(job, "error", f"job failed: {str(exc)[:300]}")
         finally:
-            stop.set(); hb.cancel()
             if job.get("unload_after"):
                 with suppress(Exception):
                     async with httpx.AsyncClient(timeout=30) as c:
                         await c.get(LLAMA_URL + "/unload", headers=headers)
                     ev(job, "tool", "llama.unload  (VRAM freed)", icon="⏏")
-            with suppress(Exception):
-                await queue_request("/release", {"token": token}, timeout=6)
+            # llm_settle: the queue keeps the vision model unloaded for the next render.
+            await gpu.release(token, llm_settle=bool(job.get("unload_after")))
 
     # ---- auto-cut: find good training clips in a long video (scene detect + vision scout) ----
     async def scene_cuts(path: Path, job: dict[str, Any]) -> list[float]:
@@ -652,16 +643,6 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path,
     async def run_cut(job_id: str, token: str) -> None:
         job = jobs[job_id]
         ev(job, "system", f"GPU queue slot acquired after {time.time() - job['created']:.0f}s")
-        stop = asyncio.Event()
-
-        async def heartbeat():
-            while not stop.is_set():
-                try:
-                    await asyncio.wait_for(stop.wait(), timeout=20)
-                except asyncio.TimeoutError:
-                    with suppress(Exception):
-                        await queue_request("/heartbeat", {"token": token}, timeout=6)
-        hb = asyncio.create_task(heartbeat())
         settings = load_settings()
         headers = {"Authorization": f"Bearer {LLAMA_KEY}"} if LLAMA_KEY else {}
         path: Path = job["path"]
@@ -806,14 +787,13 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path,
             job.update(state="failed", stage="Failed", error=str(exc)[:400])
             ev(job, "error", f"auto-cut failed: {str(exc)[:300]}")
         finally:
-            stop.set(); hb.cancel()
             if job.get("unload_after"):
                 with suppress(Exception):
                     async with httpx.AsyncClient(timeout=30) as c:
                         await c.get(LLAMA_URL + "/unload", headers=headers)
                     ev(job, "tool", "llama.unload  (VRAM freed)", icon="⏏")
-            with suppress(Exception):
-                await queue_request("/release", {"token": token}, timeout=6)
+            # llm_settle: the queue keeps the vision model unloaded for the next render.
+            await gpu.release(token, llm_settle=bool(job.get("unload_after")))
 
     @router.post("/api/datasets/{name}/autocut/{filename}", status_code=202)
     async def autocut(name: str, filename: str, body: CutRequest) -> dict[str, Any]:
@@ -857,9 +837,10 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path,
            + (f", looking for: {j['concept']}" if j["concept"] else "") + f", model {body.model}")
         ev(j, "system", "waiting for the shared GPU queue (renders and training go first)")
         try:
-            r = await queue_request("/enqueue", {"app": "Trainer", "job_id": job_id, "label": f"Auto-cut {filename[:40]}"})
-            r.raise_for_status()
-            j["queue_entry_id"] = r.json().get("entry_id")
+            entry = await gpu.enqueue(job_id, f"Auto-cut {filename[:40]}", uses_llm=True)
+            if entry is None:
+                raise RuntimeError("The GPU queue is not reachable.")
+            j["queue_entry_id"] = entry.get("entry_id")
         except Exception as exc:
             j.update(state="failed", stage="Queue error", error=str(exc)[:300])
             raise HTTPException(503, "Could not reach the shared GPU queue.") from exc
@@ -972,9 +953,10 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path,
                     + (f", {len(examples)} example caption(s) for style" if examples else "") + (f", swarm of {swarm} agents" if swarm > 1 else ""))
         ev(j, "system", "waiting for the shared GPU queue (renders and training go first)")
         try:
-            r = await queue_request("/enqueue", {"app": "Trainer", "job_id": job_id, "label": f"Tagging {name} ({len(media)})"})
-            r.raise_for_status()
-            jobs[job_id]["queue_entry_id"] = r.json().get("entry_id")
+            entry = await gpu.enqueue(job_id, f"Tagging {name} ({len(media)})", uses_llm=True)
+            if entry is None:
+                raise RuntimeError("The GPU queue is not reachable.")
+            jobs[job_id]["queue_entry_id"] = entry.get("entry_id")
         except Exception as exc:
             jobs[job_id].update(state="failed", stage="Queue error", error=str(exc)[:300])
             raise HTTPException(503, "Could not reach the shared GPU queue.") from exc
@@ -1056,8 +1038,7 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path,
         if not job:
             raise HTTPException(404, "Unknown tagging job.")
         if job["state"] == "waiting_for_gpu":
-            with suppress(Exception):
-                await queue_request(f"/dequeue/{job.get('queue_entry_id')}")
+            await gpu.dequeue(job.get("queue_entry_id"))
             job.update(state="cancelled", stage="Cancelled")
         else:
             job["cancel"] = True
