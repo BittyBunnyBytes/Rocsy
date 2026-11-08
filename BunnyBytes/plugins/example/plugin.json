@@ -1,0 +1,19 @@
+{
+  "id": "Example",
+  "name": "Example",
+  "note": "A sample plugin: copy this folder to start your own",
+  "version": "1.0.0",
+  "path": "/Example",
+  "upstream": "http://127.0.0.1:8130",
+  "health": "/Example/api/health",
+  "container": "rocsy-example-plugin",
+  "color": "#4fcbdc",
+  "icon_file": "icon.svg",
+  "icon": "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"3.5\"/><path d=\"M9 12h6M12 9v6\"/>",
+  "updates": {
+    "url": "/Example/api/latest",
+    "current_url": "/Example/api/version"
+  },
+  "home": false,
+  "enabled": false
+}
