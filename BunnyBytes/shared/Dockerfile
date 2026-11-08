@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install --no-install-recommends -y ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py operations.py agentic.py ./
+COPY app.py operations.py agentic.py rag.py bunnylock.py lora_menu.py guide_files.py ./
 COPY guides ./guides
 RUN useradd --system --create-home --uid 10001 framework
 RUN mkdir -p /data && chown framework:framework /data

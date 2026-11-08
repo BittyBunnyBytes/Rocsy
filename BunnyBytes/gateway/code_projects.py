@@ -134,6 +134,16 @@ def project_info(project_id: str) -> dict:
     raise HTTPException(404, NOT_FOUND)
 
 
+def _is_mount(path: Path) -> bool:
+    # os.path.ismount misses bind mounts from the same filesystem (same st_dev), so ask the kernel.
+    target = str(path.resolve())
+    try:
+        with open("/proc/self/mountinfo") as fh:
+            return any(line.split()[4].replace("\\040", " ") == target for line in fh)
+    except OSError:
+        return os.path.ismount(path)
+
+
 def delete_project(project_id: str, confirmation: str) -> dict:
     info = project_info(project_id)
     if confirmation != info["name"]:
@@ -145,6 +155,10 @@ def delete_project(project_id: str, confirmation: str) -> dict:
     if (not target.is_dir() or target.is_symlink() or target.resolve() == root
             or not target.resolve().is_relative_to(root)):
         raise HTTPException(404, NOT_FOUND)
+    if _is_mount(target):
+        # A folder bind-mounted in from elsewhere (docker-compose.override.yml) is a project that lives
+        # outside the workspace: deleting here would wipe the original.
+        raise HTTPException(409, "This project is mounted from another folder; delete it there instead")
     current = target.parent
     while current != root:
         if current.is_symlink() or not current.resolve().is_relative_to(root):

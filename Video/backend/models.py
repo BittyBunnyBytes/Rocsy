@@ -140,6 +140,7 @@ def lora_option(filename: str, label: str) -> dict:
         "default_strength": info.get("strength", 1.0), "strength_note": info.get("strength_note", ""),
         "triggers": info.get("triggers", []), "base": info.get("base", ""),
         "custom_id": info.get("custom_id"), "source": info.get("source", ""), "deleted": info.get("deleted", False),
+        "slider": bool(info.get("slider", False)),
     }
 
 
@@ -184,14 +185,14 @@ class MinimaxLoraSlot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    strength: float = Field(default=1.0, ge=0.0, le=2.0)
+    strength: float = Field(default=1.0, ge=-10.0, le=10.0)  # slider LoRAs run negative too
 
 
 class LtxLora(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     lora: str = Field(max_length=255)
-    strength: float = Field(default=1.0, ge=0.0, le=2.0)
+    strength: float = Field(default=1.0, ge=-10.0, le=10.0)  # slider LoRAs run negative too
 
     @field_validator("lora")
     @classmethod
@@ -205,7 +206,7 @@ class WanLora(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     lora: str = Field(max_length=255)
-    strength: float = Field(default=1.0, ge=0.0, le=2.0)
+    strength: float = Field(default=1.0, ge=-10.0, le=10.0)  # slider LoRAs run negative too
 
     @field_validator("lora")
     @classmethod
@@ -741,6 +742,24 @@ class AgenticGenerationRequest(GenerationRequest):
     prompt: str = Field(min_length=1)
 
 
+class GuideAttachment(BaseModel):
+    """A file attached to the Agentic instructions: a document's text, or an image/video reference
+    (role agentic-guide) that Hermes looks at. Neither is sent to the video model."""
+    model_config = ConfigDict(extra="ignore")
+    kind: Literal["text", "image", "video"]
+    name: str = Field(default="", max_length=240)
+    text: str = Field(default="", max_length=120_000)
+    id: str | None = Field(default=None, max_length=80)
+
+    @model_validator(mode="after")
+    def needs_content(self) -> "GuideAttachment":
+        if self.kind == "text" and not self.text.strip():
+            raise ValueError("An attached document has no text")
+        if self.kind != "text" and not self.id:
+            raise ValueError("An attached image or video has no reference id")
+        return self
+
+
 class AgenticRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     resume_session_id: str | None = None
@@ -748,6 +767,9 @@ class AgenticRequest(BaseModel):
     guide_as_prompt: bool = False
     guide: str = ""
     available_reference_ids: list[str] = Field(default_factory=list, max_length=24)
+    guide_attachments: list[GuideAttachment] = Field(default_factory=list, max_length=12)
+    # Generate with a pasted ::VIDEO plan: queue its clips exactly as written, with no Hermes planning or review.
+    direct: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -755,6 +777,10 @@ class AgenticRequest(BaseModel):
         if isinstance(value, dict) and isinstance(value.get("generation"), dict):
             generation = value["generation"]
             guide = value.get("guide")
+            if not str(generation.get("prompt") or "").strip() and not (isinstance(guide, str) and guide.strip()) \
+                    and value.get("guide_attachments"):
+                guide = "Follow the attached files."
+                value = {**value, "guide": guide}
             if not str(generation.get("prompt") or "").strip() and isinstance(guide, str) and guide.strip():
                 return {**value, "guide_as_prompt": True, "generation": {**generation, "prompt": guide.strip()}}
         return value

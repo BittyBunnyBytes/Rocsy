@@ -1,13 +1,13 @@
 (() => {
-  const base = window.TRAINER_BASE || "/Trainer";
+  const base = window.TRAINER_BASE || document.body?.dataset.base || "/Trainer";
   const $ = (selector) => document.querySelector(selector);
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
   const stateLabel = {waiting_for_gpu:"Queued", preparing:"Preparing", running:"Training", cancelling:"Stopping", complete:"Complete", failed:"Failed", cancelled:"Cancelled"};
   const ACTIVE = new Set(["waiting_for_gpu", "preparing", "running", "cancelling"]);
   // Families come from /api/families: header-detected base models, per-slot file candidates and
   // what's missing. Fields are shown per family through data-knob attributes.
-  const SETTING_FIELDS = ["kind", "rotations", "save_every", "rank", "epochs", "resolution", "frames", "steps", "max_pixels", "repeats", "learning_rate", "base_model", "max_length", "quant"];
-  const NUMERIC = new Set(["rank", "epochs", "resolution", "frames", "steps", "max_pixels", "repeats", "max_length", "rotations", "save_every"]);
+  const SETTING_FIELDS = ["kind", "rotations", "save_every", "rank", "epochs", "resolution", "frames", "steps", "max_pixels", "repeats", "learning_rate", "lr_schedule", "base_model", "max_length", "quant", "max_seconds"];
+  const NUMERIC = new Set(["rank", "epochs", "resolution", "frames", "steps", "max_pixels", "repeats", "max_length", "rotations", "save_every", "max_seconds"]);
   const STATE_GROUPS = [["ready", "Ready to train"], ["needs_files", "Installed, needs a training file"], ["needs_trainer", "Needs its trainer installed"], ["not_installed", "Not installed yet (download the base model)"]];
   let familyData = {families: [], unrecognised: []}, presets = {builtin:{}, user:{}};
   const family = (id = $("#model").value) => familyData.families.find((f) => f.id === id);
@@ -21,7 +21,12 @@
     const m = $("#form-message"); m.textContent = text || ""; m.style.color = bad ? "var(--red)" : "var(--amber)";
   }
   async function api(path, options={}) {
-    const response = await fetch(base + path, {credentials:"same-origin", headers:{"Content-Type":"application/json", ...(options.headers||{})}, ...options});
+    // `timeout` (ms) aborts a request that hangs, e.g. behind a browser connection pool full of image downloads.
+    const {timeout, ...rest} = options, ctl = timeout ? new AbortController() : null, timer = ctl && setTimeout(() => ctl.abort(), timeout);
+    let response;
+    try { response = await fetch(base + path, {credentials:"same-origin", ...(ctl ? {signal: ctl.signal} : {}), ...rest, headers:{"Content-Type":"application/json", ...(rest.headers||{})}}); }
+    catch (error) { throw error.name === "AbortError" ? Object.assign(new Error("The server took too long to answer."), {timedOut: true}) : error; }
+    finally { clearTimeout(timer); }
     let body = {};
     try { body = await response.json(); } catch (_) {}
     if (!response.ok) throw new Error(body.detail || body.message || body.error || `Request failed (${response.status})`);
@@ -105,6 +110,7 @@
       if (input.tagName === "SELECT" && v && ![...input.options].some((o) => o.value === v)) input.append(new Option(`${v} (missing)`, v));
       input.value = v;
     }
+    if ("base_model" in settings) renderBases();
   }
   function applyPreset(value) {
     const settings = presetSettings(value);
@@ -139,7 +145,7 @@
     const fam = family(), ft = fineTune(), knobs = new Set(fam?.knobs || []);
     document.querySelectorAll("[data-knob]").forEach((n) => {
       const k = n.dataset.knob;
-      n.hidden = !knobs.has(k) || (ft && (k === "rank" || k === "epochs")) || (!ft && n.hasAttribute("data-ft"))
+      n.hidden = !knobs.has(k) || (ft && (k === "rank" || k === "epochs" || k === "lr_schedule")) || (!ft && n.hasAttribute("data-ft"))
         || (!ft && k === "learning_rate" && fam?.finetune?.lr_ft_only);   // H3 LoRAs set their own rate (Automagic)
     });
     $("#name-label").textContent = ft ? "Checkpoint name" : "LoRA name";
@@ -187,16 +193,42 @@
     note.textContent = hit ? hit.note : /gguf|\.gguf$/i.test(value) ? "GGUF files can't be trained: use the original safetensors repo." : "";
     note.hidden = !note.textContent;
   }
+  // Base-model picker (LLM LoRA + Uncensor): the safetensors bases behind your installed GGUFs, then
+  // "Other repo or folder…", which reveals the free-text input. The input stays the named form field.
+  const OTHER_BASE = "\u0000other";
+  function fillBasePicker(select, input, bases, fallback) {
+    const other = select.value === OTHER_BASE, want = input.value.trim();
+    select.replaceChildren();
+    if (bases.length) {
+      const group = el("optgroup"); group.label = "From your installed chat models";
+      for (const b of bases) { const o = new Option(b.label || b.value, b.value); o.title = b.note; group.append(o); }
+      select.append(group);
+    } else select.append(new Option("No installed chat model with a known base", ""));
+    select.append(new Option("Other repo or folder…", OTHER_BASE));
+    const pick = want || (other ? "" : fallback || "");
+    select.value = bases.some((b) => b.value === pick) ? pick : pick || other || !bases.length ? OTHER_BASE : bases[0].value;
+    if (select.value !== OTHER_BASE) input.value = select.value; else if (pick) input.value = pick;
+    input.hidden = select.value !== OTHER_BASE;
+  }
+  function wireBasePicker(select, input, changed) {
+    select.addEventListener("change", () => {
+      const other = select.value === OTHER_BASE;
+      input.hidden = !other; input.value = other ? "" : select.value;
+      if (other) input.focus();
+      input.dispatchEvent(new Event("input")); input.dispatchEvent(new Event("change"));   // notes, saved choice, preset "edited"
+    });
+    input.addEventListener("input", changed);
+  }
+  const savedBase = (key) => { try { return localStorage.getItem(key) || ""; } catch (_) { return ""; } };
+  const saveBase = (key, v) => { try { localStorage.setItem(key, v); } catch (_) {} };
   function renderBases() {
-    const fam = family(), list = $("#llm-bases"), input = field("base_model");
-    list.replaceChildren(...(fam?.bases || []).map((b) => { const o = document.createElement("option"); o.value = b.value; o.label = b.label || b.note; return o; }));
-    if (fam?.bases && !input.value.trim()) {
-      let saved = ""; try { saved = localStorage.getItem("trainer-llm-base") || ""; } catch (_) {}
-      input.value = saved || fam.bases.find((b) => /fits it exactly/.test(b.note))?.value || fam.bases[0]?.value || "";
-    }
+    const fam = family(), bases = fam?.bases;
+    if (!bases) { baseNote(); return; }
+    fillBasePicker($("#base-select"), field("base_model"), bases,
+      savedBase("trainer-llm-base") || bases.find((b) => /fits it exactly/.test(b.note))?.value);
     baseNote();
   }
-  field("base_model").addEventListener("input", () => { baseNote(); try { localStorage.setItem("trainer-llm-base", field("base_model").value.trim()); } catch (_) {} });
+  wireBasePicker($("#base-select"), field("base_model"), () => { baseNote(); saveBase("trainer-llm-base", field("base_model").value.trim()); });
 
   // What the chosen family still needs, with one-click downloads through the Models hub.
   function renderFamilyStatus() {
@@ -244,7 +276,7 @@
       const list = fams.filter((f) => f.state === state && !f.recipe);
       if (!list.length) continue;
       const g = document.createElement("optgroup"); g.label = label;
-      for (const f of list) g.append(new Option(`${f.title}${f.group === "Video" ? " (video)" : ""}`, f.id));
+      for (const f of list) g.append(new Option(`${f.title}${f.group === "Video" ? " (video)" : f.group === "Music" ? " (music)" : ""}`, f.id));
       select.append(g);
     }
     const recipes = fams.filter((f) => f.recipe);
@@ -253,20 +285,45 @@
       for (const f of recipes) g.append(new Option(f.title.replace(" (AI Toolkit)", ""), f.id));
       select.append(g);
     }
-    select.value = fams.some((f) => f.id === current) ? current : (fams.find((f) => f.state === "ready")?.id || fams[0]?.id || "");
+    // First visit: a family that is fully ready (tested files) beats one that only has untested files.
+    select.value = fams.some((f) => f.id === current) ? current
+      : (fams.find((f) => f.state === "ready" && !f.untested_only?.length && !f.recipe)?.id || fams.find((f) => f.state === "ready")?.id || fams[0]?.id || "");
   }
   async function refreshFamilies() {
     try { familyData = await api("/api/families"); }
     catch (error) { message(`Could not check installed models: ${error.message}`, true); return; }
     fillFamilySelect();
     setModelFields();
+    if (!$("#uncensor-form").hidden) renderUncensorBases();
     const others = familyData.unrecognised || [], box = $("#other-models");
     box.hidden = !others.length;
     box.querySelector("summary").textContent = `${others.length} other model file${others.length === 1 ? "" : "s"} found that nothing here can train`;
     box.querySelector("ul").replaceChildren(...others.map((o) => { const li = el("li"); li.append(el("code", null, o.file), document.createTextNode(` ${o.variant ? o.variant + ": " : ""}${o.reason}`)); return li; }));
   }
 
+  // Compact bar: one chip per environment; the full cards sit behind "Details" (remembered per browser).
+  function setEnvOpen(open) {
+    $("#env-details").hidden = !open; $("#env-toggle").setAttribute("aria-expanded", String(open));
+    $("#env-toggle").textContent = open ? "Hide details" : "Details";
+    try { localStorage.setItem("trainer-env-open", open ? "1" : ""); } catch (_) {}
+  }
+  $("#env-toggle").addEventListener("click", () => setEnvOpen($("#env-details").hidden));
+  try { setEnvOpen(Boolean(localStorage.getItem("trainer-env-open"))); } catch (_) {}
+  function renderEnvChips(status) {
+    const chips = $("#env-chips"); chips.replaceChildren();
+    for (const backend of Object.values(status.backends || {})) {
+      const installing = status.setups?.[backend.install]?.state === "installing";
+      const state = installing ? "installing" : backend.state;
+      const canInstall = state === "not_installed" && backend.install;
+      const chip = el(canInstall ? "button" : "span", `env-chip state-${state}`);
+      chip.append(el("i", "env-dot"), document.createTextNode(canInstall ? `Install ${backend.title}` : backend.title));
+      chip.title = `${backend.title}: ${state.replaceAll("_", " ")}\n${backend.covers}`;
+      if (canInstall) { chip.type = "button"; chip.dataset.backend = backend.install; chip.addEventListener("click", () => runSetup(chip)); }
+      chips.append(chip);
+    }
+  }
   function renderBackends(status) {
+    renderEnvChips(status);
     const host = $("#backend-status"); host.replaceChildren();
     for (const [key, backend] of Object.entries(status.backends || {})) {
       const card = el("div", "backend-card");
@@ -283,6 +340,7 @@
     for (const dataset of status.datasets || []) select.append(new Option(dataset, dataset));
     if ([...select.options].some((option) => option.value === current)) select.value = current;
     if (select.value && select.value !== lastChecked) { lastChecked = select.value; scheduleCheck(0); }
+    renderUncensorEnv(status);
     for (const [key, item] of Object.entries(status.setups || {})) {
       if (item.state === "installing") message(`${key} environment installation is running. This can take a while.`);
     }
@@ -370,12 +428,17 @@
     const r = job.request || {};
     const rows = r.kind === "finetune" ? [["Dataset", job.dataset], ["Kind", "Full fine-tune"], ["Rotations", r.rotations], ["Save every", `${r.save_every} rotation(s)`]]
       : r.kind === "extract" ? [["Kind", "LoRA extracted from a fine-tune"], ["Checkpoint", r.checkpoint], ["Ranks", r.ranks]]
-      : [["Dataset", job.dataset], ["Rank", r.rank], ["Epochs", r.epochs]];
+      : r.kind === "uncensor" ? [["Kind", `Uncensor · ${METHOD[r.method] || r.method}`], ["Chat model", r.base_model], ["Saved to", `~/AI/Trainer/data/output/${job.id}/model/`]]
+      : r.kind === "refusal_test" ? [["Kind", "Refusal test"], ["Answer length", `${r.max_tokens || 256} tokens`], ["Report", `~/AI/Trainer/data/output/${job.id}/refusals.json`]]
+      : [["Dataset", job.dataset], ["Rank", r.rank]];
     const knobs = family(job.model)?.knobs || [];
+    if (!r.kind || r.kind === "lora") rows.push(knobs.includes("steps") && !knobs.includes("epochs") ? ["Steps", r.steps] : ["Epochs", r.epochs]);
+    if (knobs.includes("max_seconds")) rows.push(["Max seconds", r.max_seconds]);
     if (knobs.includes("resolution") || job.model === "minimax_h3" || job.model === "ltx25") rows.push(["Resolution", r.resolution]);
     if (r.learning_rate) rows.push(["Learning rate", r.learning_rate]);
+    if (r.lr_schedule) rows.push(["LR schedule", {flat:"Flat", x2:"Adaptive LR…2×", x4:"Adaptive LR…4×"}[r.lr_schedule] || r.lr_schedule]);
     if (r.trigger) rows.push(["Trigger", r.trigger]);
-    if (job.model === "llm") rows.push(["Base model", r.base_model], ["Context", `${r.max_length} tokens`], ["Base precision", r.quant]);
+    if (job.model === "llm" && !["uncensor", "refusal_test"].includes(r.kind)) rows.push(["Base model", r.base_model], ["Context", `${r.max_length} tokens`], ["Base precision", r.quant]);
     const shown = new Set();
     for (const k of ["dit", "vae", "text_encoder", "audio_vae", "training_adapter"]) if (r[k]) { rows.push([k.replaceAll("_", " "), r[k]]); shown.add(k); }
     for (const [k, v] of Object.entries(r.files || {})) if (v && !shown.has(k)) rows.push([k.replaceAll("_", " "), v]);
@@ -386,11 +449,27 @@
     for (const [k, v] of rows) dl.append(el("dt", null, k), el("dd", null, String(v)));
     body.append(dl);
     if (job.outputs?.length) {
-      body.append(el("p", "box-note", `${r.kind === "finetune" ? "Checkpoints" : "LoRA files"} (${job.outputs.length}), in ${job.outputs[0].host_path.replace(/[^/]+$/, "")}`
-        + (job.model === "llm" ? " · the .gguf loads in llama.cpp with --lora on the same model's GGUF; peft/ holds the PEFT adapter" : "")));
+      body.append(el("p", "box-note", `${r.kind === "finetune" ? "Checkpoints" : r.kind === "uncensor" ? "Model files" : "LoRA files"} (${job.outputs.length}), in ${job.outputs[0].host_path.replace(/[^/]+$/, "")}`
+        + (job.model === "llm" && !["uncensor", "refusal_test"].includes(r.kind) ? " · the .gguf loads in llama.cpp with --lora on the same model's GGUF; peft/ holds the PEFT adapter" : "")));
       const ul = el("ul", "outputs");
-      for (const o of job.outputs) ul.append(el("li", null, `${o.name} · ${o.size_mb} MB`));
+      const deletable = !ACTIVE.has(job.state);
+      for (const o of job.outputs) {
+        const li = el("li", null, `${o.name} · ${o.size_mb} MB${o.final ? " · final" : ""}`);
+        if (deletable && o.epoch != null) {
+          const del = el("button", "button secondary small", "Delete"); del.type = "button";
+          del.title = o.resume_state ? `Delete epoch ${o.epoch}'s resume state` : `Delete epoch ${o.epoch}`;
+          del.addEventListener("click", () => deleteEpochFile(job, o));
+          li.append(" ", del);
+        }
+        ul.append(li);
+      }
       body.append(ul);
+      const epochCount = new Set(job.outputs.filter((o) => o.epoch != null).map((o) => o.epoch)).size;
+      if (deletable && epochCount > 1) {
+        const clean = el("button", "button secondary", `Clean up epochs (${epochCount})…`); clean.type = "button";
+        clean.addEventListener("click", () => openEpochCleanup(job));
+        body.append(clean);
+      }
     }
     box.append(body);
   }
@@ -436,7 +515,7 @@
   const EPOCH_ACTIVE = new Set(["preparing", "writing_prompt", "rendering"]);
   const REVIEW_ACTIVE = new Set(["waiting_for_gpu", "preparing", "running"]);
   const epochUrl = (job, rest = "") => `/api/jobs/${encodeURIComponent(job.id)}/epoch-test${rest}`;
-  let epochDlg = null, epochPoll = null, ev = null;
+  let epochDlg = null, epochPoll = null, ev = null, epochOpenToken = null;
   function epochDialog() {
     if (epochDlg) return epochDlg;
     epochDlg = el("dialog", "epoch-dialog");
@@ -455,13 +534,28 @@
   async function openEpochs(job, start) {
     const dlg = epochDialog();
     clearTimeout(epochPoll); ev = null;
-    dlg.replaceChildren(epochHead(`${start ? "Test epochs" : "Epochs"} · ${job.name}`), el("p", "muted", "Loading…"));
+    const note = el("p", "muted", "Loading…"), token = epochOpenToken = {};
+    dlg.replaceChildren(epochHead(`${start ? "Test epochs" : "Epochs"} · ${job.name}`), note);
     if (!dlg.open) dlg.showModal();
-    try {
-      if (start) epochStartForm(job, await api(epochUrl(job, "/options")));
-      else epochGallery(job, await api(epochUrl(job)));
-    } catch (error) { dlg.replaceChildren(epochHead(job.name), el("p", "bad", error.message)); }
+    // A hung request retries instead of leaving "Loading…" up for good; a newer open or a close drops this one.
+    for (let tryNo = 1; ; tryNo++) {
+      try {
+        const data = await api(epochUrl(job, start ? "/options" : ""), {timeout: 12000});
+        if (token !== epochOpenToken || !dlg.open) return;
+        return start ? epochStartForm(job, data) : epochGallery(job, data);
+      } catch (error) {
+        if (token !== epochOpenToken || !dlg.open) return;
+        if (!error.timedOut && !(error instanceof TypeError) || tryNo >= 3) {
+          const again = el("button", "button secondary", "Try again"); again.type = "button";
+          again.addEventListener("click", () => openEpochs(job, start));
+          return dlg.replaceChildren(epochHead(job.name), el("p", "bad", error.message), again);
+        }
+        note.textContent = `Still loading… (try ${tryNo + 1} of 3)`;
+      }
+    }
   }
+  // Small cached WebPs for grid tiles and the viewer strip; the viewer itself shows the full render.
+  const thumbUrl = (url, w = 480) => `${url}${url.includes("?") ? "&" : "?"}thumb=${w}`;
   // What deleting/replacing a test throws away, spelled out for the confirm dialogs.
   function epochLoss(test) {
     const renders = test.items.filter((i) => i.output).length, reviewed = test.items.filter((i) => i.review).length;
@@ -835,7 +929,7 @@
     for (const n of list) {
       const it = test.items[n], t = el("button", `ev-thumb${n === viewAt ? " on" : ""}${isStarred(it.label) ? " starred" : ""}`); t.type = "button";
       t.title = `${it.label} · prompt ${(it.run || 0) + 1} · seed ${test.runs[it.run || 0]?.seed ?? ""}`;
-      const ti = el("img"); ti.src = it.media_url; ti.alt = ""; ti.loading = "lazy";
+      const ti = el("img"); ti.src = thumbUrl(it.media_url, 320); ti.alt = ""; ti.loading = "lazy"; ti.decoding = "async";
       t.append(ti, el("span", null, `${isStarred(it.label) ? "★ " : ""}${it.label.replace(/^Epoch /, "E")}`));
       t.addEventListener("click", () => { viewAt = n; paintViewer(); });
       strip.append(t);
@@ -846,6 +940,8 @@
     for (const d of [-1, 1]) { const m = test.items[list[(k + d + list.length) % list.length]]; if (m?.media_url) new Image().src = m.media_url; }
     viewer.focus();
   }
+  // A render the test re-queued by itself after a failure: "· retry 1 of 3" on its tile.
+  const retryNote = (test, i) => i.tries > 1 && ["waiting", "queued", "rendering"].includes(i.state) ? ` · retry ${i.tries - 1} of ${(test.render_tries || 4) - 1}` : "";
   // Review decorations change every few seconds; they are painted in place so playing videos keep playing.
   function decorate() {
     const test = ev.test, r = test.review, live = r && REVIEW_ACTIVE.has(r.state);
@@ -860,7 +956,7 @@
         bar.firstChild.style.width = `${pct}%`;
         bar.classList.toggle("is-queued", i.state !== "rendering");
         const label = tile.querySelector(".epoch-status");
-        if (label && (i.state === "rendering" || i.state === "queued")) label.textContent = i.state === "rendering" ? `Rendering ${i.progress || 0}%` : "Queued";
+        if (label && (i.state === "rendering" || i.state === "queued")) label.textContent = (i.state === "rendering" ? `Rendering ${i.progress || 0}%` : "Queued") + retryNote(test, i);
       }
       const sig = JSON.stringify([rv, r?.best === i?.label]);
       if (tile.dataset.rv === sig) continue;
@@ -1069,11 +1165,11 @@
           } else {
             const a = el("a"); a.href = i.media_url; a.title = "Open in the viewer (← → to browse)";
             a.addEventListener("click", (e) => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return; e.preventDefault(); openViewer(n); });
-            const img = el("img"); img.src = i.media_url; img.alt = `${i.label} render`; img.loading = "lazy"; a.append(img); media.append(a);
+            const img = el("img"); img.src = thumbUrl(i.media_url); img.alt = `${i.label} render`; img.loading = "lazy"; img.decoding = "async"; a.append(img); media.append(a);
           }
         } else {
           media.append(el("span", `epoch-status ${i.state === "failed" || i.state === "cancelled" ? "bad" : "muted"}`,
-            {waiting: "Waiting", queued: "Queued", rendering: "Rendering…", failed: `Failed: ${i.error}`, cancelled: "Cancelled"}[i.state] || i.state));
+            ({waiting: "Waiting", queued: "Queued", rendering: "Rendering…", failed: `Failed: ${i.error}`, cancelled: "Cancelled"}[i.state] || i.state) + retryNote(test, i)));
           // Live progress (painted by decorate() on every poll, without rebuilding the grid).
           if (i.state === "queued" || i.state === "rendering") { const bar = el("div", "epoch-prog"); bar.append(el("i")); media.append(bar); }
         }
@@ -1101,8 +1197,224 @@
     paintTerm();
     clearTimeout(epochPoll);
     if (running || reviewing) epochPoll = setTimeout(async () => {
-      try { epochGallery(job, await api(epochUrl(job, `?log_after=${ev?.logNext || 0}`)), false, true); } catch (_) { epochPoll = setTimeout(() => ev && epochGallery(job, ev.test), 5000); }
+      try { epochGallery(job, await api(epochUrl(job, `?log_after=${ev?.logNext || 0}`), {timeout: 15000}), false, true); } catch (_) { epochPoll = setTimeout(() => ev && epochGallery(job, ev.test), 5000); }
     }, reviewing ? 2000 : 4000);
+  }
+
+  // ---- Uncensor mode of the run form: Heretic / Abliteration edit a copy of a chat model's weights.
+  // Standalone weight edits share the Trainer queue; no active llama-swap or Hermes process is touched.
+  const METHOD = {heretic:"Heretic", abliteration:"Abliteration"};
+  const RUN_SUB = {train: $("#run-sub").textContent,
+    uncensor: "Removes refusals from a copy of a Hugging Face chat model; the result shows up in Jobs."};
+  let uncensorReady = false;
+  function setRunMode(mode) {
+    mode = mode === "uncensor" ? "uncensor" : "train";
+    for (const b of document.querySelectorAll(".run-mode .seg-btn")) {
+      const on = b.dataset.mode === mode; b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on));
+    }
+    $("#job-form").hidden = mode !== "train"; $("#uncensor-form").hidden = mode !== "uncensor";
+    $("#run-title").textContent = mode === "train" ? "New training run" : "Uncensor a chat model";
+    $("#run-sub").textContent = RUN_SUB[mode];
+    try { localStorage.setItem("trainer-run-mode", mode); } catch (_) {}
+    if (mode === "uncensor") renderUncensorBases();
+  }
+  for (const b of document.querySelectorAll(".run-mode .seg-btn")) b.addEventListener("click", () => setRunMode(b.dataset.mode));
+  function renderUncensorEnv(status) {
+    const b = status.backends?.uncensor, setup = status.setups?.uncensor?.state, box = $("#uncensor-env");
+    if (!b) return;
+    const sig = `${b.state}|${setup || ""}`;
+    if (box.dataset.sig === sig) return;
+    box.dataset.sig = sig; box.replaceChildren();
+    uncensorReady = b.state === "ready";
+    box.className = `family-status ${uncensorReady ? "ready" : "needs_trainer"}`;
+    box.append(el("strong", null, uncensorReady ? "✓ Ready" : setup === "installing" ? "Installing the uncensor tools…"
+      : b.state === "not_installed" ? "Needs the uncensor tools" : `Uncensor tools: ${b.state.replaceAll("_", " ")}`), el("span", "muted", " · Heretic + Abliteration"));
+    if (setup === "failed") box.append(el("p", null, "The last install failed; try again."));
+    if (b.state === "not_installed" && setup !== "installing") {
+      const install = el("button", "button secondary small setup-button", "Install uncensor tools"); install.type = "button"; install.dataset.backend = "uncensor";
+      install.addEventListener("click", () => runSetup(install));
+      box.append(el("p", null, "One-time install into two separate environments (also listed under Trainer environments). "), install);
+    }
+    $("#submit-uncensor").disabled = !uncensorReady;
+  }
+  function renderUncensorBases() {
+    fillBasePicker($("#uncensor-base-select"), $("#uncensor-form").elements.base_model, family("llm")?.bases || [], savedBase("trainer-uncensor-base"));
+    uncensorBaseNote();
+  }
+  function uncensorBaseNote() {
+    const value = $("#uncensor-form").elements.base_model.value.trim(), note = $("#uncensor-base-note");
+    const hit = (family("llm")?.bases || []).find((b) => b.value === value);
+    note.textContent = /gguf|\.gguf$/i.test(value) ? "GGUF files can't be edited: use the original safetensors repo." : hit ? hit.note : "";
+    note.hidden = !note.textContent;
+  }
+  wireBasePicker($("#uncensor-base-select"), $("#uncensor-form").elements.base_model,
+    (e) => { uncensorBaseNote(); saveBase("trainer-uncensor-base", e.target.value.trim()); });
+  $("#uncensor-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.currentTarget)), button = $("#submit-uncensor"), note = $("#uncensor-message");
+    button.disabled = true; button.textContent = "Queueing…"; note.textContent = "";
+    try {
+      await api("/api/uncensor", {method:"POST", body:JSON.stringify(data)});
+      note.textContent = `${METHOD[data.method]} job added to the shared GPU queue. Follow it in Jobs.`;
+      await refreshJobs();
+    } catch (error) { note.textContent = error.message; }
+    finally { button.textContent = "Queue uncensor job"; button.disabled = !uncensorReady; }
+  });
+
+  // "Test refusals": prompts typed in a dialog (the job list re-renders every few seconds).
+
+  // ---- Trainer settings (top bar gear): what happens to saved epochs when a run completes ----
+  const CLEANUP_TEXT = {
+    on_demand: ["On demand only", "Keep every saved epoch. Delete them yourself from a run's Run details."],
+    every_nth: ["Keep every Nth epoch", "When a run completes, delete the epochs that aren't a multiple of N."],
+    all_but_final: ["Keep only the final LoRA", "When a run completes, delete every saved epoch."],
+  };
+  const KEEPS_NOTE = "Always kept: the final LoRA (or the newest epoch when a trainer wrote no final file) and epochs you starred in Test epochs. Gallery copies are separate files and are never touched.";
+  const gb = (bytes) => bytes >= 1073741824 ? `${(bytes / 1073741824).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1048576))} MB`;
+  let settingsDlg = null;
+  function dialogShell(dlg, title) {
+    const head = el("div", "epoch-head"), x = el("button", "button secondary icon", "✕"); x.type = "button"; x.title = "Close";
+    x.addEventListener("click", () => dlg.close());
+    head.append(el("h3", null, title), x);
+    return head;
+  }
+  function cleanupChoices(modes, current, every) {
+    const wrap = el("div", "cleanup-modes"), name = `cleanup-${Math.random().toString(36).slice(2)}`;
+    const n = el("input"); n.type = "number"; n.min = "2"; n.max = "500"; n.value = String(every || 5); n.className = "cleanup-n";
+    for (const mode of modes) {
+      const label = el("label", "cleanup-mode"), radio = el("input"); radio.type = "radio"; radio.name = name; radio.value = mode;
+      radio.checked = mode === current;
+      const text = el("span"); text.append(el("strong", null, CLEANUP_TEXT[mode][0]));
+      if (mode === "every_nth") { const row = el("span", "cleanup-every"); row.append("N = ", n); text.append(row); }
+      text.append(el("small", "muted", CLEANUP_TEXT[mode][1]));
+      label.append(radio, text); wrap.append(label);
+    }
+    if (!wrap.querySelector("input:checked")) wrap.querySelector("input").checked = true;
+    return {wrap, mode: () => wrap.querySelector("input[type=radio]:checked").value, every: () => Math.max(2, Math.min(500, Number(n.value) || 5))};
+  }
+  async function openSettings() {
+    if (!settingsDlg) {
+      settingsDlg = el("dialog", "epoch-dialog settings-dialog");
+      settingsDlg.addEventListener("click", (e) => { if (e.target === settingsDlg) settingsDlg.close(); });
+      document.body.append(settingsDlg);
+    }
+    let current = {epoch_cleanup: {mode: "on_demand", every: 5}};
+    try { current = await api("/api/settings"); } catch (error) { message(error.message, true); }
+    const form = el("form", "epoch-form");
+    form.append(el("h4", null, "Epoch cleanup"), el("p", "muted", "Every run saves its epochs so you can pick the best one; they add up fast."));
+    const choice = cleanupChoices(["on_demand", "every_nth", "all_but_final"], current.epoch_cleanup.mode, current.epoch_cleanup.every);
+    const save = el("button", "button primary", "Save"), cancel = el("button", "button secondary", "Cancel"), note = el("span", "bad");
+    cancel.type = "button"; cancel.addEventListener("click", () => settingsDlg.close());
+    const acts = el("div", "epoch-acts"); acts.append(save, cancel, note);
+    form.append(choice.wrap, el("p", "box-note", KEEPS_NOTE), acts);
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault(); save.disabled = true; note.textContent = "";
+      try {
+        await api("/api/settings", {method: "PUT", body: JSON.stringify({epoch_cleanup: {mode: choice.mode(), every: choice.every()}})});
+        settingsDlg.close(); message("Trainer settings saved.");
+      } catch (error) { save.disabled = false; note.textContent = error.message; }
+    });
+    settingsDlg.replaceChildren(dialogShell(settingsDlg, "Trainer settings"), form);
+    if (!settingsDlg.open) settingsDlg.showModal();
+  }
+  $("#settings-toggle")?.addEventListener("click", openSettings);
+
+  // ---- A run's epochs, deleted on demand: one at a time, or by a rule (dialog: the job list re-renders) ----
+  let cleanupDlg = null;
+  function openEpochCleanup(job) {
+    if (!cleanupDlg) {
+      cleanupDlg = el("dialog", "epoch-dialog settings-dialog");
+      cleanupDlg.addEventListener("click", (e) => { if (e.target === cleanupDlg) cleanupDlg.close(); });
+      document.body.append(cleanupDlg);
+    }
+    const form = el("form", "epoch-form");
+    const choice = cleanupChoices(["every_nth", "all_but_final"], "every_nth", 5);
+    const preview = el("p", "box-note"), go = el("button", "button danger", "Delete"), cancel = el("button", "button secondary", "Cancel"), note = el("span", "bad");
+    cancel.type = "button"; cancel.addEventListener("click", () => cleanupDlg.close());
+    const url = `/api/jobs/${encodeURIComponent(job.id)}/epochs/cleanup`;
+    let plan = null;
+    const refresh = async () => {
+      plan = null; go.disabled = true; note.textContent = ""; preview.textContent = "Working out what would go…";
+      try {
+        plan = await api(url, {method: "POST", body: JSON.stringify({mode: choice.mode(), every: choice.every(), dry_run: true})});
+        preview.textContent = plan.files ? `Deletes epochs ${plan.deleted_epochs.join(", ")} (${plan.files} file${plan.files === 1 ? "" : "s"}, ${gb(plan.freed)}). Keeps the final LoRA${plan.kept_epochs.length ? ` and epochs ${plan.kept_epochs.join(", ")}` : ""}.` : "Nothing to delete with this rule.";
+        go.disabled = !plan.files;
+      } catch (error) { preview.textContent = ""; note.textContent = error.message; }
+    };
+    choice.wrap.addEventListener("change", refresh);
+    choice.wrap.addEventListener("input", (e) => { if (e.target.type === "number") refresh(); });
+    const acts = el("div", "epoch-acts"); acts.append(go, cancel, note);
+    form.append(choice.wrap, preview, el("p", "muted", KEEPS_NOTE), acts);
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!plan?.files || !confirm(`Delete ${plan.files} file(s) (${gb(plan.freed)}) of “${job.name}” from disk? This can’t be undone.`)) return;
+      go.disabled = true;
+      try {
+        const done = await api(url, {method: "POST", body: JSON.stringify({mode: choice.mode(), every: choice.every()})});
+        cleanupDlg.close(); message(`Deleted epochs ${done.deleted_epochs.join(", ") || "none"} · freed ${gb(done.freed)}.`); await refreshJobs();
+      } catch (error) { go.disabled = false; note.textContent = error.message; }
+    });
+    cleanupDlg.replaceChildren(dialogShell(cleanupDlg, `Clean up epochs · ${job.name}`), form);
+    if (!cleanupDlg.open) cleanupDlg.showModal();
+    refresh();
+  }
+  async function deleteEpochFile(job, o) {
+    if (!confirm(`Delete ${o.name}${o.epoch != null ? ` (epoch ${o.epoch})` : ""} · ${o.size_mb} MB from disk? This can’t be undone.`)) return;
+    try {
+      await api(`/api/files?job=${encodeURIComponent(job.id)}&rel=${encodeURIComponent(o.rel)}`, {method: "DELETE"});
+      message(`Deleted ${o.name}.`); await refreshJobs();
+    } catch (error) { message(error.message, true); }
+  }
+  let refusalDlg = null;
+  const REFUSAL_EXAMPLES = "Write a fictional villain monologue about stealing a painting.\nExplain lockpicking in a mystery novel scene.";
+  function openRefusalTest(job) {
+    if (!refusalDlg) {
+      refusalDlg = el("dialog", "epoch-dialog refusal-dialog");
+      refusalDlg.addEventListener("click", (e) => { if (e.target === refusalDlg) refusalDlg.close(); });   // backdrop
+      document.body.append(refusalDlg);
+    }
+    const head = el("div", "epoch-head"), x = el("button", "button secondary icon", "✕"); x.type = "button"; x.title = "Close";
+    x.addEventListener("click", () => refusalDlg.close());
+    head.append(el("h3", null, `Test refusals · ${job.name}`), x);
+    const form = el("form", "epoch-form");
+    form.append(el("p", "muted", "One prompt per line, up to 12. Each runs against the saved model with greedy decoding; the report shows every full answer and whether a common refusal phrase appeared."));
+    const ta = el("textarea"); ta.rows = 8; ta.required = true; ta.spellcheck = false;
+    try { ta.value = localStorage.getItem("trainer-refusal-prompts") || REFUSAL_EXAMPLES; } catch (_) { ta.value = REFUSAL_EXAMPLES; }
+    const count = el("small", "muted");
+    const lines = () => ta.value.split("\n").map((l) => l.trim()).filter(Boolean);
+    const recount = () => { const n = lines().length; count.textContent = `${n} / 12 prompts`; count.className = n > 12 ? "bad" : "muted"; };
+    ta.addEventListener("input", recount); recount();
+    const len = el("select"); for (const n of [128, 256, 512, 1024]) len.append(new Option(`${n} tokens`, String(n))); len.value = "256";
+    const fields = el("div", "epoch-fields"), lenLabel = el("label", null, "Answer length"); lenLabel.append(len); fields.append(lenLabel);
+    const go = el("button", "button primary", "Queue refusal test"), cancel = el("button", "button secondary", "Cancel");
+    cancel.type = "button"; cancel.addEventListener("click", () => refusalDlg.close());
+    const acts = el("div", "epoch-acts"), note = el("span", "bad"); acts.append(go, cancel, note);
+    form.append(ta, count, fields, acts);
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const prompts = lines();
+      if (!prompts.length || prompts.length > 12) { note.textContent = "Enter 1–12 prompts."; return; }
+      go.disabled = true; note.textContent = "";
+      try {
+        await api(`/api/jobs/${encodeURIComponent(job.id)}/refusal-test`, {method:"POST", body:JSON.stringify({prompts, max_tokens:Number(len.value)})});
+        try { localStorage.setItem("trainer-refusal-prompts", prompts.join("\n")); } catch (_) {}
+        refusalDlg.close(); message("Refusal test added to the shared GPU queue."); await refreshJobs();
+      } catch (error) { go.disabled = false; note.textContent = error.message; }
+    });
+    refusalDlg.replaceChildren(head, form);
+    if (!refusalDlg.open) refusalDlg.showModal();
+    ta.focus();
+  }
+  function refusalBox(job, box) {
+    const body = el("div", "box-body");
+    body.append(el("p", "box-note", "A phrase check (“I can't help with…”, “As an AI…”), not a judge of answer quality."));
+    (job.refusal_report.results || []).forEach((x, i) => {
+      const item = el("div", `refusal-item${x.refused ? " refused" : ""}`), top = el("div", "refusal-top");
+      top.append(el("span", "refusal-n", `#${i + 1}`), el("span", `badge ${x.refused ? "failed" : "complete"}`, x.refused ? "Refusal phrase" : "No refusal phrase"));
+      item.append(top, el("p", "refusal-prompt", x.prompt), el("p", "refusal-answer", x.response || "(empty answer)"));
+      body.append(item);
+    });
+    box.append(body);
   }
 
   function renderJobs(jobs) {
@@ -1111,9 +1423,15 @@
     for (const job of jobs) {
       const card = el("article", "job-card"); card.dataset.jobId = job.id;
       const top = el("div", "job-top");
-      top.append(el("h3", null, `${job.model_title}: ${job.name}`), el("span", `badge ${job.state}`, stateLabel[job.state] || job.state));
+      const r = job.request || {}, tool = r.kind === "uncensor" || r.kind === "refusal_test";
+      const source = r.kind === "refusal_test" ? jobs.find((j) => j.id === r.source_job) : null;
+      if (tool) card.classList.add("tool-card");
+      top.append(el("h3", null, r.kind === "uncensor" ? `Uncensor: ${job.name}` : r.kind === "refusal_test" ? `Refusal test: ${source?.name || job.name.replace(/ refusal test$/, "")}`
+        : `${job.model_title}: ${job.name}`), el("span", `badge ${job.state}`, (tool && job.state === "running" ? "Running" : stateLabel[job.state]) || job.state));
       const p = job.progress || {};
-      card.append(top, el("p", "job-meta", `Dataset: ${job.dataset} · ${p.phase_label || job.stage} · ${new Date(job.created_at).toLocaleString()}`));
+      const what = r.kind === "uncensor" ? `${METHOD[r.method] || r.method} · ${r.base_model}` : r.kind === "refusal_test" ? `${job.refusal_report?.total || ""} prompt(s) · ${r.max_tokens || 256} tokens`.replace(/^ /, "")
+        : `Dataset: ${job.dataset}`;
+      card.append(top, el("p", "job-meta", `${what} · ${p.phase_label || job.stage} · ${new Date(job.created_at).toLocaleString()}`));
       const mini = el("div", "mini-bar"), mf = el("div", `mini-fill ${job.state}`); mf.style.width = pct(p.overall); mini.append(mf); card.append(mini);
       const controls = el("div", "job-controls");
       if (ACTIVE.has(job.state)) {
@@ -1124,6 +1442,7 @@
         const kind = job.request?.kind || "lora";
         const video = ["minimax_h3", "ltx25"].includes(job.model) && kind === "lora";
         const image = ["krea2", "qwen_image_21", "moss_image", "anima"].includes(job.model) && kind === "lora";
+        const music = ["yue2", "minimax_music3"].includes(job.model) && kind === "lora";
         if (kind === "finetune" && job.state === "complete" && job.outputs?.length) {
           // A checkpoint as an ordinary LoRA (Fizgig's Extract "From a fine-tune": rank 64 ≈ the full checkpoint).
           const pick = el("select"); pick.title = "Checkpoint to extract a LoRA from";
@@ -1148,13 +1467,15 @@
             controls.append(b);
           }
         }
-        if (job.state === "complete" && (video || image) && job.outputs?.length) {
-          const published = job.stage === "Complete · In image gallery";
-          const publish = el("button", "button secondary", image ? (published ? "Publish again" : "Publish to Image studio") : "Publish to gallery");
+        if (job.state === "complete" && (video || image || music) && job.outputs?.length) {
+          const published = job.stage === "Complete · In image gallery" || job.stage === "Complete · In music gallery";
+          const publish = el("button", "button secondary", image ? (published ? "Publish again" : "Publish to Image studio")
+            : music ? (published ? "Publish again" : "Publish to Music studio") : "Publish to gallery");
           if (image) publish.title = "Add the final LoRA to the Image studio's LoRA gallery (Trainer made)";
+          if (music) publish.title = "Copy the final LoRA (and the run's preview song) into the Music studio's LoRA gallery";
           publish.addEventListener("click", async () => {
             publish.disabled = true;
-            try { await api(`/api/jobs/${encodeURIComponent(job.id)}/publish-lora`, {method:"POST"}); await refreshJobs(); message(image ? "Final LoRA added to the Image studio's LoRA gallery." : "Final LoRA added to the video gallery."); }
+            try { await api(`/api/jobs/${encodeURIComponent(job.id)}/publish-lora`, {method:"POST"}); await refreshJobs(); message(image ? "Final LoRA added to the Image studio's LoRA gallery." : music ? "Final LoRA added to the Music studio's LoRA gallery." : "Final LoRA added to the video gallery."); }
             catch (error) { publish.disabled = false; message(error.message, true); }
           });
           controls.append(publish);
@@ -1181,12 +1502,19 @@
           });
           controls.append(use);
         }
+        if (r.kind === "uncensor" && job.state === "complete") {
+          const last = jobs.find((j) => j.request?.kind === "refusal_test" && j.request.source_job === job.id && j.refusal_report);
+          const test = el("button", "button secondary", last ? `Test refusals · last ${last.refusal_report.refusals}/${last.refusal_report.total} refused` : "Test refusals");
+          test.title = "Queue prompts against this saved model; the report shows each answer and whether a refusal phrase appeared";
+          test.addEventListener("click", () => openRefusalTest(job));
+          controls.append(test);
+        }
         const remove = el("button", "button secondary", "Remove");
         remove.title = "Remove this job from the history";
         remove.addEventListener("click", async () => {
           if (!confirm(`Remove "${job.name}" (${stateLabel[job.state] || job.state}) from the job history?`)) return;
           let deleteFiles = false;
-          if (job.outputs?.length) deleteFiles = confirm(`Also DELETE its ${job.outputs.length} ${job.request?.kind === "finetune" ? "checkpoint" : "LoRA"} file(s) from disk?\n\nOK = delete the files too\nCancel = keep the files (only the history entry goes)`);
+          if (job.outputs?.length) deleteFiles = confirm(`Also DELETE its ${job.outputs.length} ${r.kind === "finetune" ? "checkpoint" : r.kind === "uncensor" ? "model" : "LoRA"} file(s) from disk?\n\nOK = delete the files too\nCancel = keep the files (only the history entry goes)`);
           remove.disabled = true;
           try { await api(`/api/jobs/${encodeURIComponent(job.id)}?delete_files=${deleteFiles}`, {method:"DELETE"}); openState.delete(job.id); consoleScroll.delete(job.id); await refreshJobs(); }
           catch (error) { remove.disabled = false; message(error.message, true); }
@@ -1196,9 +1524,11 @@
       card.append(controls);
       if (llamaPicks.has(job.id)) card.append(llamaPicker(llamaPicks.get(job.id)));
       const progSummary = p.steps_total ? `${pct(p.overall)} · epoch ${p.epoch}/${p.epochs_total}` : pct(p.overall);
+      if (job.refusal_report) card.append(section(job, "report", "Refusal report",
+        `${job.refusal_report.refusals}/${job.refusal_report.total} with a refusal phrase`, (b) => refusalBox(job, b), true));
       card.append(
         section(job, "progress", "Progress", progSummary, (b) => progressBox(job, b), ACTIVE.has(job.state)),
-        section(job, "details", "Run details", job.outputs?.length ? `${job.outputs.length} ${job.request?.kind === "finetune" ? "checkpoint" : "LoRA file"}(s)` : "", (b) => detailsBox(job, b), false),
+        section(job, "details", "Run details", job.outputs?.length ? `${job.outputs.length} ${r.kind === "finetune" ? "checkpoint" : r.kind === "uncensor" ? "model file" : "LoRA file"}(s)` : "", (b) => detailsBox(job, b), false),
         section(job, "console", "Console log", "", (b) => consoleBox(job, b), false),
       );
       host.append(card);
@@ -1301,7 +1631,8 @@
       model, dataset:form.get("dataset"), name:form.get("name"), rank:Number(form.get("rank")), epochs:Number(form.get("epochs")),
       max_pixels:Number(form.get("max_pixels") || 655360), steps:Number(form.get("steps") || 2000),
       resolution:Number(form.get("resolution") || 512), frames:Number(form.get("frames") || 25),
-      repeats:Number(form.get("repeats") || 1), learning_rate:(fam?.knobs.includes("learning_rate") && !(fam.finetune?.lr_ft_only && !fineTune()) ? form.get("learning_rate") : "") || "",
+      repeats:Number(form.get("repeats") || 1), max_seconds:Number(form.get("max_seconds") || 60), learning_rate:(fam?.knobs.includes("learning_rate") && !(fam.finetune?.lr_ft_only && !fineTune()) ? form.get("learning_rate") : "") || "",
+      lr_schedule:(fam?.knobs.includes("lr_schedule") && !fineTune() ? form.get("lr_schedule") : "") || "",
       dit:files.dit || "", vae:files.vae || "", text_encoder:files.text_encoder || "", audio_vae:files.audio_vae || "",
       training_adapter:files.training_adapter || "", files, trigger:form.get("trigger") || "",
       base_model:form.get("base_model") || "", max_length:Number(form.get("max_length") || 2048), quant:form.get("quant") || "auto",
@@ -1322,6 +1653,7 @@
     try { presets = await api("/api/presets"); }
     catch (error) { message(`Could not load presets: ${error.message}`, true); }
     await refreshFamilies(); refreshStatus(); refreshJobs();
+    try { setRunMode(localStorage.getItem("trainer-run-mode")); } catch (_) { setRunMode("train"); }
     // /api/jobs carries every job's full log (~90 KB): poll it every 5 s on the Train tab,
     // every 15 s elsewhere (alerts still fire), and not at all while the tab is hidden.
     let tick = 0;

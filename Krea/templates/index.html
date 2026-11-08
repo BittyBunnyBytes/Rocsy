@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0f1418">
-  <title>Image</title>
+  <title>Image · Rocsy</title>
   <link rel="stylesheet" href="{{ app_prefix }}/static/css/app.css?v={{ app_version }}">
   <link rel="stylesheet" href="{{ app_prefix }}/static/css/h3-studio.css?v={{ app_version }}">
   <link rel="stylesheet" href="{{ app_prefix }}/static/css/missing-files.css?v={{ app_version }}">
@@ -83,7 +83,7 @@
           <summary class="card-head"><span class="card-title">Prompt</span><span class="card-chevron" aria-hidden="true"></span></summary>
           <div class="card-body">
           <div class="field-row">
-            <label for="prompt">Prompt</label>
+            <label for="prompt">Describe the image</label>
             <textarea id="prompt" rows="4" maxlength="4000" placeholder="a cinematic editorial photograph, natural skin texture, realistic lighting" required></textarea>
             <!-- Hotbar (renderHotbar): trigger words of the enabled LoRAs and, for Qwen, the
                  <imageN> tags of the attached references. Hidden when there is nothing to show. -->
@@ -126,10 +126,14 @@
             <input type="checkbox" id="use-references">
             <span>Use reference images</span>
           </label>
-          <div class="qwen-only reference-options" hidden>
-            <div class="field-row">
+          <div class="reference-options" id="reference-options" hidden>
+            <div class="field-row qwen-only" hidden>
               <label for="reference-resolution">Reference resolution (pixel budget, 0 = native)</label>
               <input id="reference-resolution" type="number" min="0" max="2048" step="32" value="1024">
+            </div>
+            <div class="field-row moss-only" hidden>
+              <label for="moss-denoise">Img2img denoise (0.05 = keep Reference 1, 1 = ignore it)</label>
+              <input id="moss-denoise" type="number" min="0.05" max="1" step="0.05" value="0.6">
             </div>
             <label class="toggle-label">
               <input type="checkbox" id="match-reference-size" checked>
@@ -299,6 +303,40 @@
           </div>
         </details>
 
+        <details class="card" id="speedups-card" open>
+          <summary class="card-head"><span class="card-title">Speedup &amp; Saves <span class="card-sub" id="speedups-model-label">Krea 2</span></span><span class="card-chevron" aria-hidden="true"></span></summary>
+          <div class="card-body">
+          <div class="speedup-tier">
+            <h4 class="speedup-tier-title">Caching</h4>
+            <div class="speedup-row" id="te-cache-row">
+              <div class="field-row toggle-row">
+                <label class="toggle-label">
+                  <input type="checkbox" id="te-cache" checked>
+                  <span>Text encoder cache</span>
+                </label>
+              </div>
+              <p class="speedup-why" id="te-cache-why"></p>
+            </div>
+          </div>
+          <div class="speedup-tier">
+            <h4 class="speedup-tier-title">Inference</h4>
+            <div class="speedup-row">
+              <div class="field-row">
+                <label for="attention">Attention</label>
+                <select id="attention">
+                  <option value="auto" selected>Auto</option>
+                  <option value="flash">Flash</option>
+                  <option value="pytorch">PyTorch SDPA</option>
+                  <option value="sage">SageAttention</option>
+                  <option value="kitchen">Comfy-Kitchen INT8</option>
+                </select>
+              </div>
+              <p class="speedup-why" id="attention-why"></p>
+            </div>
+          </div>
+          </div>
+        </details>
+
         <details class="card" id="lora-panel" open>
           <summary class="card-head"><span class="card-title">LoRAs</span><span class="card-badge" id="lora-count"></span><span class="card-chevron" aria-hidden="true"></span></summary>
           <div class="card-body">
@@ -377,6 +415,7 @@
 
   <!-- LoRA gallery: previews, description, triggers; each card's switch and
        strength drive the LoRA list (renderLoraGallery). -->
+  <datalist id="lora-slider-zero"><option value="0"></option></datalist>
   <div class="dialog" id="lora-gallery" hidden>
     <div class="dialog-backdrop" data-dialog-close></div>
     <div class="dialog-box lora-gallery-dialog" role="dialog" aria-modal="true" aria-labelledby="lora-gallery-title">
@@ -395,7 +434,7 @@
         <button type="button" class="secondary-button" id="lora-gallery-upload">Upload LoRA</button>
         <button type="button" class="secondary-button" id="lora-gallery-link-toggle" aria-expanded="false">Link LoRA</button>
         <button type="button" class="secondary-button" id="lora-gallery-config-button">Config</button>
-        <span class="field-hint" id="lora-gallery-upload-status">For the selected Krea or Qwen family</span>
+        <span class="field-hint" id="lora-gallery-upload-status">Uploads join the model family shown in the title</span>
       </div>
       <div class="lora-gallery-link-panel" id="lora-gallery-link-panel" hidden>
         <input type="url" id="lora-gallery-link-url" placeholder="Civitai or Hugging Face model link" aria-label="LoRA model link">

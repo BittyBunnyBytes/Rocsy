@@ -12,6 +12,8 @@ from pathlib import Path
 
 ROOT = Path(os.getenv("ROCSY_ROOT") or Path(__file__).resolve().parents[2])
 COMPOSE_DIR = ROOT / "BunnyBytes"
+# Custom services (plugins/README.md): one folder per plugin, each with a plugin.json.
+PLUGINS_DIR = ROOT / "core-backend-extras" / "plugins"
 BUNNY_ENV = COMPOSE_DIR / ".env"
 
 

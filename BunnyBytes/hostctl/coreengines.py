@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -27,6 +28,10 @@ FPX_URL = "https://github.com/charlie12345/ROCmFPX.git"
 STRATA_PORT = 9101
 INSTALL_UNIT = "core-strata-install"
 SERVE_UNIT = "core-strata-serve"
+# How long a stop waits for the running request.  Strata's own /unload?wait=1 uses the same 300 s.  Keep the chain
+# longer than this + the 120 s TimeoutStopSec: strata-swap-bridge curl, config.yaml unloadTimeout, every /unload caller.
+STOP_DRAIN_S = 300
+QUEUE_URL = "http://127.0.0.1:8600/Queue/api/queue"
 FPX_UNIT = "core-rocmfpx-build"
 TUNE_UNIT = "core-strata-hipblaslt-tune"
 NGRAM_UNIT = "core-strata-ngram"
@@ -286,6 +291,9 @@ def start_strata(body: dict | None = None) -> dict:
     installed default. Only one size runs at a time (one port, one GPU): another one is stopped first."""
     if unit_active(INSTALL_UNIT):
         return {"message": "Strata is installing"}
+    # A late request (Hermes' background review) used to load it next to a starting render: out of VRAM, 2026-10-31.
+    if not (health() or unit_active(SERVE_UNIT)) and (holder := render_holding_gpu()):
+        raise Refused(f"{holder} is using the GPU; Strata can load when it finishes")
     scripts = sorted(STRATA.glob("run-*.sh"))
     if not scripts:
         raise Refused("Install a Strata model first")
@@ -328,19 +336,38 @@ def stop_agents_on_strata() -> int:
         return 0
 
 
-def wait_strata_idle(limit: float = 20) -> None:
-    """Killing Strata mid-generation has reset the XTX and taken Xorg down (2026-10-17): give the cancelled
-    requests a moment to finish first."""
+def wait_strata_idle(limit: float = STOP_DRAIN_S) -> bool:
+    """Killing Strata mid-generation has reset the XTX and taken Xorg down (2026-10-17). QUIT is only read between
+    requests and the server terminates the engine 20 s later, so a stop has to wait for the turn to end: a 77k-token
+    prompt alone takes a minute (2026-10-31 16:26 was killed by the old 20 s limit).  True once idle or not serving."""
     deadline = time.time() + limit
+    failures = 0
     while time.time() < deadline:
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{STRATA_PORT}/status", timeout=2) as response:
                 status = json.load(response)
+            failures = 0
         except Exception:
-            return                                # not serving: nothing to wait for
+            failures += 1                         # one slow answer under load is not "stopped serving"
+            if failures >= 3:
+                return True
+            time.sleep(0.5)
+            continue
         if not status.get("busy") and not status.get("queued"):
-            return
+            return True
         time.sleep(0.5)
+    return False
+
+
+def render_holding_gpu() -> str:
+    """The job holding the GPU that never uses the LLM (app name), else ''.  Queue down or unknown: ''."""
+    try:
+        with urllib.request.urlopen(QUEUE_URL, timeout=3) as response:
+            entries = json.load(response).get("entries") or []
+    except Exception:
+        return ""
+    return next((str(e.get("app") or "A job") for e in entries
+                 if e.get("state") == "active" and e.get("uses_llm") is False), "")
 
 
 def stop_strata(body: dict | None = None) -> dict:
@@ -348,10 +375,12 @@ def stop_strata(body: dict | None = None) -> dict:
     agents = 0
     if not (body or {}).get("swap"):
         agents = stop_agents_on_strata()
-    wait_strata_idle()
+    if not wait_strata_idle():
+        print(f"strata: still busy after {STOP_DRAIN_S} s; stopping it mid-request", file=sys.stderr, flush=True)
     for unit in (SERVE_UNIT, INSTALL_UNIT):
         if unit_active(unit):
             subprocess.run(["systemctl", "--user", "stop", unit + ".service"], timeout=150, check=True)
+    wait_unit_gone(SERVE_UNIT)                     # the GPU is free only now: callers hand it to the next job after this
     return {"message": "Strata stopped" + (f" (and {agents} Agent session{'s' * (agents != 1)} using it)" if agents else "")}
 
 
@@ -608,18 +637,36 @@ def run_fpx_build() -> int:
                     "path": str(folder / "build"), "gpu_targets": gpu, "created": time.time()}
             save_json(folder / "meta.json", meta)
             job.update(phase="configure", id=ident)
+            job.pop("error", None)
             save_state(data)
+            # Same compiler setup as Rocsy's llama.cpp builds (corebackend): ROCm's own clang, never the
+            # system /usr/bin/clang++, whose HIP headers don't match ROCm's device libraries.
+            rocm = os.getenv("ROCM_PATH", "/opt/rocm")
+            env = {**os.environ, "ROCM_PATH": rocm, "HIP_PATH": rocm,
+                   "PATH": f"{rocm}/bin:{rocm}/lib/llvm/bin:" + os.environ.get("PATH", ""),
+                   "LD_LIBRARY_PATH": f"{rocm}/lib:{rocm}/lib/llvm/lib"}
+            hip = subprocess.run(["hipconfig", "-l"], capture_output=True, text=True, env=env)
+            env["HIPCXX"] = (hip.stdout.strip() or f"{rocm}/lib/llvm/bin") + "/clang"
+            # A cache from an earlier attempt pins the old compiler: start the build folder fresh.
+            shutil.rmtree(folder / "build", ignore_errors=True)
+            log.write(f"\n=== ROCmFPX {commit[:8]} for {gpu}: ROCm at {rocm}, HIP compiler {env['HIPCXX']} ===\n")
             cmd = ["cmake", "-S", str(FPX), "-B", str(folder / "build"), "-G", "Ninja",
                    "-DCMAKE_BUILD_TYPE=Release", "-DGGML_HIP=ON", f"-DAMDGPU_TARGETS={gpu}",
-                   f"-DGPU_TARGETS={gpu}", "-DLLAMA_BUILD_SERVER=ON", "-DLLAMA_BUILD_TESTS=OFF"]
-            subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, check=True)
+                   f"-DGPU_TARGETS={gpu}", f"-DCMAKE_HIP_FLAGS=--rocm-path={rocm}", f"-DCMAKE_PREFIX_PATH={rocm}",
+                   "-DLLAMA_BUILD_SERVER=ON", "-DLLAMA_BUILD_TESTS=OFF",
+                   # llama-server's own web UI downloads prebuilt assets (or needs npm); Rocsy serves models
+                   # through llama-swap, so the build must not fail on that download.
+                   "-DLLAMA_BUILD_WEBUI=OFF"]
+            if subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, env=env).returncode:
+                raise RuntimeError("Configuring the build failed. Open the log for the CMake error.")
             job["phase"] = "compile"
             meta["phase"] = "compile"
             save_state(data)
             save_json(folder / "meta.json", meta)
-            subprocess.run(["cmake", "--build", str(folder / "build"), "--target", "llama-server",
-                            "llama-bench", "llama-cli", "--parallel", str(min(os.cpu_count() or 8, 16))],
-                           stdout=log, stderr=subprocess.STDOUT, check=True)
+            if subprocess.run(["cmake", "--build", str(folder / "build"), "--target", "llama-server",
+                               "llama-bench", "llama-cli", "--parallel", str(min(os.cpu_count() or 8, 16))],
+                              stdout=log, stderr=subprocess.STDOUT, env=env).returncode:
+                raise RuntimeError("Compiling failed. Open the log for the first compiler error.")
             server = folder / "build/bin/llama-server"
             if not server.is_file() or not (server.parent / "libggml-hip.so").is_file():
                 raise RuntimeError("ROCmFPX GPU server was not built")
@@ -657,6 +704,9 @@ def handle(method: str, path: str, body: dict) -> tuple[int, dict]:
             return 200, start_strata(body)
         if path == "/core/engines/strata-stop":
             return 200, stop_strata(body)
+        if path == "/core/engines/strata-wait-gone":     # llama-swap's bridge: "unloaded" only once the engine is gone
+            wait_unit_gone(SERVE_UNIT)
+            return 200, {"message": "Strata is gone"}
         if path == "/core/engines/rocmfpx-build":
             return 200, build_fpx()
         if path == "/core/engines/hipblaslt-tune":

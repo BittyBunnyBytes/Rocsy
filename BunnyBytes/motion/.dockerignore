@@ -19,3 +19,10 @@ id_ed25519
 .npmrc
 .pypirc
 auth.json
+
+# Local backups (<file>.bak-YYYYMMDD-<tag>, .pre_*, portable-drive copies) stay out of images.
+**/*.bak
+**/*.bak-*
+**/*.bak.*
+**/*.pre_*
+**/*.portable-drive-*

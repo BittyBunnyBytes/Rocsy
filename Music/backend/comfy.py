@@ -71,20 +71,30 @@ class ComfyService:
         except ServiceError:
             return {"online": False, "rendering": 0, "waiting": 0, "running_ids": []}
 
-    async def submit(self, workflow: dict[str, Any], client_id: str) -> str:
+    async def submit(self, workflow: dict[str, Any], client_id: str, targets: list[str] | None = None) -> str:
         # YuE2's SaveAudioAdvanced is a schema-based ComfyNode output. Ask
         # ComfyUI to execute it explicitly so API validation includes the
         # complete music graph instead of accepting only unrelated legacy
         # output nodes (which used to finish in ~2 seconds without audio).
         result = await self.request(
             "POST", "/prompt",
-            {"prompt": workflow, "client_id": client_id, "partial_execution_targets": ["10"]},
+            {"prompt": workflow, "client_id": client_id, "partial_execution_targets": targets or ["10"]},
             timeout=30,
         )
         prompt_id = result.get("prompt_id")
         if not prompt_id:
             raise ServiceError("ComfyUI accepted no prompt ID.")
         return str(prompt_id)
+
+    async def upload_input(self, name: str, data: bytes, mime: str = "application/octet-stream") -> str:
+        """Put a file into ComfyUI's input folder; returns the name its nodes know it by."""
+        try:
+            async with httpx.AsyncClient(base_url=self.config.comfy_url, timeout=300) as client:
+                response = await client.post("/upload/image", files={"image": (name, data, mime)}, data={"overwrite": "true"})
+                response.raise_for_status()
+                return str(response.json()["name"])
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            raise ServiceError(f"ComfyUI did not accept the file: {exc}") from exc
 
     async def history(self, prompt_id: str) -> dict[str, Any] | None:
         result = await self.request("GET", f"/history/{prompt_id}", timeout=10)
@@ -153,12 +163,20 @@ class ComfyService:
             pass
 
 
-def output_from_history(history: dict[str, Any], output_root: Path) -> Path | None:
+def output_from_history(history: dict[str, Any], output_root: Path, node_id: str | None = None) -> Path | None:
     # ComfyUI's SaveAudioAdvanced node writes .flac/.wav/.mp3 (configured via
     # its "format" input) rather than the image/video extensions Video
-    # looks for.
+    # looks for. node_id: only that node's files. Otherwise the Save node "10"
+    # (every Music graph's song) is looked at first, then the rest: a cover also
+    # saves its editable YuE2 take, which must never become the song.
     extensions = {".flac", ".wav", ".mp3", ".opus"}
-    for node in history.get("outputs", {}).values():
+    outputs = history.get("outputs", {}) or {}
+    if node_id is not None:
+        nodes = [outputs.get(node_id) or {}]
+    else:
+        nodes = [outputs["10"]] if "10" in outputs else []
+        nodes += [node for key, node in outputs.items() if key != "10"]
+    for node in nodes:
         for collection in ("audio", "images"):
             for item in node.get(collection, []) or []:
                 filename = Path(str(item.get("filename", ""))).name

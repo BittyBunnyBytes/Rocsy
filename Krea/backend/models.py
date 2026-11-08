@@ -122,13 +122,16 @@ MAX_BATCH = max(BATCH_COUNTS)
 REFERENCE_SLOT_COUNT = 3
 DEFAULT_REFERENCE_STRENGTHS = (1.0, 1.0, 1.0)
 KREA_STYLE_REFERENCE_LORA = "krea2_style_reference.safetensors"
+# MOSS-Image has no reference conditioning: its one slot is the img2img source image.
+MOSS_REFERENCE_SLOT_COUNT = 1
 
 
 class LoraSlot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    strength: float = Field(default=0.8, ge=0.0, le=2.0)
+    # Slider LoRAs run negative too (e.g. -1 = darker, +1 = brighter); ComfyUI's loader takes any value.
+    strength: float = Field(default=0.8, ge=-10.0, le=10.0)
 
 
 class ReferenceSlot(BaseModel):
@@ -165,6 +168,8 @@ class GenerationRequest(BaseModel):
     anima_cfg: float = Field(default=4.0, ge=1.0, le=20.0)
     moss_steps: int = Field(default=50, ge=1, le=100)
     moss_cfg: float = Field(default=3.0, ge=1.0, le=20.0)
+    # MOSS img2img: how much of Reference 1 gets re-noised (1.0 = ignore it).
+    moss_denoise: float = Field(default=0.6, ge=0.05, le=1.0)
     prompt: str = Field(min_length=1, max_length=4_000)
     # Per-model upper bounds are enforced in model_limits() below.
     width: int = Field(default=DEFAULT_SIZE, ge=MIN_SIZE, le=QWEN_MAX_SIDE)
@@ -202,6 +207,10 @@ class GenerationRequest(BaseModel):
     kv_cache_device: Literal["auto", "gpu", "cpu", "off"] = "auto"
     kv_cache_dtype: Literal["default", "int8", "int4"] = "default"
     text_encoder: Literal["standard", "abliterated"] = "standard"
+    # Speedup & Saves (every model): reuse text-encoder outputs for inputs already encoded
+    # (condcache.py) and the attention backend (speedups.py; auto = fastest measured per model).
+    te_cache: bool = True
+    attention: Literal["auto", "flash", "pytorch", "sage", "kitchen"] = "auto"
 
     @field_validator("test_lora")
     @classmethod
@@ -225,7 +234,8 @@ class GenerationRequest(BaseModel):
     @field_validator("references")
     @classmethod
     def references_bounded(cls, value: list[ReferenceSlot], info: ValidationInfo) -> list[ReferenceSlot]:
-        limit = QWEN_REFERENCE_SLOT_COUNT if info.data.get("model") == MODEL_QWEN_IMAGE_21 else REFERENCE_SLOT_COUNT
+        model = info.data.get("model")
+        limit = QWEN_REFERENCE_SLOT_COUNT if model == MODEL_QWEN_IMAGE_21 else MOSS_REFERENCE_SLOT_COUNT if model == MODEL_MOSS else REFERENCE_SLOT_COUNT
         # Older Krea presets/jobs carry a 4th slot; drop trailing slots that are off.
         while len(value) > limit and not (value[-1].enabled and value[-1].image):
             value = value[:-1]
@@ -252,8 +262,6 @@ class GenerationRequest(BaseModel):
         if self.model == MODEL_MOSS:
             if self.width > MAX_SIZE or self.height > MAX_SIZE:
                 raise ValueError(f"MOSS-Image supports sizes up to {MAX_SIZE}px per side in this service.")
-            if self.use_references:
-                raise ValueError("MOSS-Image references are not configured in this image service yet.")
             if self.speed not in {"standard", *MOSS_FAST_MODES} or self.enhance:
                 raise ValueError("Choose Standard, 8-step DMD, or 4-step DMAD for MOSS-Image.")
             return self

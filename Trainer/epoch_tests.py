@@ -22,12 +22,15 @@ import random
 import re
 import shutil
 import time
+import uuid
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
 import httpx
+
+from bunnylock import BunnyLock
 
 from tagger import COMFY_URL, IMAGE, LLAMA_KEY, LLAMA_URL, VIDEO, duration_of, frames_b64, vision_models
 
@@ -43,7 +46,15 @@ FAMILIES: dict[str, tuple[str, str, str]] = {
 EPOCH_RE = re.compile(r"-0*(\d+)$")
 ACTIVE = {"preparing", "writing_prompt", "rendering"}
 REVIEW_ACTIVE = {"waiting_for_gpu", "preparing", "running"}
-RENDER_TRIES = 3        # attempts per render before it stays failed (manual Retry starts the count again)
+RENDER_TRIES = 4        # attempts per render (1 + 3 automatic retries) before it stays failed; manual Retry starts again
+RUN_TRIES = 4           # the render phase survives 3 unexpected errors (paused, then resumed) before the test fails
+IN_FLIGHT = 3           # renders a test keeps in the studio at once: enough to render back to back, not a flood
+POLL_EVERY = 6          # seconds between poll rounds
+# Server keep-alive (uvicorn) is 5 s, same as httpx's default expiry: a reused connection the studio just closed fails
+# with "Server disconnected". Drop idle connections well before the server does.
+LIMITS = httpx.Limits(keepalive_expiry=2)
+OFFLINE_LIMIT = 1800    # a studio that doesn't answer polls this long pauses the whole test (then RUN_TRIES resumes)
+LOST_TRIES = 3          # renders a studio dropped (restart: 404) are re-queued this often without using a retry
 MAX_RUNS = 32          # prompts (pages) per test, incl. extra seeds / epoch-subset pages added later
 REVIEW_FRAMES = 6          # frames per video render the reviewer sees
 REVIEW_REFS = 3            # dataset samples shown as "what the LoRA should teach"
@@ -51,6 +62,7 @@ REMOTE_DONE = {"complete", "failed", "cancelled"}
 DEFAULT_VIDEO_PRESET = "Agentic Preview"
 # Without a preset, Video renders a short low-res clip (its own defaults are a 15 s 720p-class render).
 VIDEO_FALLBACK = {"duration": 5, "megapixels": 0.25}
+THUMB_SIZES = {320, 480, 640}    # grid tiles / viewer strip get small cached WebPs instead of the ~1 MB PNGs
 EXTS = {"video/mp4": ".mp4", "image/png": ".png", "image/webp": ".webp", "image/jpeg": ".jpg"}
 
 
@@ -58,10 +70,10 @@ class EpochTests:
     def __init__(self, *, data_dir: Path, model_root: Path, dataset_root: Path, video_url: str, image_url: str,
                  framework_url: str, headers: dict[str, str], get_job: Callable[[str], dict[str, Any] | None],
                  output_dir: Callable[[dict[str, Any]], Path], log: Callable[[str, str], None],
-                 queue_request: Callable[..., Any]):
+                 gpu: BunnyLock):
         self.root = data_dir / "epoch-tests"
         self.tagging_settings = data_dir / "tagging.json"
-        self.queue_request = queue_request
+        self.gpu = gpu
         self.reviews: dict[str, asyncio.Task[Any]] = {}
         self.review_cancel: set[str] = set()
         self.model_root, self.dataset_root = model_root, dataset_root
@@ -137,6 +149,7 @@ class EpochTests:
             return None
         out = {k: v for k, v in test.items() if k not in ("items", "review")}
         out["starred"] = self.stars(job_id)
+        out["render_tries"] = RENDER_TRIES
         out["items"] = [{**i, "media_url": f"{prefix}/api/jobs/{job_id}/epoch-test/media/{i['output']}?v={int(i.get('finished') or 0)}"
                          if i.get("output") else None} for i in test["items"]]
         review = test.get("review")
@@ -145,6 +158,22 @@ class EpochTests:
             out["review"] = {**{k: v for k, v in review.items() if k not in ("log", "queue_entry_id")},
                              "epochs": self.epoch_scores(test), "log": log[max(0, log_after - off):], "log_next": off + len(log),
                              "unreviewed": sum(1 for i in test["items"] if i["state"] == "complete" and not i.get("review"))}
+        return out
+
+    def thumb(self, job_id: str, filename: str, width: int) -> Path:
+        """A cached WebP of an image render, `width` px wide (rebuilt when the render is newer). Blocking: run in a thread."""
+        src = self.folder(job_id) / filename
+        out = self.folder(job_id) / "thumbs" / f"{src.stem}_{width}.webp"
+        with suppress(OSError):
+            if out.stat().st_mtime >= src.stat().st_mtime:
+                return out
+        from PIL import Image
+        out.parent.mkdir(exist_ok=True)
+        with Image.open(src) as im:
+            im.thumbnail((width, width * 4))
+            tmp = out.with_suffix(".tmp")
+            im.convert("RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB").save(tmp, "WEBP", quality=82, method=4)
+        os.replace(tmp, out)
         return out
 
     @staticmethod
@@ -180,7 +209,7 @@ class EpochTests:
         if studio != "video":
             return {"presets": [], "default": ""}
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(4, connect=2)) as client:     # the start form waits on this
                 r = await client.get(self.urls["video"] + "/api/presets")
                 r.raise_for_status()
                 names = list((r.json().get(model) or {}).keys())
@@ -311,7 +340,7 @@ class EpochTests:
             if i["state"] in ("queued", "rendering") and i["remote_id"]:
                 todo += 1                                # finished or still running in the studio: poll it again
             elif i["state"] != "complete":
-                i.update(state="waiting", remote_id="", error="", tries=1)
+                i.update(state="waiting", remote_id="", submit_key="", error="", tries=1, lost=0)
                 todo += 1
         if not todo:
             raise ValueError("Every render is already done.")
@@ -364,6 +393,9 @@ class EpochTests:
             if test["items"][n].get("output"):
                 with suppress(OSError):
                     (self.folder(test["job_id"]) / test["items"][n]["output"]).unlink()
+                for w in THUMB_SIZES:
+                    with suppress(OSError):
+                        (self.folder(test["job_id"]) / "thumbs" / f"{Path(test['items'][n]['output']).stem}_{w}.webp").unlink()
         test["items"] = [i for n, i in enumerate(test["items"]) if n not in drop]
 
     def _drop_run(self, test: dict[str, Any], k: int) -> None:
@@ -433,38 +465,19 @@ class EpochTests:
             test.update(state="rendering", stage="Queuing renders")
             self.save(test)
             self.log(job_id, f"\n[Epoch test] {len(test['runs'])} prompt(s), {len(test['items'])} render(s) in the {test['studio'].title()} studio.\n")
-            async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10)) as client:
-                while True:                    # rounds: a failed render is retried automatically (RENDER_TRIES in all)
-                    for i in test["items"]:          # queue every epoch first, so they render back to back
-                        if not i["remote_id"] and i["state"] == "waiting":
-                            try:
-                                i["remote_id"] = await self.submit(client, test, i)
-                            except ValueError as exc:      # only this epoch fails; the others still render
-                                i.update(state="failed", error=str(exc)[:300])
-                                self.save(test)
-                                self.log(job_id, f"\n[Epoch test] {i['label']}: {exc}\n")
-                                continue
-                            i["state"] = "queued"
-                            test["stage"] = f"Queued {sum(1 for x in test['items'] if x['remote_id'])} of {len(test['items'])}"
-                            self.save(test)
-                    while any(i["state"] in ("queued", "rendering") for i in test["items"]):
-                        for i in test["items"]:
-                            if i["state"] in ("queued", "rendering"):
-                                await self.poll(client, test, i)
-                        done = sum(i["state"] == "complete" for i in test["items"])
-                        test["stage"] = f"Rendered {done} of {len(test['items'])}"
-                        self.save(test)
-                        if any(i["state"] in ("queued", "rendering") for i in test["items"]):
-                            await asyncio.sleep(5)
-                    again = [i for i in test["items"] if i["state"] == "failed" and i.get("tries", 1) < RENDER_TRIES]
-                    if not again:
-                        break
-                    for i in again:
-                        self.log(job_id, f"\n[Epoch test] {i['label']} failed ({i['error']}); retrying ({i.get('tries', 1) + 1} of {RENDER_TRIES}).\n")
-                        i.update(state="waiting", remote_id="", error="", tries=i.get("tries", 1) + 1)
-                    test["stage"] = f"Retrying {len(again)} failed render(s) in 20 s"
+            for attempt in range(1, RUN_TRIES + 1):
+                try:
+                    await self.render_all(test)
+                    break
+                except Exception as exc:  # noqa: BLE001 - a hiccup pauses the test; it resumes where it was
+                    why = str(exc) or type(exc).__name__
+                    if attempt == RUN_TRIES:
+                        raise RuntimeError(f"{why} (after {RUN_TRIES - 1} automatic retries; press Retry to continue)") from exc
+                    pause = 30 * attempt
+                    self.log(job_id, f"\n[Epoch test] {why}; resuming in {pause} s (retry {attempt} of {RUN_TRIES - 1}).\n")
+                    test["stage"] = f"Connection problem; resuming in {pause} s (retry {attempt} of {RUN_TRIES - 1})"
                     self.save(test)
-                    await asyncio.sleep(20)
+                    await asyncio.sleep(pause)
             ok = sum(i["state"] == "complete" for i in test["items"])
             test.update(state="complete" if ok else "failed", stage=f"{ok} of {len(test['items'])} renders done",
                         error="" if ok else "Nothing rendered; see each epoch's error.")
@@ -478,9 +491,72 @@ class EpochTests:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - shown on the card instead of crashing the task
-            test.update(state="failed", stage="Failed", error=str(exc)[:500])
+            test.update(state="failed", stage="Failed", error=(str(exc) or type(exc).__name__)[:500])
             self.save(test)
             self.log(job_id, f"\n[Epoch test] Failed: {exc}\n")
+
+    async def render_all(self, test: dict[str, Any]) -> None:
+        """Queue and collect every render, IN_FLIGHT at a time; a failed render is retried (RENDER_TRIES in all)."""
+        job_id, items = test["job_id"], test["items"]
+        offline_since = None
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10), limits=LIMITS) as client:
+            while True:
+                while any(i["state"] in ("waiting", "queued", "rendering") for i in items):
+                    # Top up the studio's queue to IN_FLIGHT; the next one goes in as soon as one finishes.
+                    for i in items:
+                        if sum(x["state"] in ("queued", "rendering") for x in items) >= IN_FLIGHT:
+                            break
+                        if i["remote_id"] or i["state"] != "waiting":
+                            continue
+                        try:
+                            i["remote_id"] = await self.submit(client, test, i)
+                        except ValueError as exc:      # only this epoch fails; the others still render
+                            i.update(state="failed", error=str(exc)[:300])
+                            self.save(test)
+                            self.log(job_id, f"\n[Epoch test] {i['label']}: {exc}\n")
+                            continue
+                        i["state"] = "queued"
+                        self.save(test)
+                        await asyncio.sleep(1)
+                    answered = polled = 0
+                    for i in items:
+                        if i["state"] in ("queued", "rendering"):
+                            polled += 1
+                            answered += await self.poll(client, test, i)
+                            await asyncio.sleep(0.3)
+                    done = sum(i["state"] == "complete" for i in items)
+                    if polled and not answered:          # the studio is down (restart / rebuild): wait, then pause the test
+                        offline_since = offline_since or time.monotonic()
+                        gone = time.monotonic() - offline_since
+                        if gone > OFFLINE_LIMIT:
+                            raise RuntimeError(f"The {test['studio'].title()} studio stopped answering for {int(gone // 60)} minutes")
+                        test["stage"] = f"Rendered {done} of {len(items)} · the {test['studio'].title()} studio isn't answering, waiting ({int(gone // 60)} min)"
+                    else:
+                        offline_since = None
+                        test["stage"] = f"Rendered {done} of {len(items)}"
+                    self.save(test)
+                    if any(i["state"] in ("waiting", "queued", "rendering") for i in items):
+                        await asyncio.sleep(POLL_EVERY)
+                again = [i for i in items if i["state"] == "failed" and i.get("tries", 1) < RENDER_TRIES]
+                if not again:
+                    return
+                pause = 20 * min(i.get("tries", 1) for i in again)      # 20 s, 40 s, 60 s
+                for i in again:
+                    self.log(job_id, f"\n[Epoch test] {i['label']} failed ({i['error']}); retry {i.get('tries', 1)} of {RENDER_TRIES - 1} in {pause} s.\n")
+                    i.update(state="waiting", remote_id="", submit_key="", error="", progress=0, tries=i.get("tries", 1) + 1)
+                test["stage"] = f"Retrying {len(again)} failed render(s) in {pause} s"
+                self.save(test)
+                await asyncio.sleep(pause)
+
+    async def _get(self, client: httpx.AsyncClient, url: str) -> httpx.Response | None:
+        """GET with a few quick retries on a dropped connection; None = still unreachable (try next round)."""
+        for wait in (1, 3, 8, 0):
+            try:
+                return await client.get(url)
+            except httpx.TransportError:
+                if wait:
+                    await asyncio.sleep(wait)
+        return None
 
     def copy_checkpoints(self, item: dict[str, Any], test: dict[str, Any]) -> None:
         source = self.output_dir(item)
@@ -579,14 +655,17 @@ class EpochTests:
 
     async def submit(self, client: httpx.AsyncClient, test: dict[str, Any], i: dict[str, Any]) -> str:
         base = self.urls[test["studio"]]
+        # One key per attempt: a re-send after a dropped connection gets the job the studio already made, not a twin.
+        i["submit_key"] = i.get("submit_key") or f"et-{uuid.uuid4().hex}"
+        headers = {"Idempotency-Key": i["submit_key"]}
         offline_since = None
         for _attempt in range(2000):     # Video refuses another model's job while one runs: wait up to ~6 h
             try:
                 if test["studio"] == "video":
-                    r = await client.post(base + "/api/generate", json=await self.video_request(client, test, i))
+                    r = await client.post(base + "/api/generate", headers=headers, json=await self.video_request(client, test, i))
                 else:
                     run = test["runs"][i.get("run", 0)]
-                    r = await client.post(base + "/api/internal/generate", headers=self.headers, json={"request": {
+                    r = await client.post(base + "/api/internal/generate", headers={**self.headers, **headers}, json={"request": {
                         "model": test["model"], "prompt": run["prompt"], "seed": run["seed"], "count": 1,
                         "test_lora": i["lora"], "test_lora_strength": test["strength"]}})
                 down = r.status_code in (502, 503, 504) or "comfy_unavailable" in r.text
@@ -611,44 +690,68 @@ class EpochTests:
                 continue
             if r.status_code >= 400:
                 raise ValueError(f"The {test['studio'].title()} studio refused {i['label']}: {r.text[:300]}")
-            return r.json()["id"]
+            try:
+                return str(r.json()["id"])
+            except (ValueError, KeyError, TypeError):   # cut-off reply: ask again (same key, so no duplicate)
+                await asyncio.sleep(5)
+                continue
         raise ValueError("The studio stayed busy with another model for hours.")
 
-    async def poll(self, client: httpx.AsyncClient, test: dict[str, Any], i: dict[str, Any]) -> None:
+    async def poll(self, client: httpx.AsyncClient, test: dict[str, Any], i: dict[str, Any]) -> bool:
+        """Update one render from its studio job; False = the studio didn't answer (try again next round)."""
         base = self.urls[test["studio"]]
-        r = await client.get(f"{base}/api/jobs/{i['remote_id']}")
+        r = await self._get(client, f"{base}/api/jobs/{i['remote_id']}")
+        if r is None or r.status_code >= 500:
+            return False
         if r.status_code == 404:
-            i.update(state="failed", error="The render was removed from the studio.")
-            return
+            # A studio restart drops its unfinished jobs: queue it again, that wasn't the render failing.
+            i["lost"] = i.get("lost", 0) + 1
+            if i["lost"] > LOST_TRIES:
+                i.update(state="failed", error="The studio dropped this render several times (restarts?).")
+            else:
+                self.log(test["job_id"], f"\n[Epoch test] The studio dropped {i['label']} (restart?); queuing it again.\n")
+                i.update(state="waiting", remote_id="", submit_key="", progress=0)
+            return True
         if r.status_code >= 400:
-            return  # try again next round
-        job = r.json()
+            return True  # try again next round
+        try:
+            job = r.json()
+        except ValueError:
+            return False
         state = job.get("state")
         if state not in REMOTE_DONE:
             i["state"] = "rendering" if state in ("rendering", "finalizing", "enhancing") else "queued"
             i["progress"] = max(0, min(100, int(job.get("progress") or 0)))   # the studio's own %, for the tile's bar
-            return
+            return True
         if state != "complete":
             i.update(state=state, error=str(job.get("error") or state)[:300])
-            return
+            return True
         parts = urlsplit(base)
         url = f"{parts.scheme}://{parts.netloc}" + job["download_url"]   # download_url already has the /Video or /Image prefix + ("?raw=1" if test["studio"] == "video" else "")
-        async with client.stream("GET", url) as resp:
-            if resp.status_code >= 400:
-                i.update(state="failed", error=f"Could not download the render (HTTP {resp.status_code}).")
-                return
-            ext = EXTS.get(resp.headers.get("content-type", "").split(";")[0], ".mp4" if test["studio"] == "video" else ".png")
-            name = re.sub(r"[^A-Za-z0-9_-]+", "_", i["label"]).strip("_").lower() + (f"_p{i['run'] + 1}" if i.get("run") else "") + ext
-            target = self.folder(test["job_id"]) / name
-            tmp = target.with_suffix(target.suffix + ".part")
-            with tmp.open("wb") as fh:
-                async for chunk in resp.aiter_bytes():
-                    fh.write(chunk)
-            os.replace(tmp, target)
+        try:
+            async with client.stream("GET", url) as resp:
+                if resp.status_code >= 400:
+                    i.update(state="failed", error=f"Could not download the render (HTTP {resp.status_code}).")
+                    return True
+                ext = EXTS.get(resp.headers.get("content-type", "").split(";")[0], ".mp4" if test["studio"] == "video" else ".png")
+                name = re.sub(r"[^A-Za-z0-9_-]+", "_", i["label"]).strip("_").lower() + (f"_p{i['run'] + 1}" if i.get("run") else "") + ext
+                target = self.folder(test["job_id"]) / name
+                tmp = target.with_suffix(target.suffix + ".part")
+                with tmp.open("wb") as fh:
+                    async for chunk in resp.aiter_bytes():
+                        fh.write(chunk)
+                os.replace(tmp, target)
+        except httpx.TransportError as exc:      # the render is still in the studio: download it again next round
+            i["download_errors"] = i.get("download_errors", 0) + 1
+            if i["download_errors"] >= 3:
+                i.update(state="failed", error=f"Could not download the render: {exc or type(exc).__name__}")
+            return True
+        i.pop("download_errors", None)
         i.update(state="complete", output=name, finished=time.time(), error="")
         if test["studio"] == "image":     # hidden render: the copy is ours now
             with suppress(httpx.HTTPError):
                 await client.delete(f"{base}/api/internal/jobs/{i['remote_id']}", headers=self.headers)
+        return True
 
     # ---- agent review: a vision model scores every render for what the LoRA should teach -----------
     def rev(self, review: dict[str, Any], kind: str, text: str, **extra: Any) -> None:
@@ -697,15 +800,16 @@ class EpochTests:
         self.save(test)
         self.review_cancel.discard(job_id)
         try:
-            r = await self.queue_request("/enqueue", {"app": "Trainer", "job_id": f"erv{job_id}", "label": f"Epoch review: {test['name']} ({todo})"})
-            r.raise_for_status()
+            entry = await self.gpu.enqueue(f"erv{job_id}", f"Epoch review: {test['name']} ({todo})", uses_llm=True)
+            if entry is None:
+                raise RuntimeError("The GPU queue is not reachable.")
         except Exception as exc:
             review.update(state="failed", stage="Queue error", error=str(exc)[:300])
             self.rev(review, "error", f"could not reach the shared GPU queue: {str(exc)[:200]}")
             self.save(test)
             raise ValueError("Could not reach the shared GPU queue.") from exc
         test = self.load(job_id) or test
-        test["review"]["queue_entry_id"] = r.json().get("entry_id")
+        test["review"]["queue_entry_id"] = entry.get("entry_id")
         self.save(test)
         return test
 
@@ -724,8 +828,7 @@ class EpochTests:
         if review.get("state") not in REVIEW_ACTIVE:
             raise ValueError("No review is running for this job.")
         if review["state"] == "waiting_for_gpu":
-            with suppress(Exception):
-                await self.queue_request(f"/dequeue/{review.get('queue_entry_id')}")
+            await self.gpu.dequeue(review.get("queue_entry_id"))
             review.update(state="cancelled", stage="Cancelled", current=None)
             self.rev(review, "warn", "Cancelled before it got the GPU")
             self.save(test)
@@ -769,16 +872,6 @@ class EpochTests:
     async def review_run(self, job_id: str, token: str) -> None:
         test = self.load(job_id)
         review = test["review"]
-        stop = asyncio.Event()
-
-        async def heartbeat() -> None:
-            while not stop.is_set():
-                try:
-                    await asyncio.wait_for(stop.wait(), timeout=20)
-                except asyncio.TimeoutError:
-                    with suppress(Exception):
-                        await self.queue_request("/heartbeat", {"token": token}, timeout=6)
-        hb = asyncio.create_task(heartbeat())
         headers = {"Authorization": f"Bearer {LLAMA_KEY}"} if LLAMA_KEY else {}
         model = review["model"]
         try:
@@ -888,15 +981,12 @@ class EpochTests:
         finally:
             self.save(test)
             self.review_cancel.discard(job_id)
-            stop.set()
-            hb.cancel()
             with suppress(Exception):     # the card also drives the desktop: give the VRAM back
                 async with httpx.AsyncClient(timeout=30) as c:
                     await c.get(LLAMA_URL + "/unload", headers=headers)
                 self.rev(review, "tool", "llama.unload  (VRAM freed)", icon="⏏")
                 self.save(test)
-            with suppress(Exception):
-                await self.queue_request("/release", {"token": token}, timeout=6)
+            await self.gpu.release(token, llm_settle=True)   # unloaded above: keep it so for the next render
 
     def best(self, test: dict[str, Any]) -> str:
         """Highest average score; a tie goes to the earlier epoch (less risk of overfitting)."""

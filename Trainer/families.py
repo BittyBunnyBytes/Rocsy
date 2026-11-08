@@ -11,7 +11,8 @@ Backends:
                and every full fine-tune: Krea 2, Qwen Image 2.1, Klein 9B, MOSS-Image, MiniMax H3, SDXL, Anima)
   sd-scripts - a kohya sd-scripts checkout (TRAINER_SDSCRIPTS_DIR) with its ROCm venv
                (Anima, SDXL, SD 1.5, Flux.1 / Chroma, SD3, Lumina 2, HunyuanImage 2.1)
-  ai-toolkit - vendor/ai-toolkit (LTX 2.5, plus one recipe per upstream example config)
+  ai-toolkit - vendor/ai-toolkit (LTX 2.5, YuE2 music, plus one recipe per upstream example config)
+  simpletuner - vendor/SimpleTuner (MiniMax Music 3; its own venv: SimpleTuner needs torch >= 2.13)
   llm        - vendor/llm-lora (PEFT LoRAs for chat/text LLMs from Hugging Face, converted to GGUF for llama.cpp)
 """
 from __future__ import annotations
@@ -34,6 +35,7 @@ TRAINER_ROOT = Path(os.getenv("TRAINER_REPO", "/opt/trainers")).resolve()
 SDSCRIPTS_DIR = Path(os.getenv("TRAINER_SDSCRIPTS_DIR", "/opt/sd-scripts"))
 SDSCRIPTS_PYTHON = Path(os.getenv("TRAINER_SDSCRIPTS_PYTHON", str(SDSCRIPTS_DIR.parent / ".venv-rocm7.10" / "bin" / "python")))
 AITK_DIR = TRAINER_ROOT / "vendor" / "ai-toolkit"
+SIMPLETUNER_DIR = TRAINER_ROOT / "vendor" / "SimpleTuner"
 LLM_DIR = TRAINER_ROOT / "vendor" / "llm-lora"
 HF_HOME = Path(os.getenv("HF_HOME", "/data/hf-cache"))
 
@@ -267,6 +269,21 @@ def _detect_hunyuan_image(h: Header, name: str):
     return None
 
 
+def _detect_yue2(h: Header, name: str):
+    if not h.has("text_encoders.yue2_tokenizer_json"):
+        return None
+    if not h.has("vae."):
+        return ("YuE2 (no VAE)", UNSUPPORTED, "YuE2 file without its VAE: AI Toolkit needs the Comfy-Org all-in-one checkpoint")
+    return ("YuE2 3B · " + ("int8" if h.int8 else "bf16"), READY, "")
+
+
+def _detect_minimax_music3(h: Header, name: str):
+    if not (h.has("diffusion_transformer.timestep_features") and h.has("cond_layer_logits")):
+        return None
+    return ("MiniMax Music 3", UNTESTED, "SimpleTuner trains from the Hugging Face release (MiniMaxAI/MiniMax-Music3, ~29 GB "
+            "on first run), not this ComfyUI file; the LoRA it saves loads on this file in ComfyUI")
+
+
 def _detect_ltx(h: Header, name: str):
     if not (h.has("audio_embeddings_connector") or h.has("transformer_blocks.0.audio_attn") or h.has("audio_scale_shift_table")
             or h.has("adaln_single.") and h.has("caption_projection.")):
@@ -342,6 +359,10 @@ FIZGIG = "fizgig"
 SDS = "sd-scripts"
 AITK = "ai-toolkit"
 LLM = "llm"
+SIMPLETUNER = "simpletuner"
+MUSIC = frozenset({"audio"})
+MUSIC_NOTE = ("Music datasets: one song (or section) per audio file, its style/tags caption in <name>.txt and its lyrics in "
+              "<name>.lyrics (the Lyrics box of the dataset editor; .lrc works too). No lyrics = instrumental.")
 FT_NOTE = ("Fine-tune trains the whole model (Fizgig's rotating windows: one slice trains at a time on a 4-bit trunk, the bf16 master stays in system RAM). One rotation = every part of the model trained once; every save is a full checkpoint.")
 IMG = frozenset({"image"})
 
@@ -371,8 +392,8 @@ FAMILIES: list[Family] = [
            get={"repo": "Comfy-Org/Krea-2", "path": "vae/qwen_image_vae.safetensors", "dest": "vae", "gb": 0.25}),
          S("text_encoder", "Text encoder (Qwen3-VL 4B)", ("text_encoders", "clip"), suggest=r"qwen3vl_4b|qwen_3_4b|qwen3_4b",
            get={"repo": "Comfy-Org/Krea-2", "path": "text_encoders/qwen3vl_4b_bf16.safetensors", "dest": "text_encoders", "gb": 8.9})],
-        ("rank", "epochs", "learning_rate", "trigger", "kind", "rotations", "save_every"),
-        {"rank": 16, "epochs": 10, "learning_rate": "1e-4", "kind": "lora", "rotations": 4, "save_every": 1},
+        ("rank", "epochs", "learning_rate", "lr_schedule", "trigger", "kind", "rotations", "save_every"),
+        {"rank": 16, "epochs": 10, "learning_rate": "1e-4", "lr_schedule": "", "kind": "lora", "rotations": 4, "save_every": 1},
         "Krea 2 uses Fizgig ROCm, 4-bit base quantisation, 768 px buckets. It trains on the RAW bf16 DiT; Lustify and other Krea 2 finetunes "
         "are detected but are fp8/int8 files, which are untested or unsupported as a training base.",
         _detect_krea2, extra={"finetune": {"lr": "1e-5", "fizgig": "krea2", "gb": 26.3}}),
@@ -387,8 +408,8 @@ FAMILIES: list[Family] = [
            get={"repo": "Comfy-Org/Qwen-Image-2.1", "path": "text_encoders/qwen3vl_8b_bf16.safetensors", "dest": "text_encoders", "gb": 17.5}),
          S("training_adapter", "Training adapter (recommended)", ("training_adapters", "loras"), required=False, suggest=r"qwen.*training_adapter|fizgig_qwen",
            get={"repo": "ShootTheSound/Fizgig-Qwen-Image-2.1-Training-Adapter", "path": "fizgig_qwen_image_2.1_training_adapter.safetensors", "dest": "training_adapters", "gb": 0.1})],
-        ("rank", "epochs", "max_pixels", "learning_rate", "trigger", "kind", "rotations", "save_every"),
-        {"rank": 16, "epochs": 30, "max_pixels": 524288, "learning_rate": "1e-4", "kind": "lora", "rotations": 4, "save_every": 1},
+        ("rank", "epochs", "max_pixels", "learning_rate", "lr_schedule", "trigger", "kind", "rotations", "save_every"),
+        {"rank": 16, "epochs": 30, "max_pixels": 524288, "learning_rate": "1e-4", "lr_schedule": "", "kind": "lora", "rotations": 4, "save_every": 1},
         "Qwen Image 2.1 uses Fizgig's family trainer (v8.7.9, from vendor/Fizgig-latest): Standard is rank 16 with adaptive LR 1e-4…2e-4, "
         "Fast is rank 8 with 2e-4…4e-4; EMA 0.98, the training adapter, auto precision, 0.5 MP. "
         "It needs the bf16 DiT, the diffusers-format VAE and the bf16 Qwen3-VL-8B encoder; the ComfyUI int8 files you render with can't be trained on.",
@@ -401,8 +422,8 @@ FAMILIES: list[Family] = [
            get={"repo": "black-forest-labs/FLUX.2-dev", "path": "ae.safetensors", "dest": "vae", "gated": True, "manual": True}),
          S("text_encoder", "Text encoder (Qwen3 8B)", ("text_encoders", "clip"), suggest=r"qwen_?3_?8b",
            get={"repo": "Comfy-Org/vae-text-encorder-for-flux-klein-9b", "path": "split_files/text_encoders/qwen_3_8b.safetensors", "dest": "text_encoders", "gb": 16.4})],
-        ("rank", "epochs", "learning_rate", "trigger", "kind", "rotations", "save_every"),
-        {"rank": 16, "epochs": 30, "learning_rate": "1e-4", "kind": "lora", "rotations": 4, "save_every": 1},
+        ("rank", "epochs", "learning_rate", "lr_schedule", "trigger", "kind", "rotations", "save_every"),
+        {"rank": 16, "epochs": 30, "learning_rate": "1e-4", "lr_schedule": "", "kind": "lora", "rotations": 4, "save_every": 1},
         "Flux.2 Klein 9B uses Fizgig's Klein recipe (fp8 scaled base, adaptive LR 5e-5…4e-4, flux2_shift). Its base model repos are gated on Hugging Face: accept the licence there first.",
         _detect_klein, name_hint=r"klein", extra={"finetune": {"lr": "1e-5", "fizgig": "klein", "gb": 17.0,
             "base": "the bf16 klein base (black-forest-labs/FLUX.2-klein-base-9B, gated), not the fp8 file the LoRA recipe uses"}}),
@@ -499,6 +520,29 @@ FAMILIES: list[Family] = [
         "AI Toolkit fetches the model from Hugging Face on first run.",
         _detect_ltx),
     Family(
+        "yue2", "YuE2", AITK, "Music", MUSIC,
+        [S("dit", "YuE2 checkpoint (all-in-one)", BASE_FOLDERS, base=True,
+           get={"repo": "Comfy-Org/YuE2", "path": "checkpoints/yue2_3b_int8_convrot.safetensors", "dest": "checkpoints", "gb": 4.0}),
+         S("sheetsage", "SheetSage2 (audio → sheet music)", ("audio_encoders",), suggest=r"sheetsage",
+           get={"repo": "Comfy-Org/YuE2", "path": "audio_encoders/sheetsage2_bf16.safetensors", "dest": "audio_encoders", "gb": 1.4})],
+        ("rank", "steps", "learning_rate", "trigger"),
+        {"rank": 16, "steps": 1500, "learning_rate": "1e-4"},
+        "YuE2 trains through AI Toolkit's yue2 model (int8 ConvRot base kept as-is, both experts: the AR writes the song, the NAR "
+        "renders it). Caching also downloads the community audio tokenizer (MERT-v2-FullSong + Mothersuperior head, ~2.7 GB). "
+        "The AR side memorises small datasets fast: give it many varied songs, or expect it to replay them. " + MUSIC_NOTE,
+        _detect_yue2, name_hint=r"yue"),
+    Family(
+        "minimax_music3", "MiniMax Music 3", SIMPLETUNER, "Music", MUSIC,
+        [S("dit", "Installed MiniMax Music 3 (for reference)", BASE_FOLDERS, base=True, required=False,
+           note="SimpleTuner downloads MiniMaxAI/MiniMax-Music3 (diffusers parts, ~29 GB) from Hugging Face itself")],
+        ("rank", "steps", "learning_rate", "trigger", "max_seconds"),
+        {"rank": 32, "steps": 1000, "learning_rate": "5e-5", "max_seconds": 60},
+        "MiniMax Music 3 trains the 2.4B music DiT through SimpleTuner's minimaxmusic family (bf16 DiT, int8 Qwen3-8B conditioning "
+        "for caching, AdamW bf16, ComfyUI-format LoRA). First run downloads the Hugging Face release (~29 GB) and the DAV encoder. "
+        "Tracks longer than Max seconds are left out (SimpleTuner skips them): trim long songs into sections. "
+        "Not yet run on this machine (SimpleTuner's ROCm path is untested here). " + MUSIC_NOTE,
+        _detect_minimax_music3, name_hint=r"minimax.?music"),
+    Family(
         "llm", "LLM (chat / text model)", LLM, "Text", frozenset({"text"}), [],
         ("base_model", "rank", "epochs", "learning_rate", "max_length", "quant"),
         {"rank": 16, "epochs": 3, "learning_rate": "2e-4", "max_length": 2048, "quant": "auto"},
@@ -580,6 +624,8 @@ def backend_python(backend: str) -> Path:
         return TRAINER_ROOT / "vendor" / "Fizgig" / "venv" / "bin" / "python"
     if backend == SDS:
         return SDSCRIPTS_PYTHON
+    if backend == SIMPLETUNER:
+        return SIMPLETUNER_DIR / ".venv" / "bin" / "python"
     for v in (".venv", "venv"):
         for exe in ("python3", "python"):
             if (AITK_DIR / v / "bin" / exe).is_file():
@@ -593,7 +639,9 @@ BACKENDS = {
     SDS: {"title": "kohya sd-scripts", "install": None,
           "covers": "Anima · SDXL · SD 1.5 · Flux.1/Chroma · SD3 · Lumina 2 · HunyuanImage",
           "note": "Uses the checkout and ROCm venv in TRAINER_SDSCRIPTS_DIR (docker-compose.override.yml)."},
-    AITK: {"title": "AI Toolkit", "install": "ltx", "covers": "LTX 2.5 + every upstream example recipe (Wan, Flux, HiDream, Qwen-Image…)"},
+    AITK: {"title": "AI Toolkit", "install": "ltx", "covers": "LTX 2.5 · YuE2 music + every upstream example recipe (Wan, Flux, HiDream, Qwen-Image…)"},
+    SIMPLETUNER: {"title": "SimpleTuner", "install": "simpletuner", "covers": "MiniMax Music 3",
+                  "note": "Own venv with ROCm 7.1 PyTorch 2.13 (SimpleTuner needs torch ≥ 2.13; the container has 2.9)."},
     LLM: {"title": "LLM trainer", "install": "llm", "covers": "Chat/text LLMs (Qwen, Llama, Gemma, Mistral…) → PEFT + GGUF LoRA",
           "note": "PEFT on the container's ROCm PyTorch; llama.cpp's converter makes the GGUF LoRA."},
 }

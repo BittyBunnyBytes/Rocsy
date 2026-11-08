@@ -100,6 +100,14 @@ node_modules/
 /BunnyBytes/gateway/templates/settings_developer_*.html
 /BunnyBytes/gateway/static/developer.js
 /BunnyBytes/docker-compose.developer.yml
+# Trainer caption backups (dataset text from this machine)
+/BunnyBytes/data/
+# Custom services (plugins) are this machine's own: only the plugin README ships.
+/BunnyBytes/plugins/*
+!/BunnyBytes/plugins/README.md
+# The sample the installer seeds into core-backend-extras/plugins/example (off until enabled).
+!/BunnyBytes/plugins/example/
+/BunnyBytes/plugins/example/*.bak*
 # this machine's LoRA/checkpoint catalogues and personal workflow defaults (public builds start empty)
 catalog_local.py
 *.local.json
@@ -153,3 +161,6 @@ id_ed25519
 .npmrc
 .pypirc
 auth.json
+
+# Rust build output (bunny-lock)
+/BunnyBytes/lock/target/

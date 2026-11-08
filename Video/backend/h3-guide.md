@@ -138,7 +138,7 @@ Choose task types according to the actual role each reference asset plays in the
 | `audio reuse` | The same audio signal is reused in full or in part |
 | `audio reference` | The audio signal is not copied directly; only its music style, timbre, dialogue or lyric content, sound-effect texture, beat, or continuity is referenced |
 
-When a task satisfies multiple relationships, combine the task types with ` + ` and do not repeat a type. For example, continuing from a source video while using an image as the last frame is written as `[video continuation + keyframe completion]`. Editing a source video while retaining its original audio may be written as `[video editing + audio reuse]`.
+When a task satisfies multiple relationships, combine the task types with ` + ` and do not repeat a type. For example, continuing from a source video while using an image as the last frame is written as `[video continuation + keyframe completion]`. Editing a source video while retaining its original audio may be written as `[video editing + audio reuse]`. Two combinations are contradictory and are rejected by the H3 Prompt IDE schema (ComfyUI-H3-Prompt-IDE): `[video editing + video continuation]` (an edit keeps the source's timeline, a continuation extends past it) and `[audio reuse + audio reference]` (one audio is either copied or only referenced). Pick the one that is true.
 
 The mere presence of video or audio does not automatically create a corresponding task type. If a reference video provides only camera movement, cuts, or rhythm, it normally belongs to `reference generation`. Use `video editing` or `video continuation` only when that video is directly edited or continued.
 

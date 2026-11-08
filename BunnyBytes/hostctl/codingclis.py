@@ -202,9 +202,13 @@ def host_paths(text: str) -> str:
     return text
 
 
-def safe_cwd(raw: str) -> Path:
-    path = Path(host_paths(raw or "/opt/data/rocsy-workspace")).resolve()
+def safe_cwd(raw: str, anywhere: bool = False) -> Path:
+    path = Path(os.path.expanduser(host_paths(raw or "/opt/data/rocsy-workspace"))).resolve()
     root = HERMES_HOME.resolve()
+    if anywhere:            # Rocsy Master Agent with Files: full (checked by the Agent service)
+        if not path.is_dir():
+            raise ValueError(f"No such folder on the host: {path}")
+        return path
     if path != root and root not in path.parents:
         raise ValueError("The working folder must be inside the Hermes home")
     path.mkdir(parents=True, exist_ok=True)
@@ -376,7 +380,7 @@ def run(body: dict[str, Any]) -> tuple[str, Iterator[dict[str, Any]]]:
     if not prompt.strip():
         raise ValueError("Empty prompt")
     scratch = Path(tempfile.mkdtemp(prefix="rocsy-cli-"))
-    cwd = scratch if access == "chat" else safe_cwd(str(body.get("cwd") or ""))
+    cwd = scratch if access == "chat" else safe_cwd(str(body.get("cwd") or ""), body.get("host_access") is True)
     images = []
     for i, url in enumerate(body.get("images") or []):
         match = re.fullmatch(r"data:image/(png|jpe?g|webp|gif);base64,(.+)", str(url), re.S)

@@ -38,6 +38,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import studios
+from bunnylock import BunnyLock
 import media_import
 import guide_rag
 import video_edit
@@ -91,8 +92,8 @@ PERMISSIONS: list[dict[str, Any]] = [
     {"key": "files", "label": "Files", "default": "workspace", "choices": ["none", "read", "workspace", "full"],
      "none": "Do not read or write files on this machine (attachments excepted).",
      "read": "You may read files on this machine; do not create, change or delete any.",
-     "workspace": "You may read files anywhere, and create, change or delete files only inside your workspace {workspace}.",
-     "full": "You may read and write files anywhere you can reach. Back up a file before you change it, never delete the user's work, and say what you changed."},
+     "workspace": "You may read the files you can reach, and create, change or delete files only inside your workspace {workspace}.",
+     "full": "You may read and write the files you can reach. Back up a file before you change it, never delete the user's work, and say what you changed."},
     {"key": "terminal", "label": "Terminal", "default": True,
      "on": "You may run shell commands (downloads, conversions, scripts, inspecting things). Keep them short; long ones go in the background.",
      "off": "Run no shell command except the helper script."},
@@ -163,6 +164,7 @@ DEFAULTS: dict[str, Any] = {
     "gpu_guard": True,           # local model: hold the GPU while thinking, hand it over (unloaded) for renders
     "cache_save": True,          # park the local model's conversation cache on disk before an unload, restore it after
     "keep_loaded_ask": 0,        # minutes the local model stays loaded after a turn that ends with a question (0 = off, -1 = until the GPU is wanted)
+    "keep_loaded_done": 0,       # same, after a turn that finished its task (no question, no jobs left)
     "auto_answer": 0,            # minutes an unanswered `ask` waits before the agent picks the answer it thinks best (0 = never)
     "confirm_jobs": False,       # review mode (/review): each studio call is a proposal you approve or veto first
     "review_services": [],       # what review mode covers ([] = everything in REVIEW_KINDS)
@@ -294,6 +296,10 @@ class Config:
         except (TypeError, ValueError):
             out["keep_loaded_ask"] = 0
         try:
+            out["keep_loaded_done"] = max(-1, min(240, int(values.get("keep_loaded_done") or 0)))
+        except (TypeError, ValueError):
+            out["keep_loaded_done"] = 0
+        try:
             out["auto_answer"] = max(0, min(240, int(values.get("auto_answer") or 0)))
         except (TypeError, ValueError):
             out["auto_answer"] = 0
@@ -326,9 +332,18 @@ class Config:
 config = Config()
 
 
+def model_choice_of(s: dict[str, Any]) -> dict[str, Any]:
+    """This chat's model and thinking: its own override, then its project's, per field group."""
+    own = s.get("model_override") or {}
+    project = (projects.items.get(s.get("project") or "") or {}).get("model") or {}
+    source = own if own.get("model") else project
+    return {"model": source.get("model", ""), "provider": source.get("provider", ""),
+            "reasoning": own.get("reasoning") or project.get("reasoning") or ""}
+
+
 def is_local(cfg: dict[str, Any], s: dict[str, Any] | None = None) -> bool:
     """Whether the model this session thinks with runs on this machine's GPU."""
-    override = (s or {}).get("model_override") or {}
+    override = model_choice_of(s or {})
     model, provider = (override["model"], override.get("provider") or "") if override.get("model") else (cfg["model"], cfg["provider"])
     if not model or not provider:
         provider = models_cache.get("data", {}).get("default", {}).get("provider") or "custom"
@@ -561,6 +576,242 @@ def new_session(prompt: str) -> dict[str, Any]:
     return s
 
 
+# ---------------- projects ----------------
+# A project groups chats and gives them shared instructions and source files. Sources are uploads
+# whose meta.json says "project": they outlive any chat. The agent reads them by path; `source`
+# hard-links one into a chat as a normal attachment, so deleting either side leaves the other intact.
+
+PROJECT_ID = re.compile(r"[0-9a-f]{32}")
+PROJECT_ICONS = ("folder", "pen", "film", "image", "music", "code", "book", "star")
+PROJECT_COLORS = ("blue", "purple", "green", "amber", "red", "slate")
+MAX_PROJECT_SOURCES = 100
+
+
+class Projects:
+    def __init__(self) -> None:
+        self.file = DATA / "projects.json"
+        self.items: dict[str, dict[str, Any]] = {}
+
+    def load(self) -> None:
+        with suppress(OSError, ValueError):
+            self.items = json.loads(self.file.read_text())
+
+    def save(self) -> None:
+        tmp = self.file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.items))
+        tmp.replace(self.file)
+
+
+projects = Projects()
+
+
+def project_of(s: dict[str, Any]) -> dict[str, Any] | None:
+    return projects.items.get(s.get("project") or "")
+
+
+def project_access(s: dict[str, Any]) -> dict[str, Any]:
+    return (project_of(s) or {}).get("access") or {}
+
+
+def session_cfg(s: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+    """The settings as this chat sees them: a project can only take Rocsy services away."""
+    access = project_access(s)
+    if not access:
+        return cfg
+    off = {k for k, on in (access.get("services") or {}).items() if on is False}
+    out = {**cfg, "services": {k: on and k not in off for k, on in cfg["services"].items()},
+           "permissions": dict(cfg["permissions"])}
+    if access.get("agentic") is False:
+        out["use_agentic"] = False
+    if access.get("terminal") is False:
+        out["permissions"]["terminal"] = False
+    if access.get("subagents") is False or access.get("terminal") is False:
+        out["permissions"]["delegate"] = False     # a subagent's own terminal isn't covered by the tool hook
+    if "Services" in off:
+        out["permissions"]["services"] = False
+    if "REA" in off:
+        out["permissions"]["rea_mods"] = False
+    return out
+
+
+# A source can be scoped to tools (its "tools" list of ASK_SERVICES keys): it is read before that tool is used,
+# not for every request. "Services" (start/stop) has nothing to brief on.
+SOURCE_TOOLS = tuple(k for k in ASK_SERVICES if k != "Services")
+
+
+def tool_sources(pr: dict[str, Any] | None, service: str) -> list[dict[str, Any]]:
+    return [a for a in (pr or {}).get("sources", []) if service in (a.get("tools") or [])]
+
+
+def source_line(a: dict[str, Any]) -> str:
+    return f"- {a['ref']}: {a['kind']} \"{a['name']}\" ({a['size'] // 1024} KB) · file {a['hermes_path']}"
+
+
+def tool_sources_gate(s: dict[str, Any], service: str) -> str | None:
+    """Holds back the first call of a tool in a chat once, until the agent has its tool sources in front of it."""
+    scoped = tool_sources(project_of(s), service)
+    if not service or not scoped or service in (s.get("tool_sources_read") or []):
+        return None
+    s.setdefault("tool_sources_read", []).append(service)
+    sessions.save(s["id"])
+    return (f"Not run yet: this project has sources for {ASK_SERVICES[service]}. Read each one now with your file tools "
+            "(images with your vision tool), apply what they say to this call, then make the call again; "
+            "it will go through.\n" + "\n".join(source_line(a) for a in scoped))
+
+
+def project_gate(s: dict[str, Any], name: str, args: dict[str, Any]) -> str | None:
+    """Refuses a helper call the project doesn't allow. Subagents use the same session id, so this holds for them too."""
+    access = project_access(s)
+    service = "Motion" if name == "motion" else ask_service(name, args)
+    if name == "agentic" and access.get("agentic") is False:
+        return "error: Agentic modes are off in this project; use `$R video` for single clips. Don't work around this limit."
+    if service and (access.get("services") or {}).get(service) is False:
+        return f"error: {ASK_SERVICES[service]} is off in this project. Tell the user; don't use a substitute or work around it."
+    return tool_sources_gate(s, service)
+
+
+def helper_only(command: str, sid: str) -> bool:
+    """With the terminal off, the one thing that may still run: Rocsy's helper, which is how the agent reaches
+    the services the project allows. Anything a shell would run beyond that is refused."""
+    if "`" in command or "$(" in command:
+        return False
+    plain = re.sub(r"'[^']*'|\"(?:[^\"\\\\]|\\\\.)*\"", lambda m: "Q" if m.group(0) != f'"python3 {SCRIPT} {sid}"' else m.group(0), command)
+    direct = f"python3 {SCRIPT} {sid}"
+    steps = [x.strip() for x in re.split(r"\n|;|&&", plain) if x.strip()]
+    if not steps or any(c in step for step in steps for c in "|&<>\\"):
+        return False
+    called = False
+    for step in steps:
+        if step == f'R="{direct}"':
+            continue
+        if not (step == "$R" or step.startswith("$R ") or step.startswith(direct + " ")):
+            return False
+        words = step.removeprefix(direct).removeprefix("$R").split()
+        if words and words[0] == "grab" and not re.fullmatch(r"img\d+", words[1] if len(words) > 1 else ""):
+            return False      # `grab URL` runs a site script from the workspace
+        called = True
+    return called
+
+
+NATIVE_SERVICE_TOOLS = {"image_generate": "Krea", "video_generate": "Vid", "text_to_speech": "Voice"}
+
+
+def native_block(s: dict[str, Any], tool_name: str, args: dict[str, Any] | None = None) -> str:
+    """For Hermes' pre_tool_call hook (the rocsy plugin): tools that never pass through the helper."""
+    access = project_access(s)
+    if tool_name == "delegate_task" and (access.get("subagents") is False or access.get("terminal") is False):
+        return "Subagents are off in this project. Do the work yourself, and tell the user if you can't."
+    if access.get("terminal") is False:
+        off = "The terminal is off in this project. Tell the user if the work needs it; don't work around it."
+        if tool_name in ("execute_code", "computer_use"):
+            return off
+        if tool_name == "terminal" and not helper_only(str((args or {}).get("command") or ""), s["id"]):
+            return off + (" Only the helper still runs: one `$R` command at a time, with values in plain quotes "
+                          "(no pipes, redirects, $(...) or `grab URL`).")
+    service = NATIVE_SERVICE_TOOLS.get(tool_name)
+    if service and (access.get("services") or {}).get(service) is False:
+        return f"{ASK_SERVICES[service]} is off in this project. Tell the user; don't use a substitute."
+    return tool_sources_gate(s, service or "") or ""
+
+
+def clean_access(raw: dict[str, Any]) -> dict[str, Any]:
+    """Only limits are stored: anything left out follows Settings."""
+    services = raw.get("services") if isinstance(raw.get("services"), dict) else {}
+    out: dict[str, Any] = {}
+    off = {k: False for k in ASK_SERVICES if services.get(k) is False}
+    if off:
+        out["services"] = off
+    for key in ("agentic", "subagents", "terminal"):
+        if raw.get(key) is False:
+            out[key] = False
+    return out
+
+
+def project_chats(pid: str) -> list[dict[str, Any]]:
+    rows = []
+    for s in sorted((x for x in sessions.items.values() if x.get("project") == pid), key=lambda x: x["updated"], reverse=True):
+        said = next((t["text"] for t in reversed(s["turns"]) if t["role"] == "user"), "")
+        rows.append({"id": s["id"], "title": s["title"], "state": s["state"], "updated": s["updated"], "busy": s["state"] in BUSY,
+                     "preview": re.sub(r"\s+", " ", said.split("\n(The user attached")[0]).strip()[:140]})
+    return rows
+
+
+def public_project(pr: dict[str, Any], chats: bool = False) -> dict[str, Any]:
+    out = {k: pr[k] for k in ("id", "name", "icon", "color", "instructions", "created", "updated")}
+    out["model"] = pr.get("model") or {}
+    out["access"] = pr.get("access") or {}
+    out["sources"] = [{k: a.get(k) for k in ("id", "ref", "name", "mime", "kind", "size", "url")} | {"tools": a.get("tools") or []}
+                      for a in pr["sources"]]
+    rows = project_chats(pr["id"])
+    out["chat_count"] = len(rows)
+    if chats:
+        out["chats"] = rows
+    return out
+
+
+def project_list() -> list[dict[str, Any]]:
+    return [public_project(pr) for pr in sorted(projects.items.values(), key=lambda x: x["updated"], reverse=True)]
+
+
+def project_block(s: dict[str, Any]) -> str:
+    """Goes in the run's system prompt: it stays byte-identical between turns unless the project is
+    edited, so a local model keeps its prompt cache, and nothing here is stored in the conversation."""
+    pr = projects.items.get(s.get("project") or "")
+    if not pr:
+        return ""
+    parts = [f"\nPROJECT: this chat belongs to the user's project {json.dumps(pr['name'], ensure_ascii=False)}."]
+    if pr["instructions"].strip():
+        parts.append("The user's instructions for every chat in this project (follow them; a request in this chat overrides them):\n"
+                     + pr["instructions"].strip())
+    access = pr.get("access") or {}
+    limits = [ASK_SERVICES[k] for k, on in (access.get("services") or {}).items() if on is False]
+    if access.get("agentic") is False:
+        limits.append("Agentic modes (`$R agentic`; use `$R video` for single clips)")
+    if access.get("subagents") is False or access.get("terminal") is False:
+        limits.append("subagents")
+    if access.get("terminal") is False:
+        limits.append("the terminal, except single `$R` helper commands with values in plain quotes (no pipes, redirects or $(...)); `$R grab URL` is refused too")
+    if limits:
+        parts.append("OFF IN THIS PROJECT, and refused if you try: " + "; ".join(limits)
+                     + ". This also covers subagents you start and reaching these services any other way. "
+                     "If the request needs one, say so instead of working around it.")
+    general = [a for a in pr["sources"] if not a.get("tools")]
+    scoped = [a for a in pr["sources"] if a.get("tools")]
+    if pr["sources"]:
+        parts.append("PROJECT SOURCES are the user's reference files for this project and count as attachments for the Files "
+                     "permission. Follow what they say over your general knowledge. "
+                     "To pass a source to a studio, run `$R source src1`, which adds it to this chat and gives you an attN ref for --ref.")
+    if general:
+        parts.append("Before you answer or start work, read every general source that could bear on the request, with your "
+                     "file tools (look at images with your vision tool):\n" + "\n".join(source_line(a) for a in general))
+    if scoped:
+        parts.append("TOOL SOURCES apply only when you use the named tool. Read them before your first call of that tool in this "
+                     "chat (the first call is held back until you have) and apply them to every call of it; skip them otherwise:\n"
+                     + "\n".join(source_line(a) + " · for " + ", ".join(ASK_SERVICES[t] for t in a["tools"] if t in ASK_SERVICES)
+                                 for a in scoped))
+    return "\n".join(parts) + "\n"
+
+
+def link_source(s: dict[str, Any], src: dict[str, Any]) -> dict[str, Any]:
+    """A chat's own attachment sharing the source's bytes."""
+    import shutil
+    if len(s.get("attachments") or []) >= 200:
+        raise ValueError("this session already holds 200 attachments")
+    aid = uuid.uuid4().hex
+    folder = ATTACH_DIR / aid
+    folder.mkdir(parents=True, exist_ok=True)
+    origin = ATTACH_DIR / src["id"] / src["name"]
+    try:
+        os.link(origin, folder / src["name"])
+    except OSError:
+        shutil.copyfile(origin, folder / src["name"])
+    meta = {"id": aid, "name": src["name"], "mime": src["mime"], "kind": src["kind"], "size": src["size"], "total": src["size"],
+            "complete": True, "t": now(), "url": p(f"/api/attachments/{aid}"),
+            "hermes_path": f"{HERMES_ATTACH_DIR}/{aid}/{src['name']}", "session": None, "by": "project", "source_id": src["id"]}
+    (folder / "meta.json").write_text(json.dumps(meta))
+    return claim_attachments(s, [aid])[0]
+
+
 def clean_title(text: str) -> str:
     title = re.sub(r"\s+", " ", str(text or "")).strip().strip("\"'“”‘’`").rstrip(".:;,")
     return title[:80].rstrip() + ("…" if len(title) > 80 else "")
@@ -740,7 +991,7 @@ def sweep_uploads() -> None:
     with suppress(OSError):
         for folder in ATTACH_DIR.iterdir():
             meta = attachment_meta(folder.name)
-            if meta is None or (not meta.get("session") and meta.get("t", 0) < now() - 86400):
+            if meta is None or (not meta.get("session") and not meta.get("project") and meta.get("t", 0) < now() - 86400):
                 if ATTACH_ID.fullmatch(folder.name):
                     shutil.rmtree(folder, ignore_errors=True)
 
@@ -836,7 +1087,7 @@ async def vid_refs(s: dict[str, Any], refs: list[str], prompt: str) -> tuple[lis
                                           "references. Continue a video with --resume, join clips with montage")
             record = await job_output_in_vid(s, j)
         ids.append(record["id"])
-        prompt = re.sub(r"\{\s*" + re.escape(ref) + r"\s*\}", record.get("token") or ref, prompt, flags=re.I)
+        prompt = re.sub(r"\{\{\s*" + re.escape(ref) + r"\s*\}\}|\{\s*" + re.escape(ref) + r"\s*\}", record.get("token") or ref, prompt, flags=re.I)
     return ids, prompt
 
 
@@ -864,11 +1115,16 @@ async def soundtrack_note(s: dict[str, Any], refs: list[str], request: str) -> s
 
 # ---------------- GPU turn (local models) ----------------
 
-async def lock_call(path: str, body: dict[str, Any], timeout: float = 10) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(LOCK_URL + path, json=body, headers={"X-Queue-Internal-Secret": QUEUE_SECRET})
-        response.raise_for_status()
-        return response.json()
+# The shared GPU queue (BunnyBytes/shared/bunnylock.py). Turns arrive over its
+# stream (queue_grant below); held turns are heartbeated by the client.
+gpu_queue = BunnyLock(app="Agent", url=LOCK_URL, secret=QUEUE_SECRET)
+
+
+async def _enqueue(key: str, label: str, priority: bool, uses_llm: bool, model: str | None = None) -> dict[str, Any]:
+    entry = await gpu_queue.enqueue(key, label, priority=priority, uses_llm=uses_llm, model=model)
+    if entry is None:
+        raise RuntimeError("The GPU queue is not reachable.")
+    return entry
 
 
 class GpuTurn:
@@ -880,15 +1136,17 @@ class GpuTurn:
         self.key: str | None = None
         self.token: str | None = None
         self.entry: str | None = None
-        self.heart: asyncio.Task | None = None
 
     async def acquire(self) -> None:
         key = f"{self.s['id']}-{self.s['next_event']}"
         self.key = key
         turn = gpu_turns[key] = {"event": asyncio.Event(), "token": None}
         try:
-            entry = await lock_call("/enqueue", {"app": "Agent", "job_id": key, "label": f"Master Agent: {self.s['title'][:60]}",
-                                                 "priority": True})
+            model: str | None = None     # files this turn's VRAM peak under its model
+            with suppress(Exception):
+                model = run_model(self.s, config.load())[0] or None
+            entry = await _enqueue(key, f"Master Agent: {self.s['title'][:60]}", priority=True, uses_llm=True,
+                                   model=model)
             self.entry = entry.get("entry_id")
             if self.entry:
                 gpu_entries[self.entry] = self
@@ -902,38 +1160,32 @@ class GpuTurn:
             # Retain its token so release can return the active queue entry.
             self.token = self.token or turn["token"]
             gpu_turns.pop(key, None)
-        self.heart = asyncio.create_task(self._heartbeat())
-        with suppress(Exception):
-            async with httpx.AsyncClient(timeout=20) as client:
-                await client.post(COMFY_URL + "/free", json={"unload_models": True, "free_memory": True})
-
-    async def _heartbeat(self) -> None:
-        while self.token:
-            await asyncio.sleep(20)
+        # Alone on the GPU: free ComfyUI's cached models for the LLM. With other jobs
+        # running next to this turn (concurrent jobs fit in VRAM), leave theirs alone.
+        if not gpu_queue.shared_with(self.token):
             with suppress(Exception):
-                await lock_call("/heartbeat", {"token": self.token}, timeout=6)
+                async with httpx.AsyncClient(timeout=20) as client:
+                    await client.post(COMFY_URL + "/free", json={"unload_models": True, "free_memory": True})
 
     async def release(self) -> None:
         if self.entry:
             gpu_entries.pop(self.entry, None)
-        if self.heart:
-            self.heart.cancel()
         # Only a turn that held the GPU unloads the model: a session stopped while it was still queued
-        # used to unload (for up to SETTLE_LIMIT) the model another session was thinking with.
+        # used to unload the model another session was thinking with.
         try:
             if self.token:
                 await save_llm_context(self.s)
-                await unload_llm_settled(self.s)
+                await unload_llm()
         finally:
-            # Shielded and in a finally: a stop that lands during the unload must
-            # still hand the GPU back instead of leaving it to the TTL.
+            # In a finally (and shielded in the client): a stop that lands during the
+            # unload must still hand the GPU back. llm_settle: the queue keeps the
+            # model unloaded while the next render holds the GPU (Hermes' background
+            # review reloads it), so the turn no longer waits for it to settle here.
             token, self.token = self.token, None
             if token:
-                with suppress(Exception):
-                    await asyncio.shield(lock_call("/release", {"token": token}))
+                await gpu_queue.release(token, llm_settle=True)
             elif self.entry:
-                with suppress(Exception):
-                    await lock_call(f"/dequeue/{self.entry}", {})
+                await gpu_queue.dequeue(self.entry)
 
 
 class GpuSlot:
@@ -944,13 +1196,11 @@ class GpuSlot:
         self.s, self.key, self.label, self.job_ref = s, key, label, job_ref
         self.token: str | None = None
         self.entry: str | None = None
-        self.heart: asyncio.Task | None = None
 
     async def acquire(self, on_wait=None) -> None:
         turn = gpu_turns[self.key] = {"event": asyncio.Event(), "token": None}
         try:
-            entry = await lock_call("/enqueue", {"app": "Agent", "job_id": self.key, "label": self.label[:80],
-                                                 "priority": config.load()["priority"]})
+            entry = await _enqueue(self.key, self.label[:80], priority=config.load()["priority"], uses_llm=False)
             self.entry = entry.get("entry_id")
             if self.entry:
                 gpu_entries[self.entry] = self
@@ -961,31 +1211,22 @@ class GpuSlot:
         finally:
             self.token = self.token or turn["token"]
             gpu_turns.pop(self.key, None)
-        self.heart = asyncio.create_task(self._heartbeat())
+        if gpu_queue.shared_with(self.token):
+            return      # started next to other jobs (they fit in VRAM): don't unload what they use
         with suppress(Exception):
             async with httpx.AsyncClient(timeout=20) as client:
                 await client.post(COMFY_URL + "/free", json={"unload_models": True, "free_memory": True})
         await unload_llm_settled(self.s)
 
-    async def _heartbeat(self) -> None:
-        while self.token:
-            await asyncio.sleep(20)
-            with suppress(Exception):
-                await lock_call("/heartbeat", {"token": self.token}, timeout=6)
-
     async def release(self) -> None:
         if self.entry:
             gpu_entries.pop(self.entry, None)
-        if self.heart:
-            self.heart.cancel()
         token, self.token = self.token, None
         entry, self.entry = self.entry, None
         if token:
-            with suppress(Exception):
-                await lock_call("/release", {"token": token})
+            await gpu_queue.release(token)
         elif entry:
-            with suppress(Exception):
-                await lock_call(f"/dequeue/{entry}", {})
+            await gpu_queue.dequeue(entry)
 
 
 def llama_headers() -> dict[str, str]:
@@ -994,7 +1235,8 @@ def llama_headers() -> dict[str, str]:
 
 async def unload_llm() -> None:
     with suppress(Exception):
-        async with httpx.AsyncClient(timeout=30) as client:
+        # Long: the GPU must not go to the next job until the model has really stopped (Strata finishes its request first)
+        async with httpx.AsyncClient(timeout=480) as client:
             await client.get(LLAMA_URL + "/unload", headers=llama_headers())
 
 
@@ -1128,7 +1370,7 @@ def set_model_choice(s: dict[str, Any], choice: dict[str, str] | None) -> None:
 
 def run_model(s: dict[str, Any], cfg: dict[str, Any]) -> tuple[str, str, str]:
     """(model, provider, reasoning) for a run: the session's override, else the Agentic settings."""
-    o = s.get("model_override") or {}
+    o = model_choice_of(s)
     if o.get("model"):
         return o["model"], o.get("provider") or "", o.get("reasoning") or cfg["reasoning"]
     return cfg["model"], cfg["provider"], o.get("reasoning") or cfg["reasoning"]
@@ -1190,6 +1432,10 @@ def job_line(j: dict[str, Any], latest: bool = True) -> str:
                  + (f" ({retried} replaced retry render(s) not included)" if retried else ""))
     elif j.get("outputs"):
         what += f" — {len(j['outputs'])} output(s)"
+    if j.get("kind") == "agentic" and j.get("session_id"):
+        # Vid's prompt ledger for the run (Video/backend/ledger.py): read it rather than re-deriving finished clips.
+        what += (f" — progress: {HERMES_PINNED_DIR}/agentic-sessions/{re.sub(r'[^\w-]', '', j['session_id'])}/progress.md "
+                 "(+ outline.md, prompts/verified|written|in-progress/clip-NNN.md); verified clips are final")
     if j.get("summary"):
         # A play test's diagnosis is long: in full for the latest one, older ones keep their first line.
         cap = 1500 if j.get("kind") not in ("gametest", "reatest") else 4500 if latest else 500
@@ -1253,7 +1499,7 @@ def naming_block(s: dict[str, Any]) -> str:
 def browser_block(state: dict[str, Any] | None) -> str:
     if not state or not state.get("connected"):
         return ""
-    return (f"\nLIVE BROWSER: the user connected your browser tools (browser_navigate, browser_snapshot, browser_click, ...) "
+    return (f"\nLIVE BROWSER: the user connected your browser tool (browser_exec; browser_navigate/browser_click on older Hermes) "
             f"to a Chromium window on their desktop ({state.get('browser') or 'Chromium'}, CDP {state.get('live')}, Hermes' "
             "debug profile). Use them when the request needs the web. The user can see that window: don't close tabs or "
             "navigate away from their pages unless the task needs it.\n")
@@ -1261,6 +1507,20 @@ def browser_block(state: dict[str, Any] | None) -> str:
 
 def perm(cfg: dict[str, Any], key: str) -> Any:
     return cfg["permissions"].get(key, PERM_DEFAULTS[key])
+
+
+HOST_ACCESS_NOTE = (
+    "- Host access (Files: full): your own terminal and file tools run in your container, which only sees your Hermes "
+    "folder. The rest of this PC (the user's home, other drives, installed programs such as `claude`) is reached ONLY "
+    "through these commands, which run on the real machine as the user:\n"
+    "  `$R host run \"COMMAND\" [--dir PATH] [--timeout 120]`: a bash command on the host (the user's PATH and logins)\n"
+    "  `$R host read PATH`: a host file's text (a binary or large file is copied into your workspace and its path given)\n"
+    "  `$R host write PATH --from FILE` (or `--text \"...\"`): write a host file from a file you made; the old one is backed up\n"
+    "  `$R claude \"TASK\" [--dir PATH] [--model NAME] [--timeout 900]`: one Claude Code turn on the host with the user's "
+    "login, for coding work in a project folder; it answers with what it did\n"
+    "  Paths under /opt/data are mapped to the host for you. Give the terminal tool a timeout above the command's own "
+    "(e.g. 960 s for a 900 s Claude Code turn). Back up before changing things, never delete the user's work, and say "
+    "what you changed on the host.")
 
 
 def permissions_block(cfg: dict[str, Any]) -> str:
@@ -1292,6 +1552,8 @@ def permissions_block(cfg: dict[str, Any]) -> str:
         lines.append("- Videos: whenever the user asks you to find/search/pick moments in a video, or to trim or crop one, show the work "
                      "on a video board in their chat: `$R scan start REF \"what to find\"`, then `scan look` + `scan mark` each window, "
                      "`scan pick` the best, `scan cut` the trims/crop (the same numbers you pass to postedit/import-media), `scan done`.")
+    if host_access_on(cfg):
+        lines.append(HOST_ACCESS_NOTE + ("" if perm(cfg, "terminal") else " (Terminal is off: only `host read` and `host write` work.)"))
     lines.append("- Never touch credentials, .env files or other people's sessions, and never send the user's files or data anywhere "
                  "they didn't ask for. Studio settings belong to the user: change them only when asked.")
     return "PERMISSIONS (set by the user in Settings → Agentic):\n" + "\n".join(lines) + "\n"
@@ -1370,7 +1632,7 @@ def build_input(s: dict[str, Any], request: str, browser: dict[str, Any] | None 
     """The run's text. split=True (a Hermes session that already holds this conversation)
     returns (instructions, input): the brief goes in as the run's system prompt, so it isn't
     stored again in the session every turn, and the input is only this turn's message."""
-    cfg = config.load()
+    cfg = session_cfg(s, config.load())
     allowed = [name for name, on in cfg["services"].items() if on]
     names = {"Vid": "Vid (video)", "Krea": "Image (still images; refs image1, image2...)", "Mus": "Mus (music)", "Trainer": "Trainer (LoRA training)",
              "Motion": "Motion (code-based video: Remotion/React)", "Voice": "Voice (speech with saved characters)"}
@@ -1394,6 +1656,8 @@ def build_input(s: dict[str, Any], request: str, browser: dict[str, Any] | None 
     template = cfg["brief"] or DEFAULT_BRIEF
     if "{permissions}" not in template:
         template += "\n{permissions}"
+    if "$R offer" not in template:     # a brief saved before `offer` existed still learns it
+        template += "\n\n" + next(l for l in DEFAULT_BRIEF.splitlines() if l.startswith("| `$R offer")).replace("{", "{{").replace("}", "}}")
     try:
         text = template.format(**values)
     except (KeyError, IndexError, ValueError) as exc:
@@ -1403,11 +1667,12 @@ def build_input(s: dict[str, Any], request: str, browser: dict[str, Any] | None 
                   + ", ".join(f"{kind}={cfg[f'{kind}_model']}" for kind in ("video", "voice", "image", "music"))
                   + ". An explicit user model choice overrides these defaults.\n")
     extra = model_note + review_block(cfg) + ask_block(s, cfg) + h3_script_block(s) + attachments_block(s) + browser_block(browser) + goal_block(s) + naming_block(s)
+    project = project_block(s)
     if not split:
-        return text + extra
+        return text + project + extra
     head, _, tail = text.partition(marker)
     head = re.sub(r"\n?USER REQUEST:\s*$", "\n", head.rstrip()) + "\n" + tail.strip()
-    return head.strip() + "\n\nThe user's message for this turn is the user message; the conversation so far is this Hermes session.", request + "\n" + extra
+    return head.strip() + "\n" + project + "\nThe user's message for this turn is the user message; the conversation so far is this Hermes session.", request + "\n" + extra
 
 
 # A turn that only thinks for this long (no tool call, no reply) is circling: after a compression the
@@ -1456,6 +1721,9 @@ async def drive(s: dict[str, Any], request: str) -> None:
     browser = await browser_state()
     cli_model, cli_provider, cli_reasoning = run_model(s, cfg)
     if cli_provider.startswith("cli:"):
+        if project_access(s).get("subagents") is False or project_access(s).get("terminal") is False:
+            raise RuntimeError("Subagents or the terminal are off in this project, and a coding CLI model can't be held to that. "
+                               "Choose a Hermes model for this project, or allow them.")
         return await drive_cli(s, request, browser, cli_model, cli_provider[4:], cli_reasoning)
     if cfg["continuity"]:
         # One Hermes session per Agent session: Hermes keeps every earlier tool call and result
@@ -1468,6 +1736,8 @@ async def drive(s: dict[str, Any], request: str) -> None:
             body = {"input": build_input(s, request, browser), "session_id": sid_h}
     else:
         body = {"input": build_input(s, request, browser)}
+        if project_access(s):      # the session id is how Hermes' tool hook knows whose limits apply
+            body["session_id"] = f"rocsy-{s['id']}-{uuid.uuid4().hex[:8]}"
     model, provider, reasoning = run_model(s, cfg)
     if model:
         body["model"] = model
@@ -1492,7 +1762,7 @@ async def drive(s: dict[str, Any], request: str) -> None:
             s["hermes_runs"] = s.get("hermes_runs", 0) + 1
         ev(s, "system", f"Master Agent run started · {model or 'Hermes default model'}"
            + (f" ({provider})" if provider else "") + f" · thinking {reasoning}"
-           + (" · chosen for this session" if s.get("model_override") else ""))
+           + (" · chosen for this session" if s.get("model_override") else " · set by this project" if project_of(s) and project_of(s).get("model") else ""))
         set_state(s, "thinking", "Thinking")
         say: list[str] = []
         reasoning: list[str] = []
@@ -1502,8 +1772,9 @@ async def drive(s: dict[str, Any], request: str) -> None:
 
         def show_live(kind: str, text: str) -> None:
             nonlocal last_live_push
-            # Thinking shows only its tail; a reply renders as markdown, so it needs its start (fences).
-            live[kind] = text[-4000:] if kind == "reasoning" else text[:MAX_EVENT_TEXT]
+            # The whole text, like the finished event: the page shows live thinking in full (it used to get
+            # only the last 4,000 characters, so the start was cut off and couldn't be scrolled back to).
+            live[kind] = text[:MAX_EVENT_TEXT]
             t = now()
             stamps.append(t)
             while stamps and t - stamps[0] > 3:
@@ -1618,6 +1889,8 @@ async def drive(s: dict[str, Any], request: str) -> None:
                                 ev(s, "warn", f"{e.get('tool')} failed after {e.get('duration', 0):.1f}s")
                         elif kind == "tool.completed" and e.get("screenshot_path"):
                             post_browser_screenshot(s, e)
+                        elif kind == "tool.completed" and s.get("live_shots") and str(e.get("tool") or "").startswith("browser_"):
+                            spawn(post_live_screenshot(s, f"Browser · after {e.get('tool')}"))
                         elif kind == "terminal.started":
                             flush_reasoning()
                             flush()
@@ -1715,7 +1988,7 @@ async def drive_cli(s: dict[str, Any], request: str, browser: Any, model: str, c
                         if kind == "started":
                             s["cli_run"] = e.get("run")
                             ev(s, "system", f"Master Agent run started · {model or 'default'} ({cli} CLI) · thinking {reasoning}"
-                               + (" · chosen for this session" if s.get("model_override") else ""))
+                               + (" · chosen for this session" if s.get("model_override") else " · set by this project" if project_of(s) and project_of(s).get("model") else ""))
                             set_state(s, "thinking", "Thinking")
                         elif kind == "text":
                             say.append(e.get("delta") or "")
@@ -1758,6 +2031,7 @@ async def conversation(sid: str, request: str) -> None:
     cfg = config.load()
     guard = cfg["gpu_guard"] and is_local(cfg, s)
     cut_offs = fresh_starts = halts = limits = 0   # recoveries since the last turn that finished cleanly
+    s.pop("offer", None); s.pop("offers", None)    # offers left by a stopped run are stale
     try:
         while True:
             if s.get("stop"):
@@ -1813,7 +2087,14 @@ async def conversation(sid: str, request: str) -> None:
                     parked_turns[sid] = turn              # its question waits for the user: the reply needs no reload
                     ev(s, "system", "Keeping the model loaded while you answer" + (f" (up to {keep} min)" if keep > 0 else "")
                                     + "; it is unloaded at once if anything else queues for the GPU")
-                    asyncio.create_task(park_turn(s, turn, keep))
+                    spawn(park_turn(s, turn, keep))
+                elif (turn and turn_ok and not s.get("stop") and not s.get("asked") and not unfinished(s)
+                      and (keep := config.load()["keep_loaded_done"]) and not await gpu_wanted_elsewhere(turn)):
+                    parked_turns[sid] = turn              # task done: your next message needs no reload
+                    ev(s, "system", "Task done; keeping the model loaded for your next message"
+                                    + (f" (up to {keep} min)" if keep > 0 else "")
+                                    + "; it is unloaded at once if anything else queues for the GPU")
+                    spawn(park_turn(s, turn, keep))
                 elif turn:
                     await turn.release()
                 start_deferred(s)                         # the GPU is free of the model now (or the job needs none)
@@ -1906,6 +2187,10 @@ async def conversation(sid: str, request: str) -> None:
                        + ("\n\nStill waiting for the user's review (don't re-propose or start these): "
                           + ", ".join(f"{x['id']} {x['title']}" for x in review_pending(s)) if review_pending(s) else ""))
             ev(s, "system", "All jobs finished; resuming the Master Agent with the results")
+        offers = s.pop("offers", None) or ([old] if (old := s.pop("offer", None)) else [])   # "offer": a run from before multiple offers
+        if offers and not s.get("stop") and not s.get("asked"):
+            for offer in offers:                                           # optional buttons under the final reply, one row each
+                ev(s, "offer", offer["text"], choices=offer["choices"])
         if s.get("stop"):
             set_state(s, "stopped", "Stopped")
             ev(s, "warn", "Stopped")
@@ -2231,15 +2516,32 @@ async def refresh_agentic(s: dict[str, Any], j: dict[str, Any]) -> None:
     if [o.get("url") for o in iterations] != [o.get("url") for o in j.get("iterations") or []]:
         j["iterations"] = iterations
     j["full_output"] = bool(item.get("full_output"))
+    if item.get("awaiting") == "prompts" and item.get("prompts"):
+        j.update(awaiting="prompts", prompts=item["prompts"], prompt_offset=item.get("prompt_offset") or 0)
+    else:
+        for key in ("awaiting", "prompts", "prompt_offset"):
+            j.pop(key, None)
+    if isinstance(item.get("overview"), dict) and item["overview"].get("total"):
+        j["overview"] = item["overview"]          # Vid's prompt ledger at a glance: writing / written / rendered / verified
     if state == "awaiting_approval" and not j.get("asked"):
         j["asked"] = True       # the user's call, never the agent's: approve or exclude the previews in Vid
-        ev(s, "approval", f"{j['ref']}: the staging previews are waiting for your approval in Vid", job=j["ref"])
-        await notify(s, "approval", "Agentic previews need your approval", j["label"][:160])
+        if j.get("awaiting") == "prompts":
+            ev(s, "approval", f"{j['ref']}: {len(j.get('prompts') or [])} clip prompt(s) are waiting for your approval "
+               "(on its card here, or in Vid's Hermes log)", job=j["ref"])
+            await notify(s, "approval", "Agentic clip prompts need your approval", j["label"][:160])
+        else:
+            ev(s, "approval", f"{j['ref']}: the staging previews are waiting for your approval in Vid", job=j["ref"])
+            await notify(s, "approval", "Agentic previews need your approval", j["label"][:160])
     elif state != "awaiting_approval":
         j["asked"] = False
         j.pop("approval_submitted", None)
     if state != j["state"]:
+        was = j["state"]
         j["state"] = state
+        if state == "paused":
+            ev(s, "system", f"{j['ref']} is paused in Vid; the Master Agent waits until it is resumed (or cancelled)", job=j["ref"])
+        elif was == "paused":
+            ev(s, "system", f"{j['ref']} resumed in its same Vid session", job=j["ref"])
         if state in ("complete", "completed"):
             ev(s, "job", f"{j['ref']} finished ({len(outs)} clip{'s' if len(outs) != 1 else ''})", job=j["ref"])
         elif state in studios.DONE:
@@ -2965,6 +3267,8 @@ async def flusher() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     sessions.load()
+    projects.load()
+    gpu_queue.start()
     with suppress(OSError):
         ATTACH_DIR.mkdir(parents=True, exist_ok=True)
     sweep_uploads()
@@ -2972,7 +3276,7 @@ async def lifespan(_: FastAPI):
     relay = asyncio.create_task(rea_outbox())
     timer = asyncio.create_task(scheduler())
     answerer = asyncio.create_task(auto_answerer())
-    asyncio.create_task(backfill_agentic_clips())
+    spawn(backfill_agentic_clips())
     for s in sessions.items.values():          # restarted while its jobs rendered: keep watching them
         if s["state"] == "rendering":
             runners[s["id"]] = asyncio.create_task(resume_after_restart(s["id"]))
@@ -2983,6 +3287,7 @@ async def lifespan(_: FastAPI):
         relay.cancel()
         timer.cancel()
         answerer.cancel()
+        await gpu_queue.stop()
         sessions.flush()
 
 
@@ -3232,7 +3537,7 @@ def session_list(limit: int = 100) -> list[dict[str, Any]]:
     items = sorted(sessions.items.values(), key=lambda s: s["updated"], reverse=True)
     items = items[:limit] if limit > 0 else items
     return [{"id": s["id"], "title": s["title"], "named": s.get("named", ""), "state": s["state"], "stage": s.get("stage", ""),
-             "updated": s["updated"], "jobs": len(s["jobs"]), "busy": s["state"] in BUSY} for s in items]
+             "updated": s["updated"], "jobs": len(s["jobs"]), "busy": s["state"] in BUSY, "project": s.get("project", "")} for s in items]
 
 
 @app.middleware("http")
@@ -3254,7 +3559,7 @@ async def health() -> dict[str, str]:
 async def index(s: str = ""):
     # The list and the open session ride along in the page, so the first paint needs no fetch.
     initial = {"sessions": session_list(), "session": public(sessions.items[s]) if s in sessions.items else None,
-               "commands": COMMANDS}
+               "commands": COMMANDS, "projects": project_list()}
     data = json.dumps(initial).replace("<", "\\u003c")
     html = (STATIC / "index.html").read_text().replace("{{v}}", asset_v()).replace("{{initial}}", data)
     return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
@@ -3269,9 +3574,11 @@ class ModelChoice(BaseModel):
 
 class SessionBody(BaseModel):
     prompt: str = Field(default="", max_length=20000)
+    project: str = Field(default="", max_length=40)
     attachments: list[str] = Field(default_factory=list, max_length=20)
     model: ModelChoice | None = None
     tz: str = Field(default="", max_length=64)       # the page's timezone, for /schedule times
+    cleared: list[str] = Field(default_factory=list, max_length=10)   # Ask first: services the caller already approved (a scheduled post)
 
 
 class ScheduleBody(BaseModel):
@@ -3714,10 +4021,19 @@ async def create_session(body: SessionBody, request: Request) -> dict[str, Any]:
     if head == "/new":
         text = text[4:].strip() or "New session"
     choice = await check_model_choice(body.model)
+    if body.project and body.project not in projects.items:
+        raise HTTPException(422, "That project no longer exists")
     s = new_session(text or "Attachment: " + ", ".join((attachment_meta(a) or {}).get("name", "file") for a in body.attachments))
     set_model_choice(s, choice)
+    if body.project:
+        s["project"] = body.project
+        projects.items[body.project]["updated"] = now()
+        projects.save()
     if body.tz:
         s["tz"] = body.tz
+    for service in body.cleared:
+        if service in ASK_SERVICES:
+            clear_service(s, service)
     matched = rag_pinned_ids(text, body.attachments)
     attachment_ids = body.attachments + matched
     if attachment_ids and not text.startswith("/"):
@@ -3815,7 +4131,7 @@ async def upload_part(aid: str, request: Request) -> dict[str, Any]:
 @app.delete(p("/api/uploads/{aid}"))
 async def drop_upload(aid: str) -> dict[str, Any]:
     meta = attachment_meta(aid)
-    if not meta or meta.get("session"):
+    if not meta or meta.get("session") or meta.get("project"):
         raise HTTPException(404, "No such unsent upload")
     import shutil
     shutil.rmtree(ATTACH_DIR / aid, ignore_errors=True)
@@ -3870,6 +4186,295 @@ async def get_attachment(aid: str):
 @app.get(p("/api/commands"))
 async def list_commands() -> dict[str, Any]:
     return {"commands": COMMANDS}
+
+
+class ProjectBody(BaseModel):
+    name: str | None = Field(default=None, max_length=400)
+    icon: str | None = Field(default=None, max_length=20)
+    color: str | None = Field(default=None, max_length=20)
+    instructions: str | None = Field(default=None, max_length=8000)
+    model: ModelChoice | None = None
+    access: dict[str, Any] | None = None
+
+
+def apply_project(pr: dict[str, Any], body: ProjectBody) -> None:
+    if body.name is not None:
+        name = clean_title(body.name)
+        if not name:
+            raise HTTPException(422, "Give the project a name")
+        pr["name"] = name
+    if body.icon is not None:
+        if body.icon not in PROJECT_ICONS:
+            raise HTTPException(422, "Unknown icon")
+        pr["icon"] = body.icon
+    if body.color is not None:
+        if body.color not in PROJECT_COLORS:
+            raise HTTPException(422, "Unknown colour")
+        pr["color"] = body.color
+    if body.instructions is not None:
+        pr["instructions"] = body.instructions
+    if body.access is not None:
+        pr["access"] = clean_access(body.access)
+
+
+def get_project_or_404(pid: str) -> dict[str, Any]:
+    pr = projects.items.get(pid)
+    if not pr:
+        raise HTTPException(404, "No such project")
+    return pr
+
+
+@app.get(p("/api/projects"))
+async def list_projects() -> dict[str, Any]:
+    return {"projects": project_list()}
+
+
+@app.post(p("/api/projects"), status_code=201)
+async def create_project(body: ProjectBody, request: Request) -> dict[str, Any]:
+    json_only(request)
+    pr = {"id": uuid.uuid4().hex, "name": "", "icon": "folder", "color": "blue", "instructions": "", "sources": [],
+          "next_source": 1, "created": now(), "updated": now()}
+    if body.name is None:
+        raise HTTPException(422, "Give the project a name")
+    apply_project(pr, body)
+    if (choice := await check_model_choice(body.model)) is not None:
+        pr["model"] = choice
+    projects.items[pr["id"]] = pr
+    projects.save()
+    return public_project(pr, chats=True)
+
+
+@app.get(p("/api/projects/options"))
+async def project_options() -> dict[str, Any]:
+    cfg = config.load()
+    return {"services": [{"key": k, "label": label, "on": bool(cfg["services"].get(k, True)) if k in studios.SERVICES else True}
+                         for k, label in ASK_SERVICES.items()],
+            "source_tools": [{"key": k, "label": ASK_SERVICES[k].split(" (")[0]} for k in SOURCE_TOOLS],
+            "agentic_on": bool(cfg["use_agentic"]), "subagents_on": bool(perm(cfg, "delegate")),
+            "terminal_on": bool(perm(cfg, "terminal"))}
+
+
+@app.get(p("/api/projects/{pid}"))
+async def get_project(pid: str) -> dict[str, Any]:
+    return public_project(get_project_or_404(pid), chats=True)
+
+
+@app.patch(p("/api/projects/{pid}"))
+async def edit_project(pid: str, body: ProjectBody, request: Request) -> dict[str, Any]:
+    json_only(request)
+    pr = get_project_or_404(pid)
+    choice = await check_model_choice(body.model)
+    apply_project(pr, body)
+    if choice is not None:
+        pr["model"] = choice
+    pr["updated"] = now()
+    projects.save()
+    return public_project(pr, chats=True)
+
+
+@app.delete(p("/api/projects/{pid}"))
+async def delete_project(pid: str) -> dict[str, Any]:
+    """Its chats are kept and go back to the main list; its sources are deleted."""
+    import shutil
+    pr = get_project_or_404(pid)
+    moved = 0
+    for s in sessions.items.values():
+        if s.get("project") == pid:
+            s["project"] = ""
+            sessions.save(s["id"])
+            moved += 1
+    del projects.items[pid]
+    projects.save()
+    for a in pr["sources"]:
+        if ATTACH_ID.fullmatch(a["id"]):
+            shutil.rmtree(ATTACH_DIR / a["id"], ignore_errors=True)
+    return {"deleted": pid, "chats_kept": moved}
+
+
+# ---------------- Agents: every studio's Agentic sessions ----------------
+# The Agents page lists the Agentic sessions of Video, Image, Music and Voice (whoever started them), shows
+# their logs, and lets the user steer, continue, pause, resume or stop them from here.
+AGENT_STUDIO = re.compile(r"video|image|music|voice")
+AGENT_SID = re.compile(r"[A-Za-z0-9_-]{1,80}")
+
+
+def agent_chat_links() -> dict[str, dict[str, str]]:
+    """Agentic session id -> the Master Agent chat whose job started it."""
+    links: dict[str, dict[str, str]] = {}
+    for s in sessions.items.values():
+        for j in s.get("jobs") or []:
+            if isinstance(j, dict) and j.get("kind") == "agentic" and j.get("session_id"):
+                links.setdefault(str(j["session_id"]), {"id": s["id"], "title": s["title"]})
+    return links
+
+
+def agent_key(studio: str, sid: str) -> tuple[str, str]:
+    if not AGENT_STUDIO.fullmatch(studio) or not AGENT_SID.fullmatch(sid):
+        raise HTTPException(404, "No such Agentic session")
+    return studio, sid
+
+
+@app.get(p("/api/agents"))
+async def list_agents() -> dict[str, Any]:
+    links = agent_chat_links()
+    results = await asyncio.gather(*(studios.agent_sessions(st) for st in studios.AGENT_STUDIOS), return_exceptions=True)
+    rows, offline = [], []
+    for studio, result in zip(studios.AGENT_STUDIOS, results):
+        if isinstance(result, BaseException):
+            offline.append({"studio": studio, "error": str(result)[:200]})
+            continue
+        for r in result:
+            if chat := links.get(r["id"]):
+                r["chat"] = chat
+            rows.append(r)
+    rows.sort(key=lambda r: r.get("updated") or 0, reverse=True)
+    return {"agents": rows, "offline": offline}
+
+
+@app.get(p("/api/agents/{studio}/{sid}"))
+async def get_agent(studio: str, sid: str) -> dict[str, Any]:
+    studio, sid = agent_key(studio, sid)
+    try:
+        out = await studios.agent_session(studio, sid)
+    except studios.StudioError as exc:
+        raise HTTPException(404 if str(exc).startswith("404") or "not found" in str(exc).lower() else 502, str(exc)) from exc
+    if chat := agent_chat_links().get(sid):
+        out["chat"] = chat
+    return out
+
+
+class AgentRef(BaseModel):
+    studio: str = Field(max_length=10)
+    id: str = Field(max_length=80)
+
+
+class AgentDeleteBody(BaseModel):
+    items: list[AgentRef] = Field(default_factory=list, max_length=500)
+
+
+@app.post(p("/api/agents/delete"))
+async def delete_agents(body: AgentDeleteBody, request: Request) -> dict[str, Any]:
+    """Delete several Agentic sessions through each studio's own API; running ones are skipped."""
+    json_only(request)
+    refs = list(dict.fromkeys(agent_key(r.studio, r.id) for r in body.items))
+    limit = asyncio.Semaphore(6)
+
+    async def one(ref: tuple[str, str]) -> str:
+        async with limit:
+            return await studios.agent_delete(*ref)
+
+    outcomes = await asyncio.gather(*(one(ref) for ref in refs))
+    pick = lambda want: [{"studio": st, "id": sid} for (st, sid), o in zip(refs, outcomes) if o == want]
+    errors = [{"studio": st, "id": sid, "error": o[7:]} for (st, sid), o in zip(refs, outcomes) if o.startswith("error")]
+    return {"deleted": pick("deleted") + pick("gone"), "busy": pick("busy"), "errors": errors}
+
+
+class AgentMessageBody(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+
+
+@app.post(p("/api/agents/{studio}/{sid}/message"))
+async def message_agent(studio: str, sid: str, body: AgentMessageBody, request: Request) -> dict[str, Any]:
+    json_only(request)
+    studio, sid = agent_key(studio, sid)
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(422, "Write a message")
+    try:
+        return await studios.agent_message(studio, sid, text)
+    except studios.StudioError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post(p("/api/agents/{studio}/{sid}/{action}"))
+async def control_agent(studio: str, sid: str, action: str, request: Request) -> dict[str, Any]:
+    json_only(request)
+    studio, sid = agent_key(studio, sid)
+    if action not in ("pause", "resume", "stop"):
+        raise HTTPException(404, "Unknown action")
+    try:
+        await studios.agent_control(studio, sid, action)
+    except studios.StudioError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"ok": True}
+
+
+class SourcesBody(BaseModel):
+    attachments: list[str] = Field(default_factory=list, max_length=20)
+
+
+@app.post(p("/api/projects/{pid}/sources"), status_code=201)
+async def add_project_sources(pid: str, body: SourcesBody, request: Request) -> dict[str, Any]:
+    """Turn finished, unsent uploads into this project's sources."""
+    json_only(request)
+    pr = get_project_or_404(pid)
+    if len(pr["sources"]) + len(body.attachments) > MAX_PROJECT_SOURCES:
+        raise HTTPException(422, f"A project holds up to {MAX_PROJECT_SOURCES} sources")
+    for aid in dict.fromkeys(body.attachments):
+        meta = attachment_meta(aid) if ATTACH_ID.fullmatch(aid) else None
+        if not meta or not meta.get("complete") or meta.get("session") or meta.get("project"):
+            raise HTTPException(422, "A file is missing or didn't finish uploading; add it again")
+        meta.update(project=pid, ref=f"src{pr['next_source']}")
+        pr["next_source"] += 1
+        (ATTACH_DIR / aid / "meta.json").write_text(json.dumps(meta))
+        pr["sources"].append(meta)
+    pr["updated"] = now()
+    projects.save()
+    return public_project(pr, chats=True)
+
+
+class SourceToolsBody(BaseModel):
+    tools: list[str] = Field(default_factory=list, max_length=len(ASK_SERVICES))
+
+
+@app.patch(p("/api/projects/{pid}/sources/{aid}"))
+async def edit_project_source(pid: str, aid: str, body: SourceToolsBody, request: Request) -> dict[str, Any]:
+    """Scope a source to tools (read before that tool is used), or [] for every request."""
+    json_only(request)
+    pr = get_project_or_404(pid)
+    src = next((a for a in pr["sources"] if a["id"] == aid), None)
+    if not src or not ATTACH_ID.fullmatch(aid):
+        raise HTTPException(404, "No such source")
+    if any(t not in SOURCE_TOOLS for t in body.tools):
+        raise HTTPException(422, "Unknown tool")
+    src["tools"] = [t for t in SOURCE_TOOLS if t in body.tools]
+    with suppress(OSError):
+        (ATTACH_DIR / aid / "meta.json").write_text(json.dumps(src))
+    pr["updated"] = now()
+    projects.save()
+    return public_project(pr, chats=True)
+
+
+@app.delete(p("/api/projects/{pid}/sources/{aid}"))
+async def remove_project_source(pid: str, aid: str) -> dict[str, Any]:
+    import shutil
+    pr = get_project_or_404(pid)
+    if not any(a["id"] == aid for a in pr["sources"]) or not ATTACH_ID.fullmatch(aid):
+        raise HTTPException(404, "No such source")
+    pr["sources"] = [a for a in pr["sources"] if a["id"] != aid]
+    pr["updated"] = now()
+    projects.save()
+    shutil.rmtree(ATTACH_DIR / aid, ignore_errors=True)
+    return public_project(pr, chats=True)
+
+
+class MoveBody(BaseModel):
+    project: str = Field(default="", max_length=40)
+
+
+@app.post(p("/api/sessions/{sid}/project"))
+async def move_session(sid: str, body: MoveBody, request: Request) -> dict[str, Any]:
+    """Put a chat in a project, or take it out with an empty id. Applies from its next turn."""
+    json_only(request)
+    s = sessions.items.get(sid)
+    if not s:
+        raise HTTPException(404, "No such session")
+    if body.project:
+        get_project_or_404(body.project)["updated"] = now()
+        projects.save()
+    s["project"] = body.project
+    sessions.save(sid)
+    return {"id": sid, "project": body.project}
 
 
 @app.get(p("/api/sessions/{sid}"))
@@ -3983,7 +4588,7 @@ async def message(sid: str, body: MessageBody, request: Request) -> dict[str, An
         if body.on_busy == "cancel" and left:
             stopped = []
             for j in left:                 # forced if its studio can't, so the queued message isn't stuck behind it
-                asyncio.create_task(cancel_and_settle(s, j, restart=False))
+                spawn(cancel_and_settle(s, j, restart=False))
                 stopped.append(j["ref"])
             s["cancel_for_message"] = True
             note = f"they stopped {', '.join(stopped)} to send this; don't restart those unless they ask"
@@ -4112,6 +4717,47 @@ async def cancel_job(sid: str, ref: str) -> dict[str, Any]:
     return public(s)
 
 
+@app.post(p("/api/sessions/{sid}/jobs/{ref}/pause"))
+async def pause_job(sid: str, ref: str) -> dict[str, Any]:
+    """Pause an Agentic job (Vid's Agentic mode): it stops now and frees the GPU; Resume reloads the same session."""
+    s = sessions.items.get(sid)
+    j = next((j for j in (s or {}).get("jobs", []) if j["ref"] == ref), None)
+    if not j or j.get("kind") != "agentic":
+        raise HTTPException(404, "No Agentic job found")
+    if j["state"] in studios.DONE:
+        raise HTTPException(409, "This Agentic job has finished")
+    try:
+        item = await studios.agentic_pause(j["job_id"])
+    except studios.StudioError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    ev(s, "system", f"You paused {ref}", job=ref)
+    if isinstance(item, dict) and item.get("state"):
+        j["state"] = item["state"]
+    await refresh_agentic(s, j)
+    sessions.save(sid)
+    return public(s)
+
+
+@app.post(p("/api/sessions/{sid}/jobs/{ref}/resume"))
+async def resume_job(sid: str, ref: str) -> dict[str, Any]:
+    s = sessions.items.get(sid)
+    j = next((j for j in (s or {}).get("jobs", []) if j["ref"] == ref), None)
+    if not j or j.get("kind") != "agentic":
+        raise HTTPException(404, "No Agentic job found")
+    if j["state"] != "paused":
+        raise HTTPException(409, "This Agentic job isn't paused")
+    try:
+        item = await studios.agentic_resume(j["job_id"])
+    except studios.StudioError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    ev(s, "system", f"You resumed {ref}", job=ref)
+    if isinstance(item, dict) and item.get("state"):
+        j["state"] = item["state"]
+    await refresh_agentic(s, j)
+    sessions.save(sid)
+    return public(s)
+
+
 @app.post(p("/api/sessions/{sid}/jobs/{ref}/agentic-approval"))
 async def agentic_approval(sid: str, ref: str, body: AgenticDecisionBody, request: Request) -> dict[str, Any]:
     json_only(request)
@@ -4132,38 +4778,63 @@ async def agentic_approval(sid: str, ref: str, body: AgenticDecisionBody, reques
     return public(s)
 
 
-@app.post(p("/api/internal/queue/proceed/{job_id}"))
-async def proceed(job_id: str, request: Request) -> dict[str, Any]:
-    if request.headers.get("x-queue-internal-secret") != QUEUE_SECRET or not QUEUE_SECRET:
-        raise HTTPException(403, "forbidden")
-    body = await request.json()
+class PromptDecisionBody(BaseModel):
+    action: str = Field(pattern="^(approve|reject|flag)$")
+    notes: str = Field(default="", max_length=4000)
+    clip_notes: dict[str, str] = Field(default_factory=dict)
+
+
+@app.post(p("/api/sessions/{sid}/jobs/{ref}/prompt-decision"))
+async def agentic_prompt_decision(sid: str, ref: str, body: PromptDecisionBody, request: Request) -> dict[str, Any]:
+    """Approve / reject (with a reason) / flag the clip prompts an Agentic job is waiting on (Vid's prompt approval)."""
+    json_only(request)
+    s = sessions.items.get(sid)
+    j = next((j for j in (s or {}).get("jobs", []) if j["ref"] == ref), None)
+    if not j or j.get("kind") != "agentic":
+        raise HTTPException(404, "No Agentic job found")
+    if j.get("awaiting") != "prompts":
+        raise HTTPException(409, "This Agentic job isn't waiting for prompt approval")
+    try:
+        await studios.agentic_prompt_decision(j["session_id"], body.action, body.notes.strip(), body.clip_notes)
+    except studios.StudioError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    offset = int(j.get("prompt_offset") or 0)
+    what = {"approve": "approved the clip prompts", "reject": f"rejected the clip prompts: {body.notes.strip()}",
+            "flag": "flagged " + "; ".join(f"clip {int(k) + offset}: {v}" for k, v in sorted(body.clip_notes.items(), key=lambda kv: int(kv[0])))}[body.action]
+    ev(s, "system", f"You {what}", job=ref)
+    j["approval_submitted"] = True
+    for key in ("awaiting", "prompts"):
+        j.pop(key, None)
+    sessions.save(sid)
+    return public(s)
+
+async def queue_grant(job_id: str, entry_id: str, token: str) -> bool:
+    """bunny-lock granted a turn (over the client's stream). False = nobody waits for it any more."""
     turn = gpu_turns.get(job_id)
-    if turn is None:          # nobody waits for it any more: hand the slot straight back
-        with suppress(Exception):
-            await lock_call("/release", {"token": body.get("token")})
-        return {"ok": False}
-    turn["token"] = body.get("token")
+    if turn is None:
+        return False
+    turn["token"] = token
     turn["event"].set()
-    return {"ok": True}
+    return True
 
 
-@app.post(p("/api/internal/queue/cancel/{job_id}"))
-async def cancel_queue_entry(job_id: str, request: Request) -> dict[str, Any]:
-    if request.headers.get("x-queue-internal-secret") != QUEUE_SECRET or not QUEUE_SECRET:
-        raise HTTPException(403, "forbidden")
-    entry_id = str((await request.json()).get("entry_id") or "")
+async def queue_cancel(job_id: str, entry_id: str) -> tuple[int, dict[str, Any]]:
+    """The Queue page's Cancel. 404 tells the queue to drop the entry."""
     owner = gpu_entries.get(entry_id)
     if owner is None or owner.key != job_id:
-        raise HTTPException(404, "No active Master Agent queue entry")
+        return 404, {"detail": "No active Master Agent queue entry"}
     if isinstance(owner, GpuTurn):
         await stop(owner.s["id"])
     else:
         task = deferred_tasks.get(f"{owner.s['id']}:{owner.job_ref}")
         if not task or task.done():
-            raise HTTPException(404, "No active Master Agent job")
+            return 404, {"detail": "No active Master Agent job"}
         task.cancel()
         ev(owner.s, "warn", f"You cancelled {owner.job_ref} from the GPU queue")
-    return {"ok": True, "entry_id": entry_id}
+    return 200, {"ok": True, "entry_id": entry_id}
+
+
+gpu_queue.on_grant, gpu_queue.on_cancel = queue_grant, queue_cancel
 
 
 # ---------------- tools (the master-agent skill's helper script) ----------------
@@ -4186,7 +4857,7 @@ async def ask_user(s: dict[str, Any], what: str, kind: str = "job", choices: lis
     previous = (s["state"], s.get("stage", ""))
     set_state(s, "thinking", "Waiting for your approval")
     ev(s, "approval", f"Approve this job? {what}" if kind == "job" else f"Allow this command? {what}")
-    asyncio.create_task(notify(s, "question", "The Master Agent wants your OK", what[:180]))
+    spawn(notify(s, "question", "The Master Agent wants your OK", what[:180]))
     try:
         for _ in range(1800):
             if s["pending"]["answer"] is not None or s.get("stop"):
@@ -4417,7 +5088,7 @@ def ask_service(name: str, args: dict[str, Any]) -> str:
         return "REA" if args.get("action", "status") != "status" else ""
     if name == "service":
         return "Services"
-    if name in ("upload", "scout"):
+    if name in ("upload", "scout", "act"):
         return "Uploads"
     return {"image": "Krea", "music": "Mus", "voice": "Voice", "train": "Trainer"}.get(name, "")
 
@@ -4510,8 +5181,7 @@ async def submit(s: dict[str, Any], service: str, label: str, call, kind: str = 
         j["model"] = model
     s["jobs"].append(j)
     if cfg["priority"] and entry:
-        with suppress(Exception):
-            await lock_call(f"/prioritize/{entry}", {})
+        await gpu_queue.prioritize(entry)
     using = f" with {model}" if model else ""
     ev(s, "job", f"Started {ref} in {svc(service)}{' Agentic mode' if kind == 'agentic' else ''}{using}: {label[:200]}", job=ref)
     return (f"started {ref} ({svc(service)} job {job_id[:8]}{', model ' + model if model else ''}), "
@@ -4948,11 +5618,14 @@ def post_new_media(s: dict[str, Any], since: float, live: bool = False) -> None:
            attachments=public_attachments(posted))
 
 
-# ---------------- website accounts (Connections → Websites) ----------------
-# Any site with a login. A scouting run (`$R scout ID`, or the first upload) logs in, works out how to
-# do what the account is for, and writes sites/<id>.json (what the site needs) + scripts/<id>_upload.cjs.
+# ---------------- websites and their accounts (Connections → Websites / Accounts) ----------------
+# A website (websites/<site>.json: name, url, notes) is worked out once and shared by all its accounts
+# (<id>.json: the login, with site = <site>). A scouting run (`$R scout ACCOUNT`, or the first upload)
+# logs in, works out the site, and writes sites/<site>.json (what the site needs) + scripts/<site>_upload.cjs;
+# actions (`$R act`) save scripts/<site>_actions/*.cjs. Accounts from before the split have no site:
+# their site id is the account id.
 
-GUIDE_SCHEMA = ('{"summary": "one or two lines", "login": {"how": "...", "two_factor": "no/sometimes/always", "captcha": "..."}, '
+GUIDE_SCHEMA = ('{"summary": "one or two lines", "login": {"how": "...", "two_factor": "no/sometimes/always", "captcha": "...", "email_verification": "when and how the site sends a link or code"}, '
                 '"fields": [{"name": "title", "required": true, "notes": "max 300 chars"}], '
                 '"files": {"types": ["mp4", "jpg"], "max_size": "...", "max_length": "...", "aspect": "...", "notes": "..."}, '
                 '"limits": "rate limits, account age/karma/verification rules", "steps": ["Open ...", "Click ..."], '
@@ -4963,25 +5636,50 @@ def account_ids() -> list[str]:
     return sorted(p.stem for p in ACCOUNTS_DIR.glob("*.json") if ACCOUNT_ID.fullmatch(p.stem)) if ACCOUNTS_DIR.is_dir() else []
 
 
+def website(site: str) -> dict[str, Any]:
+    with suppress(OSError, ValueError):
+        data = json.loads((ACCOUNTS_DIR / "websites" / f"{site}.json").read_text())
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
 def load_account(account_id: str) -> dict[str, Any] | None:
+    """The login, with its website's name, url and notes merged in (_site = the website id)."""
     if not ACCOUNT_ID.fullmatch(account_id or ""):
         return None
     with suppress(OSError, ValueError):
         data = json.loads((ACCOUNTS_DIR / f"{account_id}.json").read_text())
-        if isinstance(data, dict) and data.get("username") and data.get("password"):
-            return data
+        if isinstance(data, dict) and (data.get("username") or data.get("email")) and data.get("password"):
+            site = data.get("site") if ACCOUNT_ID.fullmatch(str(data.get("site") or "")) else account_id
+            w = website(site)
+            return {**data, "_site": site, "site_name": w.get("name") or data.get("name") or site,
+                    "url": w.get("url") or data.get("url") or "", "site_notes": w.get("notes") or ""}
     return None
 
 
-def site_guide(account_id: str) -> dict[str, Any] | None:
+def automation() -> dict[str, bool]:
+    """Connections → Websites toggles: run saved site scripts / write and fix them (both on by default)."""
     with suppress(OSError, ValueError):
-        data = json.loads((ACCOUNTS_DIR / "sites" / f"{account_id}.json").read_text())
+        data = json.loads((ACCOUNTS_DIR / "automation.json").read_text())
+        if isinstance(data, dict):
+            return {"use": data.get("use_scripts") is not False, "write": data.get("write_scripts") is not False}
+    return {"use": True, "write": True}
+
+
+def site_guide(site: str) -> dict[str, Any] | None:
+    with suppress(OSError, ValueError):
+        data = json.loads((ACCOUNTS_DIR / "sites" / f"{site}.json").read_text())
         return data if isinstance(data, dict) else None
     return None
 
 
-def account_script(account_id: str) -> Path | None:
-    return next(iter(sorted((ACCOUNTS_DIR / "scripts").glob(f"{account_id}_upload.*"))), None)
+def account_script(site: str) -> Path | None:
+    return next(iter(sorted((ACCOUNTS_DIR / "scripts").glob(f"{site}_upload.*"))), None)
+
+
+def action_scripts(site: str) -> list[str]:
+    folder = ACCOUNTS_DIR / "scripts" / f"{site}_actions"
+    return sorted(p.name for p in folder.iterdir() if p.is_file()) if folder.is_dir() else []
 
 
 def guide_fields(guide: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -5004,23 +5702,29 @@ def accounts_text() -> str:
         a = load_account(account_id)
         if not a:
             continue
-        script = account_script(account_id)
-        lines.append(f"{account_id}: {a.get('name') or account_id} ({a.get('url')}) as {a['username']}"
+        site = a["_site"]
+        script = account_script(site)
+        lines.append(f"{account_id}: {a.get('name') or account_id} on {a['site_name']} ({a.get('url')}) as {login_name(a)}"
                      + (f" · for: {a['purpose']}" if a.get("purpose") else "")
-                     + f" · {'automated (' + script.name + ')' if script else 'scouted, no script yet' if site_guide(account_id) else 'not scouted'}"
-                     + f"\n  {guide_line(site_guide(account_id))}")
+                     + (f" · user's notes: {a['notes']}" if a.get("notes") else "")
+                     + (f" · site notes: {a['site_notes']}" if a.get("site_notes") else "")
+                     + f" · {'automated (' + script.name + ')' if script else 'scouted, no script yet' if site_guide(site) else 'not scouted'}"
+                     + f"\n  {guide_line(site_guide(site))}")
     return ("\n".join(lines) + "\n(* = required field)") if lines else (
-        "No website accounts are connected. The user adds them in Connections → Websites (/Connections/); never ask for a password in the chat.")
+        "No website accounts are connected. The user adds them in Connections → Accounts (/Connections/); never ask for a password in the chat.")
 
 
-async def account_browser(s: dict[str, Any], account: dict[str, Any], what: str) -> tuple[str, str]:
-    """(cdp url or "" for headless, how-to note), opening the visible browser for a headed account."""
+async def account_browser(s: dict[str, Any], account: dict[str, Any], what: str, headed: bool = False) -> tuple[str, str]:
+    """(cdp url or "" for headless, how-to note), opening the visible browser for a headed account.
+    headed=True (scouting, actions) always uses the visible browser, whatever the account's setting."""
     name = account.get("name") or "the site"
-    if account.get("browser", "headed") == "headless":
+    if not headed and account.get("browser", "headed") == "headless":
         account_id = account.get("_id", "site")
         return "", (f"The account is set to headless: a script launches its own browser with a persistent profile in "
                     f"{HERMES_ACCOUNTS}/profiles/{account_id} (`chromium.launchPersistentContext(dir, {{ headless: true }})`) so the "
-                    "login is kept; your own browser tools don't share that profile.")
+                    "login is kept; your own browser tools don't share that profile. To SEE the page, have the script save "
+                    f"`await page.screenshot({{ path: \"{HERMES_WORKSPACE}/{account_id}-NAME.png\" }})` and look at it with "
+                    "vision_analyze (after each important step, on errors, captchas and before you report success).")
     state = await browser_state(fresh=True) or {}
     if not state.get("connected"):
         ev(s, "say", f"🌐 Opening the live browser for {what} on {name}…")
@@ -5029,67 +5733,330 @@ async def account_browser(s: dict[str, Any], account: dict[str, Any], what: str)
             browser_cache.update(t=now(), data=state)
         except RuntimeError as exc:
             raise studios.StudioError(f"couldn't open the live (headed) browser ({exc}). Tell the user; they can run /browser "
-                                      f"connect, or set {name} to Headless in Connections → Websites.") from exc
+                                      f"connect" + ("." if headed else f", or set {name} to Headless in Connections → Accounts.")) from exc
     cdp = str(state.get("live") or "")
     return cdp, (f"Use the live headed browser (the visible Chromium on the user's desktop, CDP {cdp}): your browser tools drive "
-                 "it, a script attaches with `chromium.connectOverCDP(CDP)`, and its profile keeps the login.")
+                 "it, a script attaches with `chromium.connectOverCDP(CDP)`, and its profile keeps the login. To SEE the page, use "
+                 "browser_vision (a screenshot of that window your vision checks) whenever the text snapshot isn't enough: after "
+                 "each important step, for captchas, layouts, errors and before you report success. A script's own "
+                 f"`page.screenshot({{ path }})` into {HERMES_WORKSPACE}/ can be checked with vision_analyze.")
+
+
+def login_name(account: dict[str, Any]) -> str:
+    """Username and email as the prompt shows them (either may be empty, not both)."""
+    username, email = account.get("username") or "", account.get("email") or ""
+    return f"{username} (email {email})" if username and email else username or f"email {email}"
+
+
+def account_notes(account: dict[str, Any]) -> str:
+    """The user's own notes for the website and this account (Connections), followed on every run there."""
+    return ((f"\nThe user's notes for {account.get('site_name')} (follow them): {account['site_notes']}" if account.get("site_notes") else "")
+            + (f"\nThe user's notes for this account (follow them): {account['notes']}" if account.get("notes") else "")
+            + ("\n" if account.get("notes") or account.get("site_notes") else ""))
 
 
 def account_secrets(account_id: str) -> str:
-    return (f"The login is in {HERMES_ACCOUNTS}/{account_id}.json (JSON: username, password). Read it ONLY inside a script. Never "
+    return (f"The login is in {HERMES_ACCOUNTS}/{account_id}.json (JSON: username, email, password; either username or email "
+            "may be empty, so use whichever the site's login form asks for). Read it ONLY inside a script. Never "
             "print, echo, cat or say the password, and never type it with your browser tools (their arguments are shown in the chat).")
 
 
-def login_step(account: dict[str, Any], account_id: str, headed: bool) -> str:
-    return (f"Log in as {account['username']}: write a short Node script that reads {HERMES_ACCOUNTS}/{account_id}.json, attaches to "
+CAPTCHA_VISION = ("For every visual CAPTCHA: locate its visible element, save a screenshot cropped to that element "
+                  "(Playwright locator.screenshot or a bounding-box crop) in the agent workspace, and use "
+                  "`$R share` on the cropped image so it appears in the Master Agent chat. Use vision_analyze on "
+                  "that same image to read it. Then enter the visually read answer in the same browser "
+                  "page and verify the result. Do not decode CSS box-shadow, inspect pixel arrays, convert the image "
+                  "to ASCII/text art, or write a character recognizer. Do not reload a challenge that rotates on "
+                  "reload. If the crop is unclear, take a larger crop or another screenshot of the same page and use "
+                  "vision_analyze again. A saved script must call help.handoff for EACH fresh challenge, with a selector "
+                  "for the CAPTCHA element; never accept a fixed --captcha value, embed an answer, or reuse the last "
+                  "answer. On resume, use only the answer entered into the current browser page. Keep the answer out "
+                  "of logs when possible.")
+
+
+UNATTENDED = ("This action runs on its own: decide sensible values from the task, notes and site. "
+              + CAPTCHA_VISION + " When a script "
+              "returns agent_handoff, inspect its screenshot and the live browser, complete the CAPTCHA or other "
+              "browser step yourself, verify it cleared, then rerun the script. Do not restart a completed action "
+              "or duplicate a submission: scripts must inspect the current page and resume safely. If a 2FA code "
+              "or email verification is needed, run `$R emails`, find the mailbox for the exact recipient, and "
+              "use its saved login in a script to read the fresh message and apply the link or code. Ask the user "
+              "only when no accessible mailbox or code is available. Anything that needs paying, stop and say so.")
+
+
+EMAIL_VERIFICATION = ("For account creation, pending email confirmation, or a login code: run `$R emails` and match "
+                      "the exact recipient address. Open that mailbox in a separate browser tab with a short script that "
+                      "reads its saved credential file inside the script; never print the password or put it in browser "
+                      "tool arguments. Find the newest message from the target site for this attempt, inspect sender, "
+                      "recipient and time, then use only its verification link or code. If it is a link, check that its "
+                      "destination belongs to the target site before opening it. Return to the original tab and confirm "
+                      "the account or login is verified before continuing. Do not submit a form twice just to resend mail. "
+                      "If no suitable message arrives, check spam and wait briefly, then use the site's resend option once. "
+                      "If the mailbox itself needs an unavailable code or no saved mailbox login works, ask the user.")
+
+
+def login_step(account: dict[str, Any], account_id: str, headed: bool, unattended: bool = False) -> str:
+    return (f"Log in as {login_name(account)}: write a short Node script that reads {HERMES_ACCOUNTS}/{account_id}.json, attaches to "
             f"the browser and fills the login form (Playwright: `const {{ chromium }} = require(\"{PLAYWRIGHT}\")`). Skip it if the "
-            "page already shows you logged in. If a captcha or a 2FA code appears, `$R notify` the user"
-            + (" (they can solve it in the visible window)" if headed else "") + " and `$R ask` them.")
+            "page already shows you logged in. "
+            + (f"If a CAPTCHA or another visual step appears, follow this method: {CAPTCHA_VISION} Have the login script "
+               f"load `require(\"{ROCSY_HELP}\")(process.argv)` and pass --rocsy \"$R\"; if it finds the step first, "
+               "call help.handoff(page, \"specific step to complete\"), then follow its agent_handoff and resume the "
+               "script. " + EMAIL_VERIFICATION))
 
 
-def script_step(account_id: str) -> str:
-    return (f"Write {HERMES_ACCOUNTS}/scripts/{account_id}_upload.cjs (CommonJS, Playwright from {PLAYWRIGHT}) that does the whole "
-            "post from your notes: args --file PATH, --title/--caption/--tags, --field name=value (repeatable, for the site's own "
-            "fields), [--cdp URL] and --dry-run (fill everything, stop before the final submit). It logs in only when needed, "
+def login_args(account: dict[str, Any], account_id: str, cdp: str) -> str:
+    """The flags a shared site script gets to act as this account."""
+    return (f"--login {HERMES_ACCOUNTS}/{account_id}.json"
+            + (f" --cdp {cdp}" if cdp else f" --profile {HERMES_ACCOUNTS}/profiles/{account_id}"))
+
+
+ROCSY_HELP = "/opt/data/skills/rocsy/master-agent/scripts/rocsy-help.cjs"
+HELP_NOTE = (f"Scripts take --rocsy \"$R\" and load `const help = require(\"{ROCSY_HELP}\")(process.argv)` to call on "
+             "Rocsy mid-run: `await help.look(page, \"question\")` asks the model about a screenshot; "
+             "`await help.lookJson(page, \"question\")` gets JSON; `await help.ask(\"question\")` asks about text; "
+             "`await help.shot(page, \"caption\")` shares the page. When a CAPTCHA or task needs the active agent's "
+             "browser tools, call `await help.handoff(page, \"specific next step\", {selector: \"CAPTCHA_SELECTOR\"})` "
+             "for a cropped CAPTCHA screenshot (or omit selector for other tasks). This shares the screenshot and exits "
+             "with {\"ok\": false, \"agent_handoff\": reason}; if help.look may detect the challenge first, "
+             "pass `{captchaSelector: \"CAPTCHA_SELECTOR\"}` so its handoff is cropped. The active agent must use "
+             "vision_analyze on the cropped CAPTCHA image; do not render the "
+             "challenge as ASCII or decode its CSS/pixels. `help.handoff` shares the cropped image in the Master "
+             "Agent chat; if you captured it directly, use `$R share` before vision_analyze. Make the script safe to rerun from the current page "
+             "by handing off only while the current CAPTCHA field is empty, then continuing after the agent enters "
+             "its visual answer. Never take --captcha or hard-code an answer. Check the site's response text and "
+             "verify real success before printing ok:true or saving credentials. "
+             "Never turn a handoff into a user prompt unless the agent has tried and needs user-only information. "
+             "For email verification, hand off to the agent with the exact recipient and target site; the agent "
+             "uses `$R emails` and its browser tools, then resumes the script.")
+SCRIPTS_OFF = "Saved site scripts are switched off for writing (Connections): don't write or change any site script."
+
+
+def script_step(site: str) -> str:
+    if not automation()["write"]:
+        return SCRIPTS_OFF
+    return (f"Write {HERMES_ACCOUNTS}/scripts/{site}_upload.cjs (CommonJS, Playwright from {PLAYWRIGHT}) that does the whole "
+            "post from your notes. Every account on this website shares it, so never hard-code one: args --login PATH (the "
+            "account's JSON: username, email, password), --cdp URL (attach to the headed browser) or --profile DIR (launch a "
+            "headless persistent profile there), --file PATH (left out for a text post, if the site has them), --title/--caption/--tags, --field name=value (repeatable, for the site's own "
+            "fields) and --dry-run (fill everything, stop before the final submit). " + HELP_NOTE + " It logs in only when needed, "
             "checks the site's requirements first, waits for the post to finish, prints one JSON line {\"ok\": true, \"url\": "
-            "\"...\"} and exits non-zero with the reason on failure. Prefer stable selectors (roles, labels, data-testid) over "
+            "\"...\"} and exits non-zero with the reason on failure. If signup confirmation or login verification "
+            "is required, hand off with the recipient and site so the agent can use `$R emails` and verify it, then "
+            "resume safely. Prefer stable selectors (roles, labels, data-testid) over "
             "CSS classes.")
 
 
-def guide_step(account_id: str) -> str:
-    return (f"Write what the site needs to {HERMES_ACCOUNTS}/sites/{account_id}.json, exactly this shape (plain JSON, fill what "
+def guide_step(site: str) -> str:
+    return (f"Write what the site needs to {HERMES_ACCOUNTS}/sites/{site}.json (shared by every account on this website), exactly this shape (plain JSON, fill what "
             f"you found, leave out what doesn't apply): {GUIDE_SCHEMA}. `fields` lists EVERY input the post form has, with "
             "required true/false; the user sees this on the Connections page and later uploads are checked against it.")
 
 
-async def scout_tool(s: dict[str, Any], args: dict[str, Any], cfg: dict[str, Any]) -> str:
-    """Work a website out without posting: login, how to do what the account is for, the guide and the script."""
-    account_id = str(args.get("site") or "").lower()
-    account = load_account(account_id)
+def site_target(args: dict[str, Any]) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
+    """(error, account, website) for scout/act: an account id, or a website id with --website (logged out)."""
+    key = str(args.get("site") or "").lower()
+    if args.get("website"):
+        w = website(key) if ACCOUNT_ID.fullmatch(key) else {}
+        if not w:
+            return f"error: no website {key or '(none given)'} in Connections → Websites.\n{accounts_text()}", None, None
+        return "", None, {**{k: v for k, v in w.items() if k != "notes"}, "_site": key, "name": w.get("name") or key, "browser": "headed", "_id": f"site-{key}",
+                          "site_name": w.get("name") or key, "site_notes": w.get("notes") or ""}
+    account = load_account(key)
     if not account:
-        return f"error: no website account {account_id or '(none given)'}.\n{accounts_text()}"
+        return f"error: no website account {key or '(none given)'}.\n{accounts_text()}", None, None
+    account["_id"] = key
+    return "", account, None
+
+
+def emails_text() -> str:
+    """Connections Emails entries and where a script can read each saved login, without passwords."""
+    lines = []
+    for account_id in account_ids():
+        a = load_account(account_id)
+        if a and a.get("email"):
+            lines.append(f"{a['email']} — connected account {account_id}, website {a['site_name']} "
+                         f"({a.get('url')}); credentials {HERMES_ACCOUNTS}/{account_id}.json")
+    created = ACCOUNTS_DIR / "created"
+    if created.is_dir():
+        for file in sorted(created.glob("*.jsonl")):
+            if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", file.stem):
+                continue
+            with suppress(OSError):
+                for line_no, raw in enumerate(file.read_text().splitlines(), 1):
+                    with suppress(ValueError):
+                        item = json.loads(raw)
+                        if isinstance(item, dict) and item.get("email") and item.get("password"):
+                            lines.append(f"{str(item['email'])[:254]} — created login for {str(item.get('site') or 'unknown site')[:80]} "
+                                         f"({str(item.get('url') or '')[:200]}); credentials line {line_no} of "
+                                         f"{HERMES_ACCOUNTS}/created/{file.name}")
+    return ("\n".join(lines) + "\nRead credentials only inside a script. An address on a non-mail site may be "
+            "a recipient only; confirm the saved login opens its mailbox before using it.") if lines else (
+            "No saved email addresses. Add a mailbox account in Connections → Accounts, or ask the user for access.")
+
+
+def created_step(owner: str, site: str) -> str:
+    return ("If the task creates a new login (an account, email address or mailbox): make its password inside a Node script "
+            "(crypto.randomBytes, 20+ characters, meeting the site's rules) that types it into the form and appends one JSON "
+            "line {\"site\": \"<website id>\", \"username\", \"email\", \"password\", \"url\", \"note\", \"t\": unix seconds} to "
+            f"{HERMES_ACCOUNTS}/created/{owner}.jsonl (mkdir -p first). \"site\" is {site!r} for a login on this website, or the "
+            "id of another website in Connections it belongs to: with it, the login is added to Connections → Accounts by "
+            "itself, so later runs can use it. Never print, say or type that password with your browser tools. If signing up "
+            "needs an email address, run `$R emails` and choose one whose saved login actually opens a mailbox. "
+            + EMAIL_VERIFICATION + " Save the new account's login after signup, even if email confirmation is pending; "
+            "mark that status in its note, then report the final verification result. For a visual challenge or other step the "
+            "script cannot do, use help.handoff so the active agent can complete it in the browser and resume the script.")
+
+
+async def scout_tool(s: dict[str, Any], args: dict[str, Any], cfg: dict[str, Any]) -> str:
+    """Work a website out without posting: (login,) how to do what it is for, the guide and the script.
+    With --website it scouts logged out (sign-up, login form, public pages)."""
+    error, account, site_only = site_target(args)
+    if error:
+        return error
     if not perm(cfg, "web"):
         return "error: the Web and browser permission is off (Settings → Agentic)"
-    account["_id"] = account_id
+    target = account or site_only
     try:
-        cdp, browser_note = await account_browser(s, account, "scouting")
+        cdp, browser_note = await account_browser(s, target, "scouting", headed=True)
     except studios.StudioError as exc:
         return f"error: {exc}"
-    old = site_guide(account_id)
-    ev(s, "say", f"Scouting {account.get('name') or account_id}: logging in and working out what it needs (nothing gets posted)")
-    return (f"SCOUTING {account.get('name') or account_id} ({account.get('url')}). Don't post, submit, buy, follow, message or "
-            f"change anything on the site. {browser_note} {account_secrets(account_id)}\n"
-            f"What the account is for: {account.get('purpose') or 'posting the media the user makes (videos and images)'}\n"
-            + (f"An earlier guide exists (update it): {guide_line(old)}\n" if old else "")
-            + f"1. {login_step(account, account_id, bool(cdp))}\n"
-            "2. Find how to do what the account is for: navigate there with your browser tools, look at every page on the way "
-            "(screenshots + your vision tool), and open the post/upload form. Note every field and which are required, the "
-            "allowed file types, size, length and aspect, character limits, and any rules (account age, karma, verification, "
-            "rate limits, community or upload rules, consent dialogs). Read the site's own help pages if the form doesn't say.\n"
-            f"3. {guide_step(account_id)}\n"
-            f"4. {script_step(account_id)} Test it with --dry-run only if that leaves nothing behind on the site (no drafts, "
-            "no uploaded file); otherwise say it is untested.\n"
+    await start_live_shots(s, cdp, f"Browser opened for scouting {target['site_name']}")
+    site = target["_site"]
+    old, note = site_guide(site), str((website(site).get("scout") or {}).get("note") or "").strip()
+    label = target["site_name"]
+    ev(s, "say", f"Scouting {label}" + (f" as {account.get('name')}" if account else " (logged out)") + ": working out what it needs (nothing gets posted)")
+    goal = note or (account or {}).get("purpose") or ("posting the media the user makes (videos and images)" if account
+                                                      else "how the site works: signing up, logging in and its main features")
+    if account:
+        intro = f"{browser_note} {account_secrets(account['_id'])}\n"
+        first = login_step(account, account["_id"], bool(cdp))
+    else:
+        intro = f"{browser_note} There is no account: stay logged out.\n"
+        first = ("Open the site logged out. Note how its sign-up and login work (fields, email or phone verification, "
+                 "captcha, age or region checks, invite rules) without creating anything.")
+    return (f"SCOUTING {label} ({target.get('url')}). Don't post, submit, sign up, buy, follow, message or "
+            f"change anything on the site. {intro}"
+            f"{CAPTCHA_VISION}\n"
+            "If a CAPTCHA or another browser step interrupts scouting, inspect the live page and complete "
+            "the step yourself. If a script returns agent_handoff, use its screenshot and browser state, "
+            "complete the requested step, then rerun that script from the current page.\n"
+            "Record where signup and login email verification occurs, the recipient, and how to resume after the "
+            "link or code; do not create an account just to test it.\n"
+            f"What this scouting is for (the user's note): {goal}\n"
+            + account_notes(target)
+            + (f"An earlier guide exists (update it, keep what still holds): {guide_line(old)}\n" if old else "")
+            + f"1. {first}\n"
+            "2. Find how to do what this scouting is for: navigate there with your browser tools, look at every page on the "
+            "way (browser_vision when the snapshot isn't enough), and open the relevant forms"
+            + ("" if account else " (the ones a logged-out visitor can reach; say which need an account)") + ". Note every "
+            "field and which are required, the allowed file types, size, length and aspect, character limits, and any rules "
+            "(account age, karma, verification, rate limits, community or upload rules, consent dialogs). Read the site's own "
+            "help pages if the form doesn't say.\n"
+            f"3. {guide_step(site)}\n"
+            + (f"4. {script_step(site)} Test it with --dry-run only if that leaves nothing behind on the site (no drafts, "
+               "no uploaded file); otherwise say it is untested.\n" if account and automation()["write"]
+               else "4. No script this time (there's no login to test with).\n" if not account else f"4. {SCRIPTS_OFF}\n") +
             "5. `$R say` a short summary of what the site needs, then end with it.")
+
+
+LOOK_SYSTEM = ("You help a website automation script that runs unattended. Answer its question about the screenshot (or "
+               "the text alone) briefly and exactly: what is on the page, where something is, what to click or type next, "
+               "or a short piece of text it asks you to write. When it asks for JSON, reply with JSON only. For a CAPTCHA "
+               "or other visual challenge requiring browser interaction, reply with exactly CAPTCHA so the script hands "
+               "control to the active agent.")
+
+
+async def look_tool(s: dict[str, Any], args: dict[str, Any], cfg: dict[str, Any]) -> str:
+    """One question from a site script to the model the session runs on (the one loaded in llama-swap, so
+    nothing swaps), with an optional screenshot from the workspace: `$R look "question" [--image PATH]`."""
+    import base64
+    question = str(args.get("question") or "").strip()[:4000]
+    if not question:
+        return "error: give a question"
+    content: list[dict[str, Any]] = [{"type": "text", "text": question}]
+    image = str(args.get("image") or "").strip()
+    if image:
+        if not image.startswith(HERMES_WORKSPACE + "/"):
+            return f"error: the image must be in {HERMES_WORKSPACE}/"
+        local = (WORKSPACE_DIR / image[len(HERMES_WORKSPACE) + 1:]).resolve()
+        if not local.is_relative_to(WORKSPACE_DIR.resolve()) or not local.is_file():
+            return f"error: {image} doesn't exist"
+        kind = sniff_media(local.read_bytes()[:64])
+        if not kind or not kind[0].startswith("image/"):
+            return f"error: {image} isn't an image"
+        content.append({"type": "image_url", "image_url": {"url": f"data:{kind[0]};base64,{base64.b64encode(local.read_bytes()).decode()}"}})
+    loaded = await llama_loaded() or []
+    model = loaded[0] if loaded else run_model(s, cfg)[0]
+    body = {"model": model, "temperature": 0.2, "max_tokens": 800, "chat_template_kwargs": {"enable_thinking": False},
+            "messages": [{"role": "system", "content": LOOK_SYSTEM}, {"role": "user", "content": content}]}
+    try:
+        async with httpx.AsyncClient(timeout=300) as client:
+            r = await client.post(LLAMA_URL + "/v1/chat/completions", headers=llama_headers(), json=body)
+            r.raise_for_status()
+            answer = str(r.json()["choices"][0]["message"]["content"] or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        return f"error: the model couldn't answer ({exc})"
+    answer = re.sub(r"(?s)^<think>.*?</think>\s*", "", answer)
+    ev(s, "tool", f"script asked Rocsy{' (with a screenshot)' if image else ''}: {question[:200]} → {answer[:300]}")
+    return answer
+
+
+async def act_tool(s: dict[str, Any], args: dict[str, Any], cfg: dict[str, Any]) -> str:
+    """A task the user gave from Connections → Action (e.g. "create an email for my business"), done as one
+    of the site's accounts, or logged out on the website (--website: e.g. signing up new accounts).
+    Repeat tasks run the site's saved action script."""
+    error, account, site_only = site_target(args)
+    if error:
+        return error
+    if not perm(cfg, "web"):
+        return "error: the Web and browser permission is off (Settings → Agentic)"
+    target = account or site_only
+    site = target["_site"]
+    record = account if account else website(site)
+    run = next((r for r in record.get("actions") or [] if r.get("id") == str(args.get("run") or "")), None)
+    task = str((run or {}).get("task") or args.get("task") or "").strip()
+    if not task:
+        return "error: no task: pass --run ID (from Connections) or --task \"what to do\""
+    auto = automation()
+    try:
+        cdp, browser_note = await account_browser(s, target, "the action", headed=True)
+    except studios.StudioError as exc:
+        return f"error: {exc}"
+    await start_live_shots(s, cdp, f"Browser opened for the action on {target['site_name']}")
+    folder = f"{HERMES_ACCOUNTS}/scripts/{site}_actions"
+    saved = action_scripts(site) if auto["use"] else []
+    guide = site_guide(site)
+    who = f" as {login_name(account)}" if account else " (no account: logged out)"
+    ev(s, "say", f"Action on {target['site_name']}{who}: {task[:200]}")
+    script_args = (login_args(account, account["_id"], cdp) if account else (f"--cdp {cdp}" if cdp else "")) + ' --rocsy "$R"'
+    steps = [login_step(account, account["_id"], bool(cdp), unattended=True)] if account else []
+    if saved:
+        steps.append(f"Saved action scripts for {target['site_name']} in {folder}/: {', '.join(saved)} (each says at the top what "
+                     f"it does). If one does this same task, run it with `{script_args}` plus its own args and "
+                     "check the result on the page. If it returns agent_handoff, complete the named step in "
+                     "the live browser and rerun it. If it otherwise fails, do the task by hand and "
+                     + ("fix the script." if auto["write"] else "tell the user (writing scripts is switched off, so don't edit it).")
+                     + " If none fits, do it by hand (next step).")
+    steps.append("Do exactly the task with your browser tools, looking at the page as you go (browser_vision when the "
+                 "snapshot isn't enough). Stay within it: don't pay, delete anything, or message people the task doesn't name.")
+    steps.append(EMAIL_VERIFICATION)
+    steps.append(created_step(account["_id"] if account else f"site-{site}", site))
+    if auto["write"]:
+        steps.append(f"When the task worked (and no saved script did it), save it as {folder}/<short-task-name>.cjs (CommonJS, "
+                     f"Playwright from {PLAYWRIGHT}) with a comment at the top saying what task it does, so running it again is "
+                     "automated. Every account on this website shares it: args --login PATH (the account JSON; left out when "
+                     "run logged out), --cdp URL or --profile DIR, plus --name value args for whatever changes between runs; "
+                     "it prints one JSON line with the result and exits non-zero with the reason on failure. "
+                     "It checks current page state before each step so rerunning after a handoff cannot repeat a "
+                     "completed submission. " + HELP_NOTE)
+    else:
+        steps.append(SCRIPTS_OFF)
+    steps.append("Finish with `$R say` a short summary of what you did and anything created (never a password), then end with it.")
+    return (f"ACTION on {target['site_name']} ({target.get('url')}){who}. The user's task: {task}\n{UNATTENDED}\n"
+            f"{browser_note} " + (account_secrets(account["_id"]) if account else "") + f"{account_notes(target)}\n"
+            + (f"What the site needs (from scouting): {guide_line(guide)}\n" if guide else "")
+            + "\n".join(f"{i}. {x}" for i, x in enumerate(steps, 1)))
 
 
 async def upload_tool(s: dict[str, Any], args: dict[str, Any], cfg: dict[str, Any]) -> str:
@@ -5106,10 +6073,16 @@ async def upload_tool(s: dict[str, Any], args: dict[str, Any], cfg: dict[str, An
     label = account.get("name") or account_id
     ref = str(args.get("file") or "").strip()
     a = next((a for a in s.get("attachments") or [] if a["ref"] == ref.lower()), None)
-    if a:
+    if not ref:
+        path = ""        # a text post (e.g. a Reddit self post)
+    elif a:
         path = a["hermes_path"]
     elif ref.startswith(HERMES_WORKSPACE + "/"):
         if not (WORKSPACE_DIR / ref[len(HERMES_WORKSPACE) + 1:]).is_file():
+            return f"error: {ref} doesn't exist"
+        path = ref
+    elif ref.startswith(HERMES_ACCOUNTS + "/media/"):       # a file the user attached to a scheduled post (Connections)
+        if "/" in ref[len(HERMES_ACCOUNTS) + 7:] or not (ACCOUNTS_DIR / "media" / ref[len(HERMES_ACCOUNTS) + 7:]).is_file():
             return f"error: {ref} doesn't exist"
         path = ref
     else:
@@ -5129,8 +6102,9 @@ async def upload_tool(s: dict[str, Any], args: dict[str, Any], cfg: dict[str, An
         if not sep or not key.strip():
             return f"error: --field takes name=value (got {item!r})"
         fields[key.strip()] = value.strip()
-    guide = site_guide(account_id)
-    given = {k.lower() for k, v in {**post, **fields}.items() if v} | {"file", "media", "video", "image"}
+    site, auto = account["_site"], automation()
+    guide = site_guide(site)
+    given = {k.lower() for k, v in {**post, **fields}.items() if v} | ({"file", "media", "video", "image"} if path else set())
     missing = [f for f in guide_fields(guide) if f.get("required") and str(f["name"]).lower() not in given]
     if missing:
         return (f"error: {label} needs these before posting: "
@@ -5140,36 +6114,41 @@ async def upload_tool(s: dict[str, Any], args: dict[str, Any], cfg: dict[str, An
         cdp, browser_note = await account_browser(s, account, "the upload")
     except studios.StudioError as exc:
         return f"error: {exc}"
-    script = account_script(account_id)
+    script = account_script(site) if auto["use"] else None
     flags = " ".join([f'--{k} "{v}"' for k, v in post.items() if v] + [f'--field "{k}={v}"' for k, v in fields.items()])
     want = ", ".join([f"{k} \"{v}\"" for k, v in post.items() if v] + [f"{k} \"{v}\"" for k, v in fields.items()]) or "no text fields"
     s.setdefault("uploads", []).append({"site": account_id, "file": path, **post, "fields": fields, "t": now(),
                                         "mode": "script" if script else "guided" if guide else "scouting"})
     sessions.save(s["id"])
-    secrets = account_secrets(account_id)
+    secrets = account_secrets(account_id) + account_notes(account)
+    off = "" if auto["use"] or not account_script(site) else " Saved site scripts are switched off for running (Connections): post by hand with your browser tools."
     if script:
         ev(s, "say", f"Uploading to {label} with its saved script ({script.name})")
         return (f"{label} upload (automated run): run the saved script\n"
-                f"    node {HERMES_ACCOUNTS}/scripts/{script.name} --file \"{path}\" {flags}" + (f" --cdp {cdp}" if cdp else "") + "\n"
-                "It prints a JSON line {\"ok\": true, \"url\": ...} when the post is up. If it fails (the site changed, a new "
-                "dialog, logged out), look at the page, finish this upload by hand, then FIX the script and the guide "
-                f"({HERMES_ACCOUNTS}/sites/{account_id}.json) so the next run works. {browser_note} {secrets} "
+                f"    node {HERMES_ACCOUNTS}/scripts/{script.name} {login_args(account, account_id, cdp)} --rocsy \"$R\"" + (f" --file \"{path}\"" if path else "") + f" {flags}\n"
+                "It prints a JSON line {\"ok\": true, \"url\": ...} when the post is up. If it returns agent_handoff "
+                "for email verification, run `$R emails`, open the recipient's mailbox with its saved login inside a "
+                "script, apply the fresh link or code, and rerun the upload script from the current page. If it fails (the site changed, a new "
+                "dialog, logged out), look at the page, finish this upload by hand, then "
+                + (f"FIX the script and the guide ({HERMES_ACCOUNTS}/sites/{site}.json) so the next run works. " if auto["write"]
+                   else f"fix the guide ({HERMES_ACCOUNTS}/sites/{site}.json) and tell the user the script failed (writing scripts is switched off, so don't edit it). ")
+                + f"{browser_note} {secrets} "
                 "When the post is up, `$R say` its link.")
     if guide:
         ev(s, "say", f"Uploading to {label} by its scouted guide, then writing the upload script")
-        return (f"{label} upload (guided run: the site is scouted but has no script yet). {browser_note} {secrets}\n"
+        return (f"{label} upload (guided run: the site is scouted{off or ' but has no script yet'}). {browser_note} {secrets}\n"
                 f"What it needs: {guide_line(guide)}\nSteps found while scouting: "
                 + " → ".join(str(x) for x in (guide.get("steps") or [])[:20]) + "\n"
                 f"1. {login_step(account, account_id, bool(cdp))}\n"
-                f"2. Post {path} by hand following those steps, with {want}. Fix the guide where the site differs.\n"
-                f"3. {script_step(account_id)}\nWhen the post is up, `$R say` its link.")
+                f"2. Post {path or 'a text post (no file)'} by hand following those steps, with {want}. Fix the guide where the site differs.\n"
+                f"3. {'Leave the saved script as it is.' if off else script_step(site)}\nWhen the post is up, `$R say` its link.")
     ev(s, "say", f"First {label} upload: a scouting run. The agent logs in, works out the site and posts by hand, then writes its guide and script")
     return (f"{label} upload: SCOUTING RUN (the site has never been worked out). {browser_note} {secrets}\n"
             f"1. {login_step(account, account_id, bool(cdp))}\n"
-            f"2. Find the post/upload form ({account.get('url')}) and post by hand with your browser tools: {path}, with {want}. "
+            f"2. Find the post/upload form ({account.get('url')}) and post by hand with your browser tools: {path or 'a text post (no file)'}, with {want}. "
             "Note every page, field (required or not), file rule, limit and selector on the way. If the site requires something "
             "you weren't given, `$R ask` the user rather than guessing.\n"
-            f"3. {guide_step(account_id)}\n4. {script_step(account_id)}\n"
+            f"3. {guide_step(site)}\n4. {script_step(site)}\n"
             "Later uploads to this site use the script. When the post is up, `$R say` its link.")
 
 
@@ -5197,13 +6176,71 @@ async def fetch_job_files(s: dict[str, Any], j: dict[str, Any], failed=None) -> 
     return out
 
 
+MAX_OFFERS = 4                                     # separate offer rows under one reply
+
+
+LIVE_SHOT_GAP = 15      # seconds between live browser screenshots in a scouting/action run
+
+
+async def capture_live_browser(cdp: str) -> bytes | None:
+    """A JPEG of the live browser's front tab, straight over CDP (Page.captureScreenshot)."""
+    import base64
+    import websockets
+    async with httpx.AsyncClient(timeout=5) as client:
+        pages = [p for p in (await client.get(cdp.rstrip("/") + "/json/list")).json()
+                 if p.get("type") == "page" and p.get("webSocketDebuggerUrl")]
+    if not pages:
+        return None
+    async with websockets.connect(pages[0]["webSocketDebuggerUrl"], max_size=64 * 1024 * 1024, open_timeout=5) as ws:
+        await ws.send(json.dumps({"id": 1, "method": "Page.captureScreenshot", "params": {"format": "jpeg", "quality": 70}}))
+        while True:
+            msg = json.loads(await asyncio.wait_for(ws.recv(), 10))
+            if msg.get("id") == 1:
+                return base64.b64decode(msg["result"]["data"]) if "result" in msg else None
+
+
+async def post_live_screenshot(s: dict[str, Any], caption: str, force: bool = False) -> None:
+    """Show the user the live browser in the chat during scouting and actions: when it opens (force),
+    then after browser steps, at most every LIVE_SHOT_GAP seconds and only when the page changed."""
+    live = s.get("live_shots") or {}
+    if not live.get("cdp") or (not force and now() - live.get("t", 0) < LIVE_SHOT_GAP):
+        return
+    live["t"] = now()
+    try:
+        data = await capture_live_browser(live["cdp"])
+    except Exception as exc:        # a closed tab or a busy browser: skip this one
+        log.info("Live browser screenshot skipped: %s", exc)
+        return
+    digest = hashlib.sha1(data or b"").hexdigest()
+    if not data or (digest == live.get("last") and not force):
+        return
+    live["last"] = digest
+    folder = WORKSPACE_DIR / s["id"] / ".live"          # dot folder: post_new_media leaves it alone
+    folder.mkdir(parents=True, exist_ok=True)
+    name = f"browser-{int(now() * 1000)}.jpg"
+    (folder / name).write_bytes(data)
+    try:
+        attachment = share_file(s, f"{HERMES_WORKSPACE}/{s['id']}/.live/{name}")
+    except (OSError, ValueError) as exc:
+        log.warning("Could not share live browser screenshot: %s", exc)
+        return
+    ev(s, "say", caption, attachments=public_attachments([attachment]))
+
+
+async def start_live_shots(s: dict[str, Any], cdp: str, caption: str) -> None:
+    if cdp:
+        s["live_shots"] = {"cdp": cdp, "t": 0}
+        await post_live_screenshot(s, caption, force=True)
+
+
 def post_browser_screenshot(s: dict[str, Any], event: dict[str, Any]) -> None:
     """Show a browser page image from Hermes without trusting a tool-result path."""
     path = str(event.get("screenshot_path") or "")
     prefix = HERMES_WORKSPACE + "/.browser-screenshots/"
-    if event.get("tool") not in ("browser_navigate", "browser_click", "browser_back") or not path.startswith(prefix):
+    # browser_exec on Hermes v0.23+; the built-in navigate/click/back tools before it.
+    if event.get("tool") not in ("browser_exec", "browser_navigate", "browser_click", "browser_back") or not path.startswith(prefix):
         return
-    if not re.fullmatch(r"page-[0-9a-f]{32}\.png", path[len(prefix):]):
+    if not re.fullmatch(r"page-[0-9a-f]{32}\.(?:png|jpe?g)", path[len(prefix):]):
         return
     try:
         attachment = share_file(s, path)
@@ -5566,8 +6603,28 @@ async def image_search(query: str, n: int = 10, min_side: int = 600, engine_id: 
     return out[:n]
 
 
-async def grab_file(s: dict[str, Any], url: str, name: str = "") -> tuple[dict[str, Any], str]:
-    """`$R grab`: download, check, save in workspace/<session>/grabs and share as an attachment."""
+def script_download(url: str, local: str) -> tuple[str, bytes, str, str, str]:
+    """A file a site download script saved (rocsy.py runs the script in the agent's terminal, under
+    workspace/<session>/grabs/.dl-*): the same media checks as a direct download, then it is moved in."""
+    hermes_dl = f"{HERMES_WORKSPACE}/"
+    if not local.startswith(hermes_dl):
+        raise ValueError("a download script must save under the workspace")
+    path = (WORKSPACE_DIR / local[len(hermes_dl):]).resolve()
+    if not path.is_relative_to(WORKSPACE_DIR.resolve()) or not path.is_file():
+        raise ValueError(f"the download script left no file at {local}")
+    if path.stat().st_size > GRAB_MAX:
+        raise ValueError(f"bigger than {GRAB_MAX // 1024 ** 2} MB")
+    data = path.read_bytes()
+    if not (sniffed := sniff_media(data[:64])):
+        raise ValueError(not_media_error(path.name, data[:200]) if textual(data[:512]) else
+                         f"{path.name} is not a picture, video or song (it starts {data[:16]!r})")
+    path.unlink(missing_ok=True)
+    return url, data, *sniffed, ""
+
+
+async def grab_file(s: dict[str, Any], url: str, name: str = "", local: str = "") -> tuple[dict[str, Any], str]:
+    """`$R grab`: download, check, save in workspace/<session>/grabs and share as an attachment.
+    local: a file a site download script already fetched for `url` (checked the same way)."""
     from urllib.parse import unquote, urlsplit
     url, fallback = url.strip(), ""
     if m := re.fullmatch(r"(?i)img(\d+)", url):            # a result of the last `$R images` search
@@ -5578,16 +6635,21 @@ async def grab_file(s: dict[str, Any], url: str, name: str = "") -> tuple[dict[s
     if not re.match(r"(?i)https?://", url):
         raise ValueError("grab takes an http(s) URL or imgN from `$R images`")
     try:
-        try:
-            final, data, mime, ext, how = await grab_media(url)
-        except (ValueError, httpx.HTTPError):
-            if not fallback:
-                raise
-            final, data, mime, ext, how = await grab_media(fallback)   # hotlink-blocked: Bing's cached copy / the original
-            how = f"a copy of {url} (the site refused the download)"
+        if local:
+            final, data, mime, ext, how = await asyncio.to_thread(script_download, url, local)
+        else:
+            try:
+                final, data, mime, ext, how = await grab_media(url)
+            except (ValueError, httpx.HTTPError):
+                if not fallback:
+                    raise
+                final, data, mime, ext, how = await grab_media(fallback)   # hotlink-blocked: Bing's cached copy / the original
+                how = f"a copy of {url} (the site refused the download)"
     except httpx.HTTPError as exc:
         raise ValueError(f"download failed: {type(exc).__name__}: {exc}"[:300]) from None
     path = urlsplit(final).path.split("/revision/")[0]     # Fandom: .../Name.png/revision/latest
+    if local:
+        path = Path(local).name
     stem = Path(safe_name(name or unquote(Path(path).name) or "grab")).stem[:80] or "grab"
     folder = WORKSPACE_DIR / s["id"] / "grabs"
     folder.mkdir(parents=True, exist_ok=True)
@@ -5616,7 +6678,15 @@ async def grab_file(s: dict[str, Any], url: str, name: str = "") -> tuple[dict[s
 # agent's vision tool reads them too (post_new_media skips "frames" folders).
 RENDER_NODE = "/dev/dri/renderD128"
 vaapi_frames: bool | None = None       # None = not tried yet; False = no usable media engine here
-background_tasks: set[asyncio.Task] = set()   # fire-and-forget board work (kept referenced until done)
+background_tasks: set[asyncio.Task] = set()   # fire-and-forget work (kept referenced until done)
+
+
+def spawn(coro) -> asyncio.Task:
+    """Fire and forget, kept referenced until done (asyncio holds tasks only weakly)."""
+    task = asyncio.create_task(coro)
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
+    return task
 
 
 def parse_time(text: str) -> float:
@@ -5861,9 +6931,7 @@ def postedit_board(s: dict[str, Any], ref: str, settings: dict[str, Any]) -> Non
                 b["crop"] = crop_fraction(b, f"{c.get('x', 0)}:{c.get('y', 0)}:{c.get('w', 1)}:{c.get('h', 1)}")
             b["state"] = "done"
             board_touch(s, b)
-    task = asyncio.create_task(show())
-    background_tasks.add(task)
-    task.add_done_callback(background_tasks.discard)
+    spawn(show())
 
 
 @app.get(p("/api/sessions/{sid}/boards/{bid}/frames/{name}"))
@@ -5876,12 +6944,137 @@ async def board_frame(sid: str, bid: str, name: str) -> FileResponse:
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
+@app.post(p("/api/tool-check/{sid}"))
+async def tool_check(sid: str, request: Request) -> dict[str, Any]:
+    """Asked by the Hermes rocsy plugin before each tool call of a Rocsy session."""
+    body = await request.json()
+    s = sessions.items.get(sid)
+    if not s or not isinstance(body, dict):
+        return {"block": "", "limited": False}
+    return {"block": native_block(s, str(body.get("tool") or ""), body.get("args") if isinstance(body.get("args"), dict) else {}), "limited": bool(project_access(s))}
+
+
+HOST_TIMEOUT = 1800       # seconds a host command or Claude Code turn may take
+
+
+def host_access_on(cfg: dict[str, Any]) -> bool:
+    """Files: full is the only setting that reaches the host; otherwise the host commands don't exist."""
+    return perm(cfg, "files") == "full"
+
+
+async def host_tool(s: dict[str, Any], name: str, args: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+    """`$R host run/read/write` and `$R claude`: bunny-hostctl acts on the real machine as the user.
+    Only with Files: full (else "Unknown tool", as if the commands weren't there); a shell or Claude
+    Code turn also needs the Terminal permission, since helper_only lets every `$R` call through."""
+    if not host_access_on(cfg):
+        raise HTTPException(404, f"Unknown tool {name}")
+    action = "claude" if name == "host_claude" else str(args.get("action") or "")
+    if action not in ("run", "read", "write", "claude"):
+        return {"text": "error: use `host run \"COMMAND\"`, `host read PATH`, `host write PATH --from FILE` or `claude \"TASK\"`"}
+    if action in ("run", "claude") and not perm(cfg, "terminal"):
+        return {"text": "error: the Terminal permission is off (Settings → Agentic), so no host commands or Claude Code; "
+                        "you can still `host read` and `host write`."}
+    try:
+        timeout = max(1, min(HOST_TIMEOUT, int(args.get("timeout") or (900 if action == "claude" else 120))))
+    except (TypeError, ValueError):
+        return {"text": "error: --timeout must be a number of seconds"}
+    if action == "claude":
+        return await host_claude(s, args, timeout)
+    try:
+        if action == "run":
+            command = str(args.get("command") or "")
+            r = await hostctl("POST", "/host/exec", {"command": command, "cwd": args.get("dir") or "~", "timeout": timeout},
+                              timeout=timeout + 30)
+            if "error" in r:
+                return {"text": f"error: {r['error']}"}
+            tid = f"host-{uuid.uuid4().hex[:8]}"
+            ev(s, "terminal", r.get("output") or "", tool_id=tid, command=f"[host {r.get('cwd')}] {command}"[:2000],
+               status="complete", exit_code=r.get("exit_code"), error="error" if r.get("exit_code") else "")
+            return {"text": f"exit code {r.get('exit_code')} (on the host, in {r.get('cwd')})\n{r.get('output') or ''}"}
+        if action == "read":
+            r = await hostctl("POST", "/host/read", {"path": args.get("path")}, timeout=60)
+            if "error" in r:
+                return {"text": f"error: {r['error']}"}
+            ev(s, "system", f"Read {r['path']} on the host")
+            if "text" in r:
+                return {"text": r["text"]}
+            return {"text": f"{r['path']} is binary or large ({r.get('size', 0) // 1024} KB); a copy is at {r['copy']} for your own tools."}
+        text, src = args.get("text"), args.get("from")
+        if text is None and not src:
+            return {"text": "error: give --from FILE (a file you made, e.g. in your workspace) or --text \"...\""}
+        body = {"path": args.get("path"), **({"from": src} if src else {"text": str(text)})}
+        r = await hostctl("POST", "/host/write", body, timeout=60)
+        if "error" in r:
+            return {"text": f"error: {r['error']}"}
+        ev(s, "warn", f"Master Agent wrote {r['path']} on the host" + (f" (backup {r['backup']})" if r.get("backup") else " (new file)"))
+        return {"text": f"Wrote {r['path']}." + (f" The old version is backed up at {r['backup']}." if r.get("backup") else "")}
+    except RuntimeError as exc:
+        return {"text": f"error: {exc}"}
+
+
+async def host_claude(s: dict[str, Any], args: dict[str, Any], timeout: int) -> dict[str, Any]:
+    """One Claude Code turn on the host (the user's own install and login) through bunny-hostctl's CLI runner."""
+    task = str(args.get("task") or "").strip()
+    if not task:
+        return {"text": "error: give the task, e.g. claude \"fix the failing test in ~/Projects/x\" --dir ~/Projects/x"}
+    if not HOSTCTL_SECRET:
+        return {"text": "error: the host helper isn't configured for the Agent service (HOSTCTL_SECRET)"}
+    folder = str(args.get("dir") or "~")
+    body = {"cli": "claude", "model": str(args.get("model") or ""), "effort": "", "access": "agent", "cwd": folder,
+            "host_access": True, "hermes_paths": True, "prompt": task}
+    commands: dict[str, str] = {}
+    final, run_id, ran = "", "", 0
+    was_stopped = bool(s.get("stop"))         # only a stop pressed during this turn ends it
+    ev(s, "system", f"Claude Code on the host · {folder} · {task[:300]}")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=timeout)) as client:
+            async with client.stream("POST", HOSTCTL_URL + "/clis/run", json=body, headers={"X-Hostctl-Secret": HOSTCTL_SECRET}) as stream:
+                if stream.status_code >= 300:
+                    detail = (await stream.aread()).decode(errors="replace")
+                    with suppress(ValueError):
+                        detail = json.loads(detail).get("error") or detail
+                    return {"text": f"error: Claude Code didn't start: {str(detail)[:300]}"}
+                async for line in stream.aiter_lines():
+                    if s.get("stop") and not was_stopped and run_id:
+                        await client.post(HOSTCTL_URL + "/clis/stop", json={"run": run_id}, headers={"X-Hostctl-Secret": HOSTCTL_SECRET})
+                        return {"text": "Stopped: the user stopped the session."}
+                    with suppress(ValueError):
+                        e = json.loads(line) if line.strip() else {}
+                        kind = e.get("type")
+                        if kind == "started":
+                            run_id = str(e.get("run") or "")
+                        elif kind == "tool":
+                            ev(s, "tool", f"Claude Code: {e.get('name')}  {str(e.get('detail') or '')[:400]}")
+                        elif kind == "terminal_start":
+                            tid = f"hc-{e.get('id')}"
+                            commands[tid] = str(e.get("command") or "")
+                            ev(s, "terminal", "", tool_id=tid, command=f"[claude] {commands[tid]}"[:2000], status="running")
+                        elif kind == "tool_result" and f"hc-{e.get('id')}" in commands:
+                            tid = f"hc-{e.get('id')}"
+                            ran += 1
+                            ev(s, "terminal", e.get("output") or "", tool_id=tid, command=f"[claude] {commands[tid]}"[:2000],
+                               status="complete", exit_code=e.get("exit_code"), error="error" if e.get("error") else "")
+                        elif kind == "done":
+                            final = str(e.get("text") or "").strip()
+                        elif kind == "error":
+                            return {"text": f"error: Claude Code failed: {str(e.get('message') or '')[:2000]}"}
+    except httpx.ReadTimeout:
+        if run_id:
+            with suppress(httpx.HTTPError):
+                async with httpx.AsyncClient(timeout=10) as client:
+                    await client.post(HOSTCTL_URL + "/clis/stop", json={"run": run_id}, headers={"X-Hostctl-Secret": HOSTCTL_SECRET})
+        return {"text": f"error: Claude Code took longer than {timeout} s and was stopped; give a smaller task or a longer --timeout"}
+    except httpx.HTTPError as exc:
+        return {"text": f"error: the host helper (bunny-hostctl) isn't reachable ({exc})"}
+    return {"text": (final or "(Claude Code finished without a reply)") + f"\n\n[Claude Code ran {ran} command(s) on the host]"}
+
+
 @app.post(p("/api/tool/{sid}/{name}"))
 async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
     s = tool_session(sid)
     args = await request.json() if request.headers.get("content-length", "0") != "0" else {}
     args = args if isinstance(args, dict) else {}
-    cfg = config.load()
+    cfg = session_cfg(s, config.load())
 
     def num(key: str, kind=float):
         value = args.get(key)
@@ -5900,15 +7093,19 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
                                                "compress_at", "tps", "prefill_tps", "ttfb", "model")} | {"t": now()}
         sessions.save(s["id"])
         return {"text": "ok"}
+    if (gate := project_gate(s, name, args)) is not None:
+        return {"text": gate}
     if name == "plan" or review_kinds(name, args) or args.get("approved"):
         if (gate := review_gate(s, name, args, cfg)) is not None:
             return {"text": gate}
     if (gate := ask_gate(s, name, args, cfg)) is not None:
         return {"text": gate}
+    if name in ("host", "host_claude"):
+        return await host_tool(s, name, args, cfg)
     if name == "status":
-        return {"text": json.dumps(await studios.status(allowed()), indent=1)}
+        return {"text": json.dumps(await studios.status(allowed() & {k for k, on in cfg["services"].items() if on}), indent=1)}
     if name == "options":
-        out = await studios.options(allowed())
+        out = await studios.options(allowed() & {k for k, on in cfg["services"].items() if on})
         out["default_video_preset"] = cfg["vid_preset"] or "(Vid defaults)"
         out["default_models"] = {kind: cfg[f"{kind}_model"] for kind in ("video", "voice", "image", "music")}
         return {"text": json.dumps(out, indent=1)}
@@ -5931,6 +7128,43 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
         return {"text": "\n".join(f"{a['ref']}: {a['kind']} \"{a['name']}\" ({a['size'] // 1024} KB) · file {a['hermes_path']}"
                                   + (" · in Vid as " + a["studio"]["Vid-refs"].get("token", "") if a.get("studio", {}).get("Vid-refs") else "")
                                   for a in items) or "The user hasn't attached anything in this session."}
+    if name == "source":
+        pr = projects.items.get(s.get("project") or "")
+        if not pr:
+            return {"text": "error: this chat isn't in a project"}
+        ref = str(args.get("ref") or "").strip().lower()
+        src = next((a for a in pr["sources"] if a["ref"] == ref), None)
+        if not src:
+            return {"text": f"error: no source {ref} (this project has: {', '.join(a['ref'] for a in pr['sources']) or 'none'})"}
+        have = next((a for a in s.get("attachments") or [] if a.get("source_id") == src["id"]), None)
+        try:
+            a = have or link_source(s, src)
+        except (OSError, ValueError) as exc:
+            return {"text": f"error: {exc}"}
+        return {"text": f"{ref} is {a['ref']} in this chat ({a['kind']} \"{a['name']}\"); pass it with --ref {a['ref']}."}
+    if name == "agentic_edit":
+        prior = next((j for j in s["jobs"] if j["ref"] == str(args.get("ref") or "").lower() and j.get("kind") == "agentic"), None)
+        if not prior:
+            return {"text": f"error: {args.get('ref') or '(no ref)'} isn't one of your Agentic jobs"}
+        clips = [int(x) for x in re.findall(r"\d+", str(args.get("clips") or ""))]
+        scope = str(args.get("scope") or "clip")
+        notes = str(args.get("notes") or "").strip()
+        if scope == "future" and not clips:     # only a lasting direction: nothing renders, so no job to track
+            try:
+                await studios.agentic_edit(prior["session_id"], [], notes, scope)
+            except studios.StudioError as exc:
+                return {"text": f"error: Vid refused the change: {exc}"}
+            ev(s, "system", f"Lasting direction for {prior['ref']}'s next clips: {notes[:200]}", job=prior["ref"])
+            return {"text": f"Saved as a standing direction: every clip of {prior['ref']} not written yet follows it (later batches, "
+                            "or the next `agentic --resume`). Nothing re-renders now."}
+        text = await submit(s, "Vid", f"Edit {prior['ref']} clip(s) {','.join(map(str, clips)) or '-'} ({scope}): {notes}",
+                            lambda: studios.agentic_edit(prior["session_id"], clips, notes, scope), kind="agentic", model=prior.get("model") or "")
+        if text.startswith("error") and "already" not in text:
+            return {"text": text}
+        if text.startswith("started"):
+            return {"text": text + f" It re-renders the clip(s) in {prior['ref']}'s session (later clips that continue from an edited "
+                    "clip are re-rendered from its new last frame); onward/future changes also steer every later batch."}
+        return {"text": text}
     if name in ("video", "agentic"):
         prompt = str(args.get("prompt") or "").strip()
         if not prompt:
@@ -5989,7 +7223,7 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
             for index, ref in enumerate(ref_names, 1):
                 record = await attachment_in(s, ref, "Krea")
                 references.append({"enabled": True, "image": record["image"], "strength": 1.0})
-                prompt = re.sub(r"\{\s*" + re.escape(ref) + r"\s*\}", f"reference image {index}", prompt, flags=re.I)
+                prompt = re.sub(r"\{\{\s*" + re.escape(ref) + r"\s*\}\}|\{\s*" + re.escape(ref) + r"\s*\}", f"reference image {index}", prompt, flags=re.I)
         except studios.StudioError as exc:
             return {"text": f"error: {exc}"}
         image_model = str(args.get("model") or cfg["image_model"])
@@ -6085,7 +7319,7 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
         if j["state"] in studios.DONE:
             return {"text": f"{ref} already {j['state']}"}
         ev(s, "warn", f"Master Agent cancelled {ref}")
-        asyncio.create_task(cancel_and_settle(s, j, restart=False))   # forced if the studio can't, so wait never hangs
+        spawn(cancel_and_settle(s, j, restart=False))   # forced if the studio can't, so wait never hangs
         return {"text": f"cancel requested for {ref}"}
     if name == "goal":
         g = s.get("goal")
@@ -6127,8 +7361,14 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
         return {"text": await upload_tool(s, args, cfg)}
     if name == "scout":
         return {"text": await scout_tool(s, args, cfg)}
+    if name == "act":
+        return {"text": await act_tool(s, args, cfg)}
+    if name == "look":
+        return {"text": await look_tool(s, args, cfg)}
     if name == "accounts":
         return {"text": accounts_text()}
+    if name == "emails":
+        return {"text": emails_text()}
     if name == "guide":
         topic = str(args.get("topic") or "h3")
         if topic not in ("h3",):
@@ -6175,11 +7415,23 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
         s.update(asked=question, asked_t=now(), asked_choices=choices)
         ev(s, "ask", question, choices=choices)
         minutes = cfg.get("auto_answer") or 0
-        asyncio.create_task(notify(s, "question", "The Master Agent has a question",
+        spawn(notify(s, "question", "The Master Agent has a question",
                                    (question[:160] + (f" (it picks the best answer itself in {minutes} min if you don't reply)" if minutes else ""))))
         return {"text": "Shown to the user" + (f" with {len(choices)} choices" if choices else "") + ". End your turn now with no "
                         "further text; their answer arrives as the next message." + (" Your jobs keep rendering meanwhile." if unfinished(s) else "")
                         + (f" If they don't answer within {minutes} min you are asked to decide it yourself." if minutes else "")}
+    if name == "offer":
+        choices = [c.strip()[:120] for c in re.split(r"[;|\n]", str(args.get("choices") or "")) if c.strip()][:6]
+        if not choices:
+            return {"text": "error: give at least one choice with --choices \"A; B\""}
+        offer = {"text": str(args.get("text") or "").strip()[:300], "choices": choices}
+        offers = [o for o in s.get("offers") or [] if o["text"] != offer["text"] or not offer["text"]]   # same line again: replaces it
+        if len(offers) >= MAX_OFFERS:
+            return {"text": f"error: a reply can carry at most {MAX_OFFERS} offers; fold these choices into one of them"}
+        s["offers"] = offers + [offer]
+        sessions.save(s["id"])
+        return {"text": f"Queued offer {len(s['offers'])} ({len(choices)} optional button(s)); every offer appears as its own row under your "
+                        "final reply when this turn ends. Don't wait for them or mention that you're waiting: carry on and finish your reply as usual."}
     if name == "reamod":
         action, mod = str(args.get("action") or "status"), str(args.get("mod") or "")
         if not re.fullmatch(r"[0-9a-f]{12}", mod):
@@ -6262,7 +7514,7 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
         if perm(cfg, "files") == "none":
             return {"text": "error: the Files permission is off (Settings → Agentic)"}
         try:
-            a, text = await grab_file(s, str(args.get("url") or ""), str(args.get("name") or ""))
+            a, text = await grab_file(s, str(args.get("url") or ""), str(args.get("name") or ""), str(args.get("local") or ""))
         except ValueError as exc:
             return {"text": f"error: {exc}"}
         ev(s, "say", f"Grabbed {a['name']}" + (f": {str(args.get('caption'))[:300]}" if args.get("caption") else ""),
@@ -6293,7 +7545,7 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
                                     "they can run /browser connect or switch Image search to headless in Settings → Agentic."}
             url = engine["url"].format(q=quote_plus(query))
             return {"text": f"Image search is set to the live browser ({engine['label']}): {browser_line(state)}\n"
-                            f"Open {url} with your browser tools (browser_navigate), look at the results, click a big clean one "
+                            f"Open {url} with your browser tool (browser_exec, or browser_navigate on older Hermes), look at the results, click a big clean one "
                             "of the subject alone (the most detailed, highest-quality picture, whatever its style; skip tiny sprites, pixel art and thumbnails unless asked) and take its ORIGINAL "
                             f"image URL (the full-size view's 'Visit'/'View image' link, at least {min_side}px), then "
                             "`$R grab URL --name NAME` and look at it with your vision tool. Never guess image URLs."}
@@ -6387,7 +7639,7 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
             s["optimizer_run"] = reply["id"]
             s["wait_requested"] = True
             if s.get("run_id"):
-                asyncio.create_task(yield_for_optimizer(s, s["run_id"], reply["id"]))
+                spawn(yield_for_optimizer(s, s["run_id"], reply["id"]))
             ev(s, "system", f"Started llama.cpp optimization for {model}; baseline is saved before benchmarking")
             return {"text": json.dumps(reply, indent=2) + "\nRun `$R wait` and END YOUR TURN now. "
                     "Do not use terminal sleep or poll status. The model unloads and the benchmark gets the GPU only after your turn ends."}

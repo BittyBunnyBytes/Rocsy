@@ -1,9 +1,39 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+import re
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+# What ComfyUI's SaveAudioAdvanced encodes (comfy_extras/nodes_audio.py). FLAC is the default: lossless and plays everywhere.
+DEFAULT_AUDIO_FORMAT = "flac"
+AUDIO_QUALITIES = {"flac": (), "mp3": ("V0", "128k", "320k"), "opus": ("64k", "96k", "128k", "192k", "320k")}
+DEFAULT_AUDIO_QUALITY = {"flac": "V0", "mp3": "V0", "opus": "128k"}
+AUDIO_FORMAT_ALIASES = {"wav": "flac", "wave": "flac", "alac": "flac", "aiff": "flac", "lossless": "flac", "mpeg": "mp3",
+                        "mpga": "mp3", "m4a": "mp3", "aac": "mp3", "ogg": "opus", "oga": "opus", "webm": "opus"}
+
+
+def pick_audio_format(value: Any) -> str:
+    """A format we can encode, whatever was asked for: an equivalent, else the default."""
+    name = str(value or "").strip().lower().lstrip(".").rsplit("/", 1)[-1]
+    name = AUDIO_FORMAT_ALIASES.get(name, name)
+    return name if name in AUDIO_QUALITIES else DEFAULT_AUDIO_FORMAT
+
+
+def pick_audio_quality(output_format: str, value: Any) -> str:
+    """The asked quality when this format has it, else the next higher bitrate, else the format's default."""
+    choices = AUDIO_QUALITIES[output_format]
+    text = str(value or "").strip()
+    for choice in choices:
+        if text.lower() == choice.lower():
+            return choice
+    found = re.fullmatch(r"(\d+)\s*k?(?:bps|b/s)?", text.lower())
+    if found:
+        rates = [choice for choice in choices if choice.endswith("k")]
+        wanted = int(found.group(1))
+        return next((rate for rate in rates if int(rate[:-1]) >= wanted), rates[-1] if rates else DEFAULT_AUDIO_QUALITY[output_format])
+    return DEFAULT_AUDIO_QUALITY[output_format]
 
 
 # YuE2GenerateMusic's own schema allows max_duration in [0.04, 900.0] seconds
@@ -17,10 +47,19 @@ MIN_SEED = 0
 MAX_SEED = 0xFFFFFFFFFFFFFFFF
 
 
+class LoraChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file: str = Field(min_length=1, max_length=400)      # path under ComfyUI's models/loras
+    strength: float = Field(default=1.0, ge=-2.0, le=2.0)
+
+
 class GenerationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: Literal["yue2", "minimax_music3"] = "yue2"
+    # LoRA gallery picks, applied in order (YuE2: model + CLIP, the AR lives on the CLIP side; MiniMax: model only).
+    loras: list[LoraChoice] = Field(default_factory=list, max_length=4)
     style: str = Field(min_length=1, max_length=4_000)
     lyrics: str = Field(default="", max_length=20_000)
     seed: int | None = Field(default=None, ge=MIN_SEED, le=MAX_SEED)
@@ -70,6 +109,18 @@ class GenerationRequest(BaseModel):
     minimax_cfg: float = Field(default=1.7, ge=0.0, le=30.0)
     minimax_tiled_decode: bool = True
 
+    # Remix: the same song with new words. score_abc = the finished song's score, sung as is; without a saved
+    # score, score_lyrics = the words that score was composed from (same seed and settings write it again).
+    score_abc: str = Field(default="", max_length=200_000)
+    score_lyrics: str = Field(default="", max_length=20_000)
+    remix_of: str = Field(default="", max_length=64)
+
+    # A custom voice from RSP's library sings the finished YuE2 song.
+    voice_id: str = Field(default="", pattern=r"^([a-f0-9]{16})?$")
+    voice_strength: float = Field(default=100.0, ge=0.0, le=100.0)
+    voice_semitones: int = Field(default=0, ge=-24, le=24)
+    conversion_steps: int = Field(default=40, ge=4, le=100)
+
     @field_validator("style")
     @classmethod
     def style_not_blank(cls, value: str) -> str:
@@ -99,14 +150,23 @@ class GenerationRequest(BaseModel):
             raise ValueError("Enter a YouTube URL beginning with http:// or https://.")
         return value
 
-    @field_validator("output_quality")
+    @model_validator(mode="before")
     @classmethod
-    def valid_quality_for_format(cls, value: str, info) -> str:
-        output_format = info.data.get("output_format")
-        valid = {"V0", "128k", "320k"} if output_format == "mp3" else {"64k", "96k", "128k", "192k", "320k"} if output_format == "opus" else set()
-        if valid and value not in valid:
-            raise ValueError(f"Choose an audio quality supported by {output_format.upper()}.")
-        return value
+    def usable_audio_encoding(cls, data: Any) -> Any:
+        """The form, retries, saved Agentic settings and agents can all send a stale or wrong encoding:
+        never fail a render over it, encode with the closest supported choice."""
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        for alias in ("format", "audio_format", "encoding"):
+            if alias in data:
+                data.setdefault("output_format", data.pop(alias))
+        for alias in ("quality", "audio_quality", "bitrate"):
+            if alias in data:
+                data.setdefault("output_quality", data.pop(alias))
+        data["output_format"] = pick_audio_format(data.get("output_format"))
+        data["output_quality"] = pick_audio_quality(data["output_format"], data.get("output_quality"))
+        return data
 
 
 class Job(BaseModel):

@@ -77,6 +77,16 @@ class InstallerTests(unittest.TestCase):
         return self.module.install({'destination': str(self.root / 'installed'), 'comfy_root': '', 'mode': 'install',
                                     'password_mode': 'custom', 'new_password': 'ChosenPassword123', **payload})
 
+    def test_image_lora_folder_is_writable_by_image_and_models_hub(self):
+        m = self.module
+        with patch.object(m, 'run_command') as run:
+            m.prepare_bind_mount_permissions(self.root, False, lambda *_: None)
+        commands = [call.args[0] for call in run.call_args_list]
+        matches = [c for c in commands if c[-3:] == ['krea', '777', '/models/loras/KreaCustom']]
+        self.assertEqual(len(matches), 1, commands)
+        self.assertEqual(matches[0][matches[0].index('--entrypoint') + 1], 'chmod')
+        self.assertEqual(matches[0][matches[0].index('--user') + 1], '0')
+
     def test_ubuntu_installs_missing_packages(self):
         missing = dict(python=True, docker=False, compose=False, buildx=False, daemon=False)
         ready = dict(python=True, docker=True, compose=True, buildx=True, daemon=True)
@@ -226,8 +236,11 @@ class InstallerTests(unittest.TestCase):
         commands = [call.args[0] for call in run.call_args_list]
         self.assertEqual(commands[0], ['docker', 'compose', 'build'])
         self.assertTrue((destination / 'install.log').is_file())
+        # bunny-lock is distroless (no chown) and runs as ROCSY_UID: its folder is made on the host instead.
+        self.assertFalse(any(command[:3] == ['docker', 'compose', 'run'] and 'lock' in command for command in commands))
+        self.assertTrue((destination / 'BunnyBytes/lock/data').is_dir())
         self.assertIn(['docker', 'compose', 'run', '--rm', '--no-deps', '--user', '0',
-                       '--entrypoint', 'chown', 'lock', '-R', 'bunnylock:bunnylock', '/app/data'], commands)
+                       '--entrypoint', 'chown', 'gateway', '-R', 'bunnygate:bunnygate', '/app/data'], commands)
         self.assertEqual(commands[-1], ['docker', 'compose', 'up', '-d'])
         self.assertEqual(run.call_args.kwargs['cwd'], destination / 'BunnyBytes')
         self.assertEqual(result['url'], 'http://127.0.0.1:8080/')
@@ -321,6 +334,32 @@ class InstallerTests(unittest.TestCase):
         supervisor.assert_called_once()
         self.assertEqual([(r['name'], r['ok']) for r in results], [('yt-dlp', False), ('ComfyUI', True), ('Hermes Agent', True)])
         self.assertIn('COMPOSE_PROFILES=motion,hermes\n', (dest / 'BunnyBytes/.env').read_text())
+
+    def test_music_covers_run_after_comfyui_and_need_it(self):
+        m = self.module
+        dest = self.root / 'installed'
+        (dest / 'BunnyBytes').mkdir(parents=True)
+        (dest / 'BunnyBytes/.env').write_text('COMPOSE_PROFILES=motion\n')
+        chosen = {**m.COMPONENTS, 'hermes': False, 'ytdlp': False, 'music': True}
+        jobs = []
+        with patch.object(m, 'run_backend_job', side_effect=lambda _d, name, *_a: jobs.append(name)), \
+             patch.object(m, 'setup_comfyui'), patch.object(m, 'setup_h3', return_value=[]), \
+             patch.object(m, 'setup_supervisor'), patch.dict(os.environ), \
+             patch.object(m.comfyinstall, 'ready', return_value=True):
+            results = m.install_backends(dest, dest / 'external/ComfyUI', False, chosen, False, lambda *_: None)
+            self.assertEqual(os.environ['CORE_COMFY_DIR'], str(dest / 'external/ComfyUI'))
+        self.assertEqual(jobs, ['rsp-install'])
+        self.assertEqual([(r['name'], r['ok']) for r in results], [('ComfyUI', True), ('Music covers', True)])
+        jobs.clear()
+        with patch.object(m, 'run_backend_job', side_effect=lambda _d, name, *_a: jobs.append(name)), \
+             patch.object(m.comfyinstall, 'ready', return_value=False):
+            results = m.install_backends(dest, dest / 'external/ComfyUI', False, {**chosen, 'comfyui': False},
+                                         False, lambda *_: None)
+        self.assertEqual(jobs, [])
+        self.assertEqual([(r['name'], r['ok']) for r in results], [('Music covers', False)])
+        (dest / 'core-backend-extras').mkdir()
+        (dest / 'core-backend-extras/rsp.json').write_text('{"phase": "ready"}')
+        self.assertTrue(m.current_components(dest)['music'])
 
     def test_existing_comfyui_only_gets_the_supervisor(self):
         m = self.module
@@ -477,14 +516,15 @@ class InstallerTests(unittest.TestCase):
 
     def test_customize_asks_every_step(self):
         answers = ['c', str(self.root / 'custom'), '',          # customize, folder, ComfyUI folder
-                   '', 'y', 'n', 'n', '', 'n',                  # motion, rea, trainer, comfyui, hermes, ytdlp
+                   '', 'y', 'n', 'n', '', 'n', 'y',             # motion, rea, trainer, comfyui, hermes, ytdlp, music
                    'y',                                         # a password (typed below)
                    'n', '', 'y', '', '',                        # desktop app, rocsy cmd, launcher, helper, system upgrade
                    '']                                          # start now
         code, install = self.terminal_run({}, answers=answers, secrets=['Secret-pass1', 'Secret-pass1'])
         self.assertEqual(code, 0)
         payload = install.call_args.args[0]
-        self.assertEqual(payload['components'], {'motion': True, 'rea': True, 'trainer': False, 'comfyui': False, 'hermes': True, 'ytdlp': False})
+        self.assertEqual(payload['components'], {'motion': True, 'rea': True, 'trainer': False, 'comfyui': False, 'hermes': True, 'ytdlp': False,
+                                                'music': True})
         self.assertEqual((payload['new_password'], payload['desktop_app'], payload['desktop_launcher'], payload['allow_system_upgrade']),
                          ('Secret-pass1', False, True, False))
 

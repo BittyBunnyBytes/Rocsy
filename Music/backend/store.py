@@ -39,6 +39,12 @@ class Store:
                 self._conn.execute("ALTER TABLE jobs ADD COLUMN lock_token TEXT")
             if "queue_entry_id" not in columns:
                 self._conn.execute("ALTER TABLE jobs ADD COLUMN queue_entry_id TEXT")
+            if "result_json" not in columns:
+                self._conn.execute("ALTER TABLE jobs ADD COLUMN result_json TEXT")
+            if "lyric_timings" not in columns:
+                self._conn.execute("ALTER TABLE jobs ADD COLUMN lyric_timings TEXT")
+            if "timings" not in columns:
+                self._conn.execute("ALTER TABLE jobs ADD COLUMN timings TEXT")
 
     def create_job(self, item: dict[str, Any]) -> None:
         with self._lock, self._conn:
@@ -53,7 +59,7 @@ class Store:
             )
 
     def update_job(self, job_id: str, **changes: Any) -> None:
-        allowed = {"prompt_id", "state", "started_at", "completed_at", "output_path", "error", "progress", "lock_token", "queue_entry_id"}
+        allowed = {"prompt_id", "state", "started_at", "completed_at", "output_path", "error", "progress", "lock_token", "queue_entry_id", "timings", "result_json", "lyric_timings"}
         values = {key: value for key, value in changes.items() if key in allowed}
         if not values:
             return
@@ -90,12 +96,13 @@ class Store:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def delete_unfinished_jobs(self) -> int:
+    def delete_unfinished_jobs(self, keep: set[str] | frozenset[str] = frozenset()) -> int:
+        # keep: jobs waiting for the GPU with a saved submission (they survive a restart).
         placeholders = ", ".join("?" for _ in UNFINISHED_JOB_STATES)
         with self._lock, self._conn:
             cursor = self._conn.execute(
-                f"DELETE FROM jobs WHERE state IN ({placeholders})",
-                UNFINISHED_JOB_STATES,
+                f"DELETE FROM jobs WHERE state IN ({placeholders}) AND id NOT IN ({', '.join('?' for _ in keep)})",
+                (*UNFINISHED_JOB_STATES, *keep),
             )
         return cursor.rowcount
 

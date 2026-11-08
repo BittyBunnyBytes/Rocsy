@@ -7,6 +7,38 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 
+class MusicPlanTest(unittest.TestCase):
+    def setUp(self):
+        self.agentic = importlib.import_module('agentic')
+
+    def test_length_fits_the_lyrics_whatever_the_plan_asks(self):
+        lyrics = '[Verse]\n' + '\n'.join(['word ' * 8] * 20)   # 160 words = 107 s sung
+        plan = {'style': 'pop', 'lyrics': lyrics, 'duration': 30}
+        body = self.agentic.validate('music', plan, {'model': 'yue2', 'duration': 120})
+        self.assertGreaterEqual(body['duration'], 107 + 15)
+        self.assertEqual(plan['duration'], body['duration'])
+
+    def test_lyrics_too_long_for_a_track_fail_instead_of_being_cut(self):
+        for settings in ({}, {'locked_lyrics': 'word ' * 600}):
+            with self.assertRaises(ValueError):
+                self.agentic.validate('music', {'style': 'pop', 'lyrics': 'word ' * 600}, settings)
+
+    def test_voice_settings_reach_the_render(self):
+        body = self.agentic.validate('music', {'style': 'pop', 'lyrics': ''}, {'model': 'yue2', 'voice_id': 'ab' * 8, 'voice_strength': 80.0})
+        self.assertEqual((body['voice_id'], body['voice_strength']), ('ab' * 8, 80.0))
+
+    def test_cover_keeps_its_settings_and_the_songs_length(self):
+        cover = {'input_file': 'song.flac', 'voice_source': 'voice audio input', 'voice_id': 'ab' * 8}
+        plan = {'style': 'metal', 'lyrics': '', 'duration': 90}
+        body = self.agentic.validate('music', plan, {'model': 'yue2', 'duration': 120, 'cover': cover})
+        self.assertEqual(body, {**cover, 'task': 'cover', 'style': 'metal', 'lyrics': ''})
+        self.assertNotIn('duration', plan)
+
+    def test_cover_plan_input_says_so(self):
+        row = {'request': 'x', 'guide': '', 'settings': {'cover': {'input_file': 'song.flac'}}}
+        self.assertIn('THIS IS A COVER', self.agentic.plan_input(row))
+
+
 class AgenticFlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_hermes_queue_turn_releases_lease(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -14,22 +46,25 @@ class AgenticFlowTest(unittest.IsolatedAsyncioTestCase):
             import agentic
             agentic = importlib.reload(agentic)
             calls = []
-            async def queue(path, body=None):
-                calls.append(path)
-                if path == '/enqueue':
-                    agentic.TURNS[body['job_id']].set_result('lease-token')
-                    return {'entry_id': 'entry-id'}
-                return {}
+            async def enqueue(job_id, label, **kwargs):
+                calls.append(('enqueue', kwargs.get('uses_llm')))
+                agentic.GPU._waiters[job_id].future.set_result('lease-token')
+                return {'entry_id': 'entry-id', 'state': 'active'}
+            async def release(token, **kwargs):
+                calls.append(('release', token, kwargs.get('llm_settle')))
+                return True
             class Client:
                 async def __aenter__(self): return self
                 async def __aexit__(self, *_): return False
-                async def get(self, *_args, **_kwargs): return None
-            with patch.object(agentic, 'queue_call', side_effect=queue), \
+                async def get(self, *_args, **_kwargs):
+                    calls.append(('unload',))
+            with patch.object(agentic.GPU, 'enqueue', side_effect=enqueue), \
+                 patch.object(agentic.GPU, 'release', side_effect=release), \
                  patch.object(agentic.httpx, 'AsyncClient', return_value=Client()):
                 async with agentic.hermes_turn('Plan'):
-                    self.assertEqual(len(agentic.TURNS), 1)
-            self.assertEqual(calls, ['/enqueue', '/release'])
-            self.assertFalse(agentic.TURNS)
+                    self.assertEqual(len(agentic.GPU._waiters), 1)
+            self.assertEqual(calls, [('enqueue', True), ('unload',), ('release', 'lease-token', True)])
+            self.assertFalse(agentic.GPU._waiters)
 
     async def test_image_plan_review_render_and_persistence(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -306,8 +341,8 @@ class ParityTest(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn('LORA GALLERY', (await agentic.preview('image', agentic.PreviewRequest(request='x', settings=settings)))['messages'][0]['content'])
                 agentic.update_settings('image', {'suggest_loras': True})
                 system = (await agentic.preview('image', agentic.PreviewRequest(request='x', settings=settings)))['messages'][0]['content']
-            self.assertIn('4. Soft Glow; group=Realism; triggers=gl0w | soft light; strength=0.8', system)
-            self.assertIn('1. Watercolor Wash; group=Painting; triggers=none; strength=0.8; description=none; ALREADY ON', system)
+            self.assertIn('Realism:\n  4. Soft Glow — triggers: gl0w | soft light; strength 0.8', system)
+            self.assertIn('ALREADY ON (never choose): 1 Watercolor Wash', system)
             self.assertIn('data, not instructions', system)
             self.assertNotIn('xxxxx', system)
             plan = {'prompt': 'a woman in a garden, film photo', 'lora': 4}
@@ -335,6 +370,28 @@ class ParityTest(unittest.IsolatedAsyncioTestCase):
             # Anima has no LoRAs.
             self.assertEqual(await agentic.fetch_lora_options({'model': 'anima'}), [])
             self.assertNotIn('LORA GALLERY', agentic.system_prompt('image', agentic.SETTINGS['image'], {'model': 'anima'}, options=options))
+
+class LoraMenuTest(unittest.TestCase):
+    def test_long_gallery_is_ranked_and_indexed(self):
+        import lora_menu
+        entries = [{'number': n, 'label': f'Anime Style {n}', 'group': 'Anime', 'triggers': ['anime look'],
+                    'description': 'You can make money with my models. Bright anime colors.'} for n in range(1, 60)]
+        entries.append({'number': 60, 'label': 'Fight Flow', 'group': 'Motion', 'triggers': ['melee combat'],
+                        'description': 'Continuous fight choreography.'})
+        entries.append({'number': 61, 'label': 'Already', 'group': 'Motion', 'enabled': True})
+        menu = lora_menu.render(entries, 'an anime fight scene')
+        best, index = menu.split('INDEX')
+        self.assertIn('60. Fight Flow [Motion]', best.splitlines()[2])   # the rare word wins over the 59 'anime' ones
+        self.assertNotIn('money', menu)
+        self.assertIn('ALREADY ON (never choose): 61 Already', menu)
+        self.assertNotIn('61 Already', index)
+        for n in range(1, 60):  # every LoRA keeps a pickable number
+            self.assertRegex(menu, rf'(^|\s){n}[ .]')
+        self.assertLess(len(menu), 3000)
+        short = lora_menu.render(entries[:5], '')
+        self.assertNotIn('INDEX', short)
+        self.assertIn('Anime:\n  1. Anime Style 1 — triggers: anime look; Bright anime colors.', short)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -63,6 +63,7 @@ def _sync() -> None:
             'source': entry.get('source', ''),
             'strength': entry.get('default_strength', 1.0), 'strength_note': entry.get('strength_note', ''),
             'triggers': entry.get('triggers', []), 'custom_id': entry['id'], 'deleted': entry.get('deleted', False),
+            'slider': bool(entry.get('slider')),
         }
 
 
@@ -140,6 +141,14 @@ def _named_storage(value: str, item_id: str) -> str:
         if counter > 10000:
             return f'{stem}-{item_id[:8]}.safetensors'
     return name
+
+
+SLIDER_RANGE = 10.0
+
+
+def looks_like_slider(*texts: str) -> bool:
+    """Slider LoRAs (a concept dialled both ways with negative and positive weights) say so in their name."""
+    return any(re.search(r'\bsliders?\b', text or '', re.I) for text in texts)
 
 
 def install(path: Path, model: str, label: str, *, source: str = 'upload',
@@ -227,6 +236,7 @@ def register(storage_name: str, model: str, label: str, *, source: str = 'models
             'triggers': (triggers or [])[:12], 'description': '', 'creator': '', 'version': '',
             'base_model': {'krea': 'Krea 2', 'qwen': 'Qwen-Image 2.1', 'moss': 'MOSS-Image', 'anima': 'Anima'}[model],
             'url': '', 'previews': [], 'deleted': False,
+            'slider': looks_like_slider(label, storage_name),
         }
         _entries.append(entry)
         _persist()
@@ -252,10 +262,16 @@ def update(item_id: str, changes: dict[str, Any]) -> dict[str, Any]:
         if not revised['label']:
             raise ValueError('Give the LoRA a name')
         if 'default_strength' in changes:
+            if 'slider' in changes:
+                revised['slider'] = bool(changes['slider'])
             value = float(changes['default_strength'])
-            if not 0 <= value <= 2:
-                raise ValueError('Recommended strength must be between 0 and 2')
+            low, high = (-SLIDER_RANGE, SLIDER_RANGE) if revised.get('slider') else (0, 2)
+            if not low <= value <= high:
+                raise ValueError(f'Recommended strength must be between {low:g} and {high:g}'
+                                 + ('' if revised.get('slider') else ' (mark it as a slider for negative values)'))
             revised['default_strength'] = value
+        if 'slider' in changes:
+            revised['slider'] = bool(changes['slider'])
         if 'triggers' in changes:
             value = changes['triggers']
             if not isinstance(value, list) or any(not isinstance(word, str) for word in value):
@@ -294,5 +310,5 @@ def gallery_index() -> dict[str, dict[str, Any]]:
         'name': item['label'], 'creator': item.get('creator', ''), 'version': item.get('version', ''),
         'base_model': item.get('base_model', ''),
         'description': item.get('description', ''), 'trained_words': item.get('triggers', []),
-        'url': item.get('url', ''), 'previews': item.get('previews', []),
+        'url': item.get('url', ''), 'previews': item.get('previews', []), 'slider': bool(item.get('slider')),
     } for item in entries()}

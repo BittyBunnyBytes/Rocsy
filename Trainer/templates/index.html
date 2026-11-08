@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Trainer · BunnyBytes</title>
+  <title>Trainer · Rocsy</title>
   <link rel="stylesheet" href="{{ mount_prefix }}/static/trainer.css?v={{ asset_version }}">
   <!-- Installable (Home Screen) - iOS only allows web notifications for installed apps. -->
   <link rel="manifest" href="{{ mount_prefix }}/manifest.webmanifest">
@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-title" content="Trainer">
   <meta name="theme-color" content="#101619">
 </head>
-<body>
+<body data-base="{{ mount_prefix }}">
   <header class="topbar">
     <a class="brand" href="/">BunnyBytes <span>/ Trainer</span></a>
     <nav class="tabs" role="tablist">
@@ -22,6 +22,9 @@
       <button class="tab" role="tab" data-tab="loras" aria-selected="false">LoRA Gallery</button>
     </nav>
     <div class="topbar-right">
+      <button class="alerts-toggle" id="settings-toggle" type="button" aria-label="Trainer settings" title="Trainer settings: epoch cleanup">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></g></svg>
+      </button>
       <button class="alerts-toggle" id="alerts-toggle" type="button" aria-pressed="false" aria-label="Training alerts" title="Get a notification when a LoRA finishes training">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/></svg>
       </button>
@@ -32,21 +35,34 @@
     <section class="intro">
       <p class="eyebrow">LOCAL ROCm TRAINING</p>
       <h1>Train a LoRA</h1>
-      <p>Prepare a dataset folder, choose a model family, and submit a training run. Training jobs join BunnyBytes’ shared GPU queue.</p>
+      <p>Prepare a dataset folder, choose a model family, and submit a training run. Training jobs join Rocsy’s shared GPU queue.</p>
       <div class="notice"><strong>ROCm only.</strong> Trainer refuses to run without a visible HIP-enabled GPU. Every base model in ComfyUI's models folder is checked by its architecture, so models you install later show up here on their own.</div>
     </section>
 
     <div id="tab-train" class="tab-panel">
     <section class="panel setup-panel">
-      <div class="panel-heading"><div><h2>Trainer environments</h2><p>Four trainers cover every model family below. Install a missing one once; each keeps its own isolated ROCm environment.</p></div><button id="refresh-status" class="button secondary">Refresh</button></div>
-      <div id="backend-status" class="backend-grid"><p class="muted">Checking ROCm and trainer environments…</p></div>
-      <details class="other-models" id="other-models" hidden><summary></summary><ul></ul></details>
+      <div class="env-bar">
+        <strong class="env-title">Trainer environments</strong>
+        <div id="env-chips" class="env-chips" aria-live="polite"><span class="muted">Checking…</span></div>
+        <button id="env-toggle" class="button secondary env-btn" type="button" aria-expanded="false" aria-controls="env-details">Details</button>
+        <button id="refresh-status" class="button secondary env-btn" type="button" title="Check the environments again">↻</button>
+      </div>
+      <div id="env-details" class="env-details" hidden>
+        <p class="muted env-sub">Four trainers cover every model family below, plus the uncensor tools for chat models. Install a missing one once; each keeps its own isolated ROCm environment.</p>
+        <div id="backend-status" class="backend-grid"><p class="muted">Checking ROCm and trainer environments…</p></div>
+        <details class="other-models" id="other-models" hidden><summary></summary><ul></ul></details>
+      </div>
       <pre id="setup-log" class="log setup-log" hidden></pre>
     </section>
 
     <div class="columns">
       <section class="panel form-panel">
-        <div class="panel-heading"><div><h2>New training run</h2><p>Datasets are read from ~/AI/BunnyBytes/Datasets (manage them on the Datasets tab).</p></div></div>
+        <div class="panel-heading"><div><h2 id="run-title">New training run</h2><p id="run-sub">Datasets are read from ~/AI/BunnyBytes/Datasets (manage them on the Datasets tab).</p></div>
+          <div class="seg run-mode" role="tablist" aria-label="What to run">
+            <button type="button" class="seg-btn on" role="tab" data-mode="train" aria-selected="true">Train</button>
+            <button type="button" class="seg-btn" role="tab" data-mode="uncensor" aria-selected="false">Uncensor</button>
+          </div>
+        </div>
         <form id="job-form">
           <label>Model family
             <select name="model" id="model" required><option value="">Checking installed models…</option></select>
@@ -72,10 +88,10 @@
           </div>
           <label data-knob="trigger">Trigger word <span class="muted">(also put it in every caption)</span><input name="trigger" maxlength="64" placeholder="e.g. inkw4sh"></label>
           <label data-knob="base_model">Base model <span class="muted">(Hugging Face repo id or a folder in models/llm; not GGUF)</span>
-            <input name="base_model" list="llm-bases" maxlength="200" placeholder="e.g. Qwen/Qwen3.5-4B" autocomplete="off" spellcheck="false" data-preset>
+            <select id="base-select"><option value="">Checking installed chat models…</option></select>
+            <input name="base_model" maxlength="200" placeholder="HF repo id, e.g. Qwen/Qwen3.5-4B" autocomplete="off" spellcheck="false" data-preset hidden>
             <small id="base-note" class="slot-why" hidden></small>
           </label>
-          <datalist id="llm-bases"></datalist>
           <div id="train-check" class="train-check" hidden aria-live="polite"></div>
           <div class="row compact">
             <label data-knob="rank">LoRA rank
@@ -109,6 +125,13 @@
             </label>
             <label data-knob="steps">Training steps<input name="steps" type="number" min="1" max="100000" value="2000" data-preset></label>
             <label data-knob="learning_rate">Learning rate<input name="learning_rate" maxlength="16" placeholder="recipe" inputmode="decimal" data-preset></label>
+            <label data-knob="lr_schedule" title="Adaptive LR moves between the learning rate and 2× or 4× it as the loss plateaus or climbs">LR schedule
+              <select name="lr_schedule" data-preset>
+                <option value="" selected>Recipe default</option><option value="flat">Flat</option>
+                <option value="x2">Adaptive (LR…2× LR)</option><option value="x4">Adaptive (LR…4× LR)</option>
+              </select>
+            </label>
+            <label data-knob="max_seconds" title="Longest track used; longer ones are left out of the run (trim them into sections)">Max seconds<input name="max_seconds" type="number" min="10" max="300" value="60" data-preset></label>
             <label data-knob="repeats">Repeats<input name="repeats" type="number" min="1" max="100" value="1" data-preset></label>
             <label data-knob="max_length" title="Longest training example, in tokens; longer chats are cut">Context
               <select name="max_length" data-preset>
@@ -130,10 +153,33 @@
           <button class="button primary" type="submit" id="submit-job">Queue training run</button>
           <p id="form-message" class="form-message" role="status"></p>
         </form>
+        <form id="uncensor-form" hidden>
+          <div id="uncensor-env" class="family-status" aria-live="polite"></div>
+          <div class="row">
+            <label>Chat model <span class="muted">(HF repo id or a folder in models/llm; not GGUF)</span>
+              <select id="uncensor-base-select"><option value="">Loading chat models…</option></select>
+              <input name="base_model" maxlength="200" required placeholder="HF repo id, e.g. Qwen/Qwen3-4B-Instruct-2507" autocomplete="off" spellcheck="false" hidden>
+              <small id="uncensor-base-note" class="slot-why" hidden></small>
+            </label>
+            <label>Output name<input name="name" maxlength="64" required placeholder="my_model_uncensored"></label>
+          </div>
+          <fieldset class="method-cards">
+            <legend>Method</legend>
+            <label class="method-card"><input type="radio" name="method" value="heretic" checked>
+              <span><strong>Heretic</strong><em>Optimized · slower</em>
+              <small>Runs 100 trials that tune the refusal removal, keeping the model as close to the original as possible.</small></span></label>
+            <label class="method-card"><input type="radio" name="method" value="abliteration">
+              <span><strong>Abliteration</strong><em>Direct · faster</em>
+              <small>Measures the refusal direction from harmful vs harmless prompts and removes it from the weights in one pass.</small></span></label>
+          </fieldset>
+          <div class="hint">The original weights are never changed: a full Hugging Face model is saved in <code>data/output/&lt;job&gt;/model/</code>. When it finishes, <strong>Test refusals</strong> on its job card runs your prompts against it. Runs join the shared GPU queue; a chat model loaded in Llama stays loaded and may leave too little VRAM.</div>
+          <button class="button primary" type="submit" id="submit-uncensor">Queue uncensor job</button>
+          <p id="uncensor-message" class="form-message" role="status"></p>
+        </form>
       </section>
 
       <section class="panel jobs-panel">
-        <div class="panel-heading"><div><h2>Training jobs</h2><p>Logs are kept locally and survive service restarts.</p></div><button id="refresh-jobs" class="button secondary">Refresh</button></div>
+        <div class="panel-heading"><div><h2>Jobs</h2><p>Training, uncensor and refusal-test runs. Logs are kept locally and survive service restarts.</p></div><button id="refresh-jobs" class="button secondary">Refresh</button></div>
         <div id="jobs" class="jobs"><p class="muted">No training runs yet.</p></div>
       </section>
     </div>
@@ -164,7 +210,7 @@
         <div id="ds-view" hidden>
           <div class="ds-toolbar">
             <label class="button secondary ds-add" title="Or drop files anywhere on this panel. A .txt with the same name as a clip becomes its caption.">
-              <input type="file" id="ds-files" multiple accept=".mp4,.mov,.webm,.mkv,.jpg,.jpeg,.png,.webp,.wav,.flac,.m4a,.mp3,.ogg,.txt,.csv,.jsonl,.json,.md,.markdown,.tsv,.parquet">+ Add files
+              <input type="file" id="ds-files" multiple accept=".mp4,.mov,.webm,.mkv,.jpg,.jpeg,.png,.webp,.wav,.flac,.m4a,.mp3,.ogg,.txt,.lyrics,.lrc,.csv,.jsonl,.json,.md,.markdown,.tsv,.parquet">+ Add files
             </label>
             <label class="tr-check ds-autotrim-label" title="On: uploaded videos wait in 'Waiting to be trimmed' so you can trim them (or add them as-is) later. Off: videos go straight into the dataset."><input type="checkbox" id="ds-autotrim" checked> Hold videos for trimming</label>
             <form id="ds-youtube" class="ds-trigger" title="YouTube links download with yt-dlp (≤1080p). Links from any other site start Hermes, which gets the video (age gates, JavaScript players) using your Find clips model. Then the trimmer opens; the download is deleted after cutting.">
@@ -221,7 +267,6 @@
     </div>
     <p class="footer-note">ROCm backend training uses your AMD GPU. Keep the computer awake; stop/cancel a run before shutting it down.</p>
   </main>
-  <script>window.TRAINER_BASE = {{ mount_prefix|tojson }};</script>
   <script src="{{ mount_prefix }}/static/alerts.js?v={{ asset_version }}" defer></script>
   <script src="{{ mount_prefix }}/static/trainer.js?v={{ asset_version }}" defer></script>
   <script src="{{ mount_prefix }}/static/player.js?v={{ asset_version }}" defer></script>

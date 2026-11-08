@@ -40,7 +40,7 @@ import yaml
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from paths import HERMES_HOME
+from paths import COMPOSE_DIR, HERMES_HOME, PLUGINS_DIR
 from typing import Any
 
 import corebackend
@@ -51,6 +51,7 @@ import llama_hipblaslt
 import coreextras
 import reafolders
 import reamods
+import hostaccess
 import comfynodes
 import modelfind
 import storage
@@ -107,6 +108,111 @@ ITEMS: dict[str, dict[str, Any]] = {
                       "locked": "all"},
 }
 LOCK_ALL_REASON = "This page runs through it - manage it from a terminal"
+
+
+def plugin_items() -> dict[str, dict[str, Any]]:
+    """Containers of custom services: "container" in core-backend-extras/plugins/*/plugin.json
+    (see plugins/README.md). Never replaces a built-in entry."""
+    items: dict[str, dict[str, Any]] = {}
+    for manifest in sorted(PLUGINS_DIR.glob("*/plugin.json")):
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        name = data.get("container") if isinstance(data, dict) and data.get("enabled") is not False else None
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", name) or name in ITEMS:
+            continue
+        items[name] = {"kind": "container", "group": "Plugins", "name": str(data.get("name") or data.get("id") or name)[:40],
+                       "note": str(data.get("note") or "Custom service (plugin)")[:200]}
+    return items
+
+
+ITEMS.update(plugin_items())
+PLUGIN_ITEM_IDS = set(plugin_items())
+
+
+# ------------------------------------------------- plugin settings (Core Backend -> Plugins) --
+# The gateway validates a plugin.json against Rocsy's own names and paths, then hands it here,
+# because it only has the plugins folder read-only. Each save keeps the previous file as a backup.
+PLUGIN_FOLDER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+PLUGIN_BACKUPS_KEPT = 5
+
+
+def _refresh_plugin_items() -> None:
+    """A changed or new "container" shows up in Services without restarting the helper."""
+    global PLUGIN_ITEM_IDS
+    for name in PLUGIN_ITEM_IDS:
+        ITEMS.pop(name, None)
+    fresh = plugin_items()
+    ITEMS.update(fresh)
+    PLUGIN_ITEM_IDS = set(fresh)
+    with _items_cache_lock:
+        globals()["_items_cache"] = (0.0, [])
+
+
+def save_plugin_config(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    folder, data = str(body.get("folder") or ""), body.get("data")
+    if not PLUGIN_FOLDER.fullmatch(folder) or folder.startswith((".", "_")):
+        return 400, {"error": "Unknown plugin folder"}
+    target = PLUGINS_DIR / folder / "plugin.json"
+    if target.parent.resolve().parent != PLUGINS_DIR.resolve() or not target.is_file():
+        return 404, {"error": f"core-backend-extras/plugins/{folder}/plugin.json doesn't exist"}
+    if not isinstance(data, dict):
+        return 400, {"error": "plugin.json must be a JSON object"}
+    text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    if len(text) > 24000:
+        return 400, {"error": "plugin.json is too large"}
+    old = target.read_text(encoding="utf-8")
+    if old == text:
+        return 200, {"changed": False, "message": "Nothing changed"}
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    (target.parent / f"plugin.json.bak-{stamp}-settings").write_text(old, encoding="utf-8")
+    for stale in sorted(target.parent.glob("plugin.json.bak-*-settings"))[:-PLUGIN_BACKUPS_KEPT]:
+        stale.unlink(missing_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".plugin.json.")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, target)
+    log.info("Plugin %s: plugin.json saved from Core Backend", folder)
+    _refresh_plugin_items()
+    return 200, {"changed": True, "message": "Saved. Restart the gateway to apply it."}
+
+
+def save_plugin_icon(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """An icon picture next to plugin.json (checked by the gateway; re-checked here)."""
+    import base64
+    folder, name = str(body.get("folder") or ""), str(body.get("name") or "")
+    if not PLUGIN_FOLDER.fullmatch(folder) or folder.startswith((".", "_")) \
+            or not re.fullmatch(r"icon\.(png|svg|webp|jpg)", name):
+        return 400, {"error": "Bad icon upload"}
+    target = PLUGINS_DIR / folder / name
+    if target.parent.resolve().parent != PLUGINS_DIR.resolve() or not (target.parent / "plugin.json").is_file():
+        return 404, {"error": "No such plugin"}
+    try:
+        blob = base64.b64decode(str(body.get("data") or ""), validate=True)
+    except ValueError:
+        return 400, {"error": "Bad icon upload"}
+    if not blob or len(blob) > 512 * 1024:
+        return 413, {"error": "The picture is over 512 KB"}
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".icon.")
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(blob)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, target)
+    log.info("Plugin %s: icon %s saved from Core Backend", folder, name)
+    return 200, {"icon_file": name, "message": "Icon uploaded"}
+
+
+def apply_plugins() -> tuple[int, dict[str, Any]]:
+    """Restart the gateway so it re-reads every plugin.json. Delayed, so this reply gets back first."""
+    def restart() -> None:
+        time.sleep(1.5)
+        result = run("docker", "restart", "bunny-gateway", timeout=120)
+        if result.returncode != 0:
+            log.warning("Gateway restart for plugins failed: %s", (result.stderr or "").strip()[:300])
+    threading.Thread(target=restart, daemon=True).start()
+    return 202, {"message": "Restarting the gateway…"}
 
 
 # ---------------------------------------------------------------- helpers --
@@ -553,7 +659,10 @@ class Handler(BaseHTTPRequestHandler):
             return False
         raw_length = self.headers.get("Content-Length", "0")
         limit = (48 * 1024 * 1024 if self.path in ("/clis/run", "/clis/chat", "/providers/chat")
+                 else 2 * 1024 * 1024 if self.path == "/host/write"
                  else 16384 if self.path.startswith("/core/comfynodes/") or self.path == "/comfyui/profiles"
+                 else 32768 if self.path == "/plugins/config"
+                 else 768 * 1024 if self.path == "/plugins/icon"
                  else 8192)
         try:
             length = int(raw_length)
@@ -738,7 +847,7 @@ class Handler(BaseHTTPRequestHandler):
             status = 200
         except hermeslink.LinkError as exc:
             status, reply = 409, {"error": str(exc)}
-        except Exception as exc:
+        except Exception:
             log.exception("Hermes connection failed")
             status, reply = 500, {"error": "Could not configure the Hermes connection"}
         self._send(status, reply)
@@ -790,6 +899,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._stream_cli()
         if self.path == "/clis/stop":
             return self._send(200, {"stopped": codingclis.stop(str(self._small_json().get("run") or ""))})
+        if self.path in hostaccess.ROUTES:
+            # Rocsy Master Agent with Files: full (the Agent service checks the permission per call).
+            body = self._small_json()
+            log.info("host access %s: %s", self.path, str(body.get("command") or body.get("path") or "")[:200])
+            return self._send(*hostaccess.ROUTES[self.path](body))
         if self.path.startswith("/rea/mods/"):
             length = int(self.headers.get("Content-Length") or 0)
             try:
@@ -806,6 +920,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(*reafolders.handle("POST", self.path, body if isinstance(body, dict) else {}))
         if self.path.startswith("/gpu-tune/"):
             return self._send(*gputune.handle("POST", self.path, self._small_json()))
+        if self.path == "/plugins/config":
+            return self._send(*save_plugin_config(self._small_json()))
+        if self.path == "/plugins/icon":
+            return self._send(*save_plugin_icon(self._small_json()))
+        if self.path == "/plugins/apply":
+            return self._send(*apply_plugins())
         if self.path == "/uninstall/start":
             length = int(self.headers.get("Content-Length") or 0)
             try:

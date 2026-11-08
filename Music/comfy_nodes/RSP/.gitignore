@@ -1,0 +1,4 @@
+# Made by install.sh on each machine
+.venv/
+vendor/
+__pycache__/

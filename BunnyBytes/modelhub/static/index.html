@@ -211,11 +211,15 @@
           <button type="button" data-group="comfy" aria-pressed="false">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>
             <span><strong>ComfyUI</strong><small>Source, models &amp; nodes, FlashAttention</small></span></button>
-          <div class="core-nav-links" data-for="comfy"><button type="button" data-jump="core-comfy-card">ComfyUI source</button><button type="button" data-jump="comfy-setup-card">Models &amp; nodes</button><button type="button" data-jump="comfy-nodes-card">Custom nodes</button><button type="button" data-jump="core-flash-card">FlashAttention</button></div>
+          <div class="core-nav-links" data-for="comfy"><button type="button" data-jump="core-comfy-card">ComfyUI source</button><button type="button" data-jump="comfy-setup-card">Models &amp; nodes</button><button type="button" data-jump="comfy-nodes-card">Custom nodes</button><button type="button" data-jump="core-flash-card">FlashAttention</button><button type="button" data-jump="core-rsp-card">Music covers</button></div>
           <button type="button" data-group="apps" aria-pressed="false">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M16.5 13v7M13 16.5h7"/></svg>
             <span><strong>Agent &amp; apps</strong><small>Hermes, Remotion, REA</small></span></button>
           <div class="core-nav-links" data-for="apps"><button type="button" data-jump="core-hermes-card">Hermes</button><button type="button" data-jump="core-motion-card">Remotion</button><button type="button" data-jump="core-trainer-card">Trainer</button><button type="button" data-jump="core-ytdlp-card">yt-dlp</button><button type="button" data-jump="core-rea-card">REA</button></div>
+          <button type="button" data-group="plugins" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v5M15 2v5"/><path d="M6 7h12v4a6 6 0 0 1-12 0z"/><path d="M12 17v5"/></svg>
+            <span><strong>Plugins <span class="tab-badge blue" id="core-plugins-badge" hidden></span></strong><small>Your own services behind the Rocsy login</small></span></button>
+          <div class="core-nav-links" data-for="plugins"><button type="button" data-jump="core-plugins-card">Your plugins</button><button type="button" data-jump="core-plugins-guide">Add a plugin</button></div>
         </nav>
         <div class="core-groups">
           <div class="core-group" data-group="llm">
@@ -326,6 +330,11 @@
             <div class="card-body" id="core-flash"><p class="empty">Asking the host…</p></div>
           </div>
 
+          <div class="card core-card" id="core-rsp-card">
+            <div class="card-head"><div><h2>Music covers (RSP)</h2><p>What Music's covers and custom voices run on: the <a href="https://github.com/pytraveler/YuE2-ComfyUI" target="_blank" rel="noopener">YuE2-ComfyUI</a> pack, RSP (shipped with Music), RSP's Seed-VC voice converter and every model file a cover loads (about 15 GB). Files already in any ComfyUI model folder are used where they are; each download is resumed if interrupted and checked against its SHA-256. YuE2 and SheetSage2 weights are CC BY-NC 4.0 (non-commercial); Seed-VC and RSP are GPL-3.0.</p></div></div>
+            <div class="card-body" id="core-rsp"><p class="empty">Asking the host…</p></div>
+          </div>
+
           </div>
           <div class="core-group" data-group="apps" hidden>
           <div class="card core-card" id="core-hermes-card">
@@ -359,6 +368,54 @@
             </div>
           </div>
 
+          </div>
+          <div class="core-group" data-group="plugins" hidden>
+            <div class="card core-card" id="core-plugins-card">
+              <div class="card-head">
+                <div><h2>Plugins</h2><p>Web apps you run yourself, opened inside Rocsy at their own path with the Rocsy login, theme, top bar and icon. They live in <code>core-backend-extras/plugins</code> on this machine and never ship with Rocsy.</p></div>
+                <div class="head-actions"><button type="button" class="secondary-button" id="plugins-refresh">Check again</button></div>
+              </div>
+              <div class="card-body">
+                <div class="plugin-pending" id="plugin-pending" role="status" hidden>
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+                  <span><strong>Saved settings are waiting.</strong> Plugins are read when the gateway starts. Restarting it takes a few seconds and reloads this page.</span>
+                  <button type="button" class="primary-button" id="plugin-apply">Apply now</button>
+                </div>
+                <div class="plugin-summary" id="plugin-summary" hidden></div>
+                <p class="task" id="plugins-task" hidden></p>
+                <div class="plugin-grid" id="plugin-grid"><p class="empty">Asking the gateway…</p></div>
+                <div class="plugin-extra" id="plugin-off" hidden><h3>Turned off</h3><p>These have <code>"enabled": false</code> in their plugin.json. Remove that line and restart the gateway to bring one back.</p><div class="plugin-grid" id="plugin-off-grid"></div></div>
+                <div class="plugin-extra" id="plugin-broken" hidden><h3>Couldn’t load</h3><p>Fix the plugin.json, then restart the gateway.</p><div id="plugin-broken-list"></div></div>
+              </div>
+            </div>
+            <div class="card core-card" id="core-plugins-guide">
+              <div class="card-head"><div><h2>Add a plugin</h2><p>Quickest start: copy <code>core-backend-extras/plugins/example</code> (the Example plugin above, a complete working one) and change its id, path and port. Or from scratch, in three steps. Changes to plugin.json are picked up when the gateway restarts.</p></div></div>
+              <div class="card-body plugin-guide">
+                <ol class="plugin-steps">
+                  <li><strong>Make a folder with a plugin.json</strong><span>For example <code>core-backend-extras/plugins/notes/plugin.json</code>:</span>
+<pre class="core-log plugin-code">{
+  "id": "Notes",
+  "name": "Notes",
+  "note": "My notes app",
+  "path": "/Notes",
+  "upstream": "http://127.0.0.1:8123",
+  "health": "/Notes/api/health",
+  "container": "my-notes",
+  "color": "#4fcbdc",
+  "home": {"group": "Tools", "desc": "My notes app"}
+}</pre></li>
+                  <li><strong>Add its container (optional)</strong><span>Put a Compose service in the same folder and include it from <code>BunnyBytes/docker-compose.override.yml</code>. Use <code>network_mode: host</code> and bind to <code>127.0.0.1</code> so it is only reachable through Rocsy.</span>
+<pre class="core-log plugin-code">include:
+  - path: ../core-backend-extras/plugins/notes/compose.yml
+    project_directory: .</pre></li>
+                  <li><strong>Start it and restart the gateway</strong>
+<pre class="core-log plugin-code">cd BunnyBytes
+docker compose up -d --build my-notes
+docker compose up -d --no-deps --force-recreate gateway</pre></li>
+                </ol>
+                <p class="hint">Every key (paths, icons, GPU queue, theming, turning one off) is documented in <code>BunnyBytes/plugins/README.md</code>. Folders starting with <code>_</code> or <code>.</code> are ignored, so <code>_draft/</code> is a safe place to work.</p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -410,6 +467,108 @@
         <button type="submit" class="secondary-button" value="cancel">Cancel</button>
         <button type="submit" class="primary-button" id="move-go" value="go" disabled>Move</button>
       </div>
+    </form>
+  </dialog>
+  <dialog class="plugin-dialog" id="plugin-dialog" aria-labelledby="pd-title">
+    <form id="pd-form" novalidate>
+      <header class="pd-head">
+        <span class="plugin-icon" id="pd-icon"></span>
+        <div><h2 id="pd-title">Plugin settings</h2><p class="hint" id="pd-where"></p></div>
+        <button type="button" class="icon-button" id="pd-close" aria-label="Close">✕</button>
+      </header>
+      <div class="segmented pd-modes" role="tablist" aria-label="Edit as">
+        <button type="button" role="tab" aria-selected="true" data-pd-mode="form">Settings</button>
+        <button type="button" role="tab" aria-selected="false" data-pd-mode="json">plugin.json</button>
+      </div>
+      <div class="pd-body" id="pd-form-body">
+        <label class="pd-switch"><input type="checkbox" id="pd-enabled"><span><strong>Turned on</strong><small>Off keeps the folder and its data, but Rocsy stops routing to it.</small></span></label>
+        <fieldset><legend>General</legend>
+          <div class="pd-row">
+            <div class="field"><label for="pd-name">Name</label><input id="pd-name" maxlength="40" placeholder="Shown in the top bar and Services"></div>
+            <div class="field"><label for="pd-id">ID</label><input id="pd-id" maxlength="24" pattern="[A-Za-z][A-Za-z0-9]{1,23}" required><small class="hint">Also its GPU-queue app name. 2-24 letters/digits.</small></div>
+          </div>
+          <div class="field"><label for="pd-note">Description</label><input id="pd-note" maxlength="200" placeholder="One line about what it does"></div>
+        </fieldset>
+        <fieldset><legend>Connection</legend>
+          <div class="pd-row">
+            <div class="field"><label for="pd-path">Opens at</label><input id="pd-path" maxlength="33" placeholder="/Name"></div>
+            <div class="field"><label for="pd-upstream">Upstream URL</label><input id="pd-upstream" required placeholder="http://127.0.0.1:8123"></div>
+          </div>
+          <div class="pd-row">
+            <div class="field"><label for="pd-health">Health check path</label><input id="pd-health" placeholder="/Name/api/health"></div>
+            <div class="field"><label for="pd-container">Container</label><input id="pd-container" maxlength="63" placeholder="my-container (adds Start / Stop)"></div>
+          </div>
+          <label class="check"><input type="checkbox" id="pd-strip"> Remove the path before forwarding (the app doesn't serve under its own path)</label>
+          <label class="check"><input type="checkbox" id="pd-gpu"> Uses the shared GPU queue</label>
+        </fieldset>
+        <fieldset><legend>Look</legend>
+          <div class="pd-row pd-row-color">
+            <div class="field"><label for="pd-color-hex">Colour</label>
+              <div class="pd-color"><input type="color" id="pd-color" aria-label="Pick a colour"><input id="pd-color-hex" maxlength="7" placeholder="#a3b0bd"></div></div>
+            <label class="check pd-check-tall"><input type="checkbox" id="pd-themed"> Apply the Rocsy theme to its pages</label>
+          </div>
+          <div class="field"><span class="pd-label">Icon picture <small class="hint">PNG, SVG, WebP or JPEG up to 512 KB. Used in the top bar, browser tab, home card and here.</small></span>
+            <div class="pd-iconfile">
+              <span class="pd-iconfile-name" id="pd-iconfile-name">None: drawn from the SVG shapes below</span>
+              <input type="file" id="pd-iconfile-input" accept="image/png,image/svg+xml,image/webp,image/jpeg" hidden>
+              <button type="button" class="secondary-button" id="pd-iconfile-upload">Upload picture</button>
+              <button type="button" class="link-button" id="pd-iconfile-clear" hidden>Use shapes instead</button>
+            </div></div>
+          <div class="field" id="pd-icon-src-field"><label for="pd-icon-src">Icon shapes <small class="hint">SVG on a 24 px grid: path, circle, rect, ellipse, line, polyline, polygon, g</small></label>
+            <textarea id="pd-icon-src" rows="3" spellcheck="false"></textarea></div>
+        </fieldset>
+        <fieldset><legend>Updates</legend>
+          <div class="pd-row">
+            <div class="field"><label for="pd-version">Installed version</label><input id="pd-version" maxlength="40" placeholder="1.0.0"></div>
+            <div class="field"><label for="pd-upd-source">Check for updates at</label>
+              <select id="pd-upd-source">
+                <option value="none">Don't check</option>
+                <option value="github">GitHub releases</option>
+                <option value="url">A release feed (JSON URL)</option>
+              </select></div>
+          </div>
+          <div class="field" id="pd-upd-github-field" hidden><label for="pd-upd-github">GitHub repository</label><input id="pd-upd-github" placeholder="owner/repo or https://github.com/owner/repo">
+            <small class="hint">Uses the latest release, or the newest tag when the repo has no releases.</small></div>
+          <label class="check" id="pd-upd-pre-row" hidden><input type="checkbox" id="pd-upd-pre"> Count pre-releases</label>
+          <div class="field" id="pd-upd-url-field" hidden><label for="pd-upd-url">Release feed</label><input id="pd-upd-url" placeholder="https://example.com/latest.json or /Name/api/latest">
+            <small class="hint">Any JSON with <code>version</code> (or <code>tag_name</code>), plus optional <code>url</code> and <code>notes</code>. A path is asked of the plugin itself.</small></div>
+          <div class="field" id="pd-upd-current-field" hidden><label for="pd-upd-current">Version endpoint <small class="hint">optional</small></label><input id="pd-upd-current" placeholder="/Name/api/version">
+            <small class="hint">A path on the plugin answering <code>{"version": "…"}</code>. When it answers, it beats the version typed above.</small></div>
+          <div class="pd-upd-check" id="pd-upd-check-row" hidden><button type="button" class="secondary-button" id="pd-upd-check">Check now</button><span class="hint" id="pd-upd-result"></span></div>
+        </fieldset>
+        <fieldset><legend>Home page</legend>
+          <label class="check"><input type="checkbox" id="pd-home"> Show a card on the Rocsy home page</label>
+          <div class="pd-home" id="pd-home-fields">
+            <div class="pd-row">
+              <div class="field"><label for="pd-group">Section</label><select id="pd-group"><option>Create</option><option>Tools</option></select></div>
+              <label class="check pd-check-tall"><input type="checkbox" id="pd-experimental"> Mark as experimental</label>
+            </div>
+            <div class="field"><label for="pd-desc">Card text</label><input id="pd-desc" placeholder="Defaults to the description"></div>
+            <div class="field"><label for="pd-status">Status line</label><input id="pd-status" placeholder="Defaults to the card text"></div>
+            <div class="field"><label for="pd-background">Card background</label>
+              <select id="pd-background">
+                <option value="none">Plain (no picture)</option>
+                <option value="image">Newest Rocsy Image generation</option>
+                <option value="video">Newest Rocsy Video generation</option>
+                <option value="recent">Newest Rocsy generation (Image or Video)</option>
+                <option value="plugin">The plugin's own pictures</option>
+              </select>
+              <small class="hint">Shown behind the card while it's in the Create section, like the studio cards.</small></div>
+            <div class="field" id="pd-bgurl-field" hidden><label for="pd-bgurl">Pictures endpoint</label><input id="pd-bgurl" placeholder="/Name/api/home-art">
+              <small class="hint">A path on the plugin that returns <code>{"pictures": ["/Name/…"], "slideshow": true}</code>. Only pictures under the plugin's own path are shown.</small></div>
+            <label class="check" id="pd-slideshow-row"><input type="checkbox" id="pd-slideshow"> Cycle through several pictures (slideshow)</label>
+          </div>
+        </fieldset>
+      </div>
+      <div class="pd-body" id="pd-json-body" hidden>
+        <p class="hint">The whole file, including keys the form doesn't show. Saved as-is after the same checks.</p>
+        <textarea id="pd-json" rows="20" spellcheck="false" aria-label="plugin.json"></textarea>
+      </div>
+      <footer class="pd-foot">
+        <p class="pd-error" id="pd-error" role="alert"></p>
+        <button type="button" class="secondary-button" id="pd-cancel">Cancel</button>
+        <button type="submit" class="primary-button" id="pd-save">Save</button>
+      </footer>
     </form>
   </dialog>
   <div class="drawer-scrim" id="scrim" hidden></div>

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0f1418">
-  <title>Video</title>
+  <title>Video · Rocsy</title>
   <!-- Installable (Home Screen) - iOS only allows web notifications for installed apps. -->
   <link rel="manifest" href="{{ mount_prefix }}/manifest.webmanifest">
   <link rel="apple-touch-icon" href="{{ mount_prefix }}/static/icons/video-touch-180.png">
@@ -42,8 +42,7 @@
       <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="settings"><span data-icon="settings"></span> Settings</button>
     </nav>
     <div class="topbar-status">
-      <div class="service-state" id="comfy-status"><span class="status-dot"></span><span>ComfyUI</span><strong>Checking</strong></div>
-      <div class="service-state" id="qwen-status"><span class="status-dot"></span><span>Qwen</span><strong>Checking</strong></div>
+      <div class="service-state" id="comfy-status" role="status" title="ComfyUI and Llama"><span class="status-dot"></span><span class="service-name" hidden></span><strong>Checking</strong></div>
       <button class="icon-button" id="alerts-toggle" type="button" aria-pressed="false" title="Enable completion alerts" aria-label="Completion alerts"><span data-icon="bell"></span></button>
     </div>
   </header>
@@ -118,6 +117,7 @@
           <label class="switch-row" for="agentic-whisper-check"><span class="switch-label">Check preview dialogue with Whisper <span class="switch-hint">Transcribes each preview on the GPU; gibberish, missing or unplanned speech gets a fixed prompt and a re-render (up to 2 times)</span></span><input type="checkbox" id="agentic-whisper-check"></label>
           <label class="switch-row" for="agentic-stage-approval"><span class="switch-label">Wait for my approval <span class="switch-hint">Accept to render the finals, or Exclude with notes (Hermes may restructure the plan) to redo the previews</span></span><input type="checkbox" id="agentic-stage-approval"></label>
         </div>
+        <label class="switch-row" for="agentic-prompt-approval"><span class="switch-label">Approve the clip prompts before rendering <span class="switch-hint">After Hermes writes and checks the plan, nothing renders until you approve it in the Hermes log: Approve, Reject with a reason (Hermes revises the plan), or flag single clips with what to change. Long videos ask once per batch</span></span><input type="checkbox" id="agentic-prompt-approval"></label>
         <label class="switch-row" for="agentic-final-review"><span class="switch-label">Hermes reviews the final clips <span class="switch-hint">Same frame review after the final renders; clips it still flags after the last review round are kept as rendered</span></span><input type="checkbox" id="agentic-final-review"></label>
         <div class="settings-subgroup" id="agentic-final-review-options">
           <label class="switch-row" for="agentic-final-whisper-check"><span class="switch-label">Check final dialogue with Whisper <span class="switch-hint">Transcribes each final clip on the GPU; gibberish, missing or unplanned speech gets a fixed prompt and a re-render (up to 2 times)</span></span><input type="checkbox" id="agentic-final-whisper-check"></label>
@@ -164,9 +164,10 @@
     <details class="card" id="enhance-preview-card"><summary class="card-head"><span class="card-title">Preview</span><span class="card-sub">exact messages sent with the current Studio prompt</span></summary><div class="card-body"><div class="enhance-actions"><button type="button" class="secondary-button" id="enhance-preview-refresh">Refresh preview</button><span class="hint" id="enhance-preview-size"></span></div><pre class="enhance-preview" id="enhance-preview"></pre></div></details>
       </div>
       <aside class="enhance-log" aria-label="Hermes prompt refinement log">
-        <div class="enhance-log-head"><strong>☤ Hermes Agent</strong><span id="enhance-log-state">Idle</span><button type="button" id="enhance-log-cancel" hidden>Cancel</button></div>
+        <div class="enhance-log-head"><strong>☤ Hermes Agent</strong><span id="enhance-log-state">Idle</span><button type="button" id="enhance-log-pause" hidden title="Pause frees the GPU now; Resume reloads this same session and generates again whatever the pause interrupted">Pause</button><button type="button" id="enhance-log-cancel" hidden>Cancel</button></div>
         <div class="enhance-log-picker"><label for="enhance-log-job">Session</label><select id="enhance-log-job"><option value="">No recent sessions</option></select></div>
         <div class="enhance-log-body" id="enhance-log-body" role="log" aria-live="polite"><p class="enhance-log-empty">Run Enhance in the Studio to see its queue and model activity here.</p></div>
+        <div class="prompt-approval" id="enhance-prompt-approval" hidden></div>
         <form class="enhance-steer" id="enhance-steer" autocomplete="off">
           <div class="alias-menu enhance-steer-menu" id="enhance-steer-menu" role="listbox" hidden></div>
           <span class="enhance-steer-prompt" aria-hidden="true">❯</span>
@@ -216,6 +217,7 @@
           <div class="pe-letterbox" id="pe-bars" aria-hidden="true" hidden><i></i><i></i></div>
           <div class="pe-overlays" id="pe-overlays" aria-hidden="true"></div>
           <div class="pe-fade" id="pe-fade" aria-hidden="true"></div>
+          <svg class="pe-fx-defs" aria-hidden="true" focusable="false"><filter id="pe-fx" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB"></filter></svg>
         </div>
         <div class="pe-transport">
           <button type="button" class="icon-button" id="pe-play" aria-label="Play" title="Play / pause (Space)"><span data-icon="play"></span></button>
@@ -436,7 +438,7 @@
               <button type="button" class="primary-button" id="pe-tts-generate">Generate voice at playhead</button>
               <button type="button" class="secondary-button" id="pe-tts-sample" title="Hear the selected voice say one short line">Hear voice</button>
               <button type="button" class="button" id="pe-voice-upload">+ Upload audio&hellip;</button>
-              <input id="pe-voice-file" type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/flac,audio/ogg" hidden>
+              <input id="pe-voice-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.opus,.oga,.weba,.aac,.aif,.aiff,.aifc,.wma,.m4b,.amr,.caf,.mka,.ape,.wv,.ac3,.eac3,.mp2,.tta,.spx,.au,.dsf,.dff" hidden>
             </div>
             <p class="hint" id="pe-tts-status" aria-live="polite"></p>
             <div class="button-row" id="pe-voice-clear-row" hidden>
@@ -475,7 +477,7 @@
           <div class="card-body">
             <input id="pe-music-search" class="pe-music-search" type="text" role="searchbox" enterkeyhint="search" placeholder="Search music…" aria-label="Search music" autocomplete="off" hidden>
             <div class="pe-track-list pe-music-list" id="pe-music-list"></div>
-            <div class="button-row"><button type="button" class="button" id="pe-music-upload">+ Add music&hellip;</button><input id="pe-music-file" type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/flac,audio/ogg" hidden></div>
+            <div class="button-row"><button type="button" class="button" id="pe-music-upload">+ Add music&hellip;</button><input id="pe-music-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.opus,.oga,.weba,.aac,.aif,.aiff,.aifc,.wma,.m4b,.amr,.caf,.mka,.ape,.wv,.ac3,.eac3,.mp2,.tta,.spx,.au,.dsf,.dff" hidden></div>
             <div class="url-music-row"><input id="pe-music-url" type="url" inputmode="url" placeholder="or paste a YouTube, TikTok or Instagram link" aria-label="YouTube, TikTok or Instagram link for music"><button type="button" class="button" id="pe-music-url-add">Download</button></div>
             <div id="pe-music-controls" hidden>
               <div class="field-row"><label for="pe-music-volume">Music volume <span class="field-readout" id="pe-music-volume-readout">30%</span></label><input id="pe-music-volume" type="range" min="0" max="1.5" step="0.05" value="0.3"></div>
@@ -595,7 +597,7 @@
               <button type="button" class="button" id="ping-test"><span data-icon="play"></span> Test</button>
               <button type="button" class="button ghost" id="ping-upload">Upload sound&hellip;</button>
               <button type="button" class="secondary-button danger" id="ping-remove" hidden>Remove</button>
-              <input id="ping-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.opus,.flac" hidden>
+              <input id="ping-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.opus,.oga,.weba,.aac,.aif,.aiff,.aifc,.wma,.m4b,.amr,.caf,.mka,.ape,.wv,.ac3,.eac3,.mp2,.tta,.spx,.au,.dsf,.dff" hidden>
               <span class="hint">Your own sound: MP3, WAV, M4A, AAC, OGG, OPUS or FLAC, up to 10 s. Saved for every device. Push notifications use the phone's own notification sound.</span>
             </div>
           </div>
@@ -680,7 +682,7 @@
               <div class="ds-outro-actions">
                 <button type="button" class="button" id="ds-tag-upload">Upload sound&hellip;</button>
                 <button type="button" class="secondary-button danger" id="ds-tag-remove" hidden>Remove</button>
-                <input id="ds-tag-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.opus,.flac" hidden>
+                <input id="ds-tag-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.opus,.oga,.weba,.aac,.aif,.aiff,.aifc,.wma,.m4b,.amr,.caf,.mka,.ape,.wv,.ac3,.eac3,.mp2,.tta,.spx,.au,.dsf,.dff" hidden>
                 <span class="hint" id="ds-tag-info">MP3, WAV, M4A, AAC, OGG, OPUS or FLAC, up to 60 s and 20 MB.</span>
               </div>
             </div>
@@ -814,7 +816,13 @@
             </div>
             <label for="enhance-extra-prompt">Agentic instructions</label>
             <p class="hint agentic-guide-hint">What Hermes should make: number of clips, total length, continuity, references to use or exclude, what to preserve. If the Prompt below is empty, this is the whole brief.</p>
-            <div class="guide-editor"><pre class="prompt-highlight" id="guide-highlight" aria-hidden="true"></pre><textarea id="enhance-extra-prompt" rows="4" spellcheck="false" placeholder="e.g. 3 clips, about 30 s total, same woman in a red coat in every clip. Say post edit and/or stitch to have Agentic finish the clips."></textarea><div class="alias-menu" id="guide-menu" role="listbox" hidden></div></div>
+            <div class="guide-editor"><pre class="prompt-highlight" id="guide-highlight" aria-hidden="true"></pre><textarea id="enhance-extra-prompt" rows="4" spellcheck="false" placeholder="e.g. 3 clips, about 30 s total, same woman in a red coat in every clip. Say post edit and/or stitch to have Agentic finish the clips. @ calls your RAG library."></textarea><div class="alias-menu" id="guide-menu" role="listbox" hidden></div></div>
+            <div class="agentic-attach-row">
+              <button type="button" class="secondary-button" id="agentic-attach" title="Attach images, videos or documents (PDF, Word, text, subtitles, JSON...) for Hermes to use with these instructions. You can also drop or paste files onto the box."><span data-icon="paperclip"></span> Attach files</button>
+              <input type="file" id="agentic-attach-input" multiple hidden>
+              <span class="hint">Hermes looks at images and reads documents; they aren't sent to the video model (use Inputs for references).</span>
+            </div>
+            <ul class="agentic-attachments" id="agentic-attachments" hidden></ul>
             <div class="agentic-actions">
               <button type="button" class="agentic-queue-button" id="agentic" title="Queue an Agentic run: Hermes plans the clips from the Prompt and these instructions, renders and reviews them"><span data-icon="sparkles"></span> Queue Agentic run</button>
               <button type="button" class="secondary-button agentic-settings-button" id="enhance-settings" title="Hermes model, Agentic steps and the live log"><span data-icon="settings"></span> Agentic settings</button>
@@ -835,8 +843,13 @@
               <button type="button" class="button ghost prompt-refs-button" id="prompt-refs-toggle" aria-pressed="false" title="Show the attached references next to the prompt"><span data-icon="images"></span> Show references</button>
               <button type="button" class="button ghost prompt-keyboard-button" id="prompt-keyboard-hide" title="Hide the keyboard" aria-label="Hide the keyboard"><svg class="prompt-fs-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="11" rx="2"/><path d="M7 8h.01M11 8h.01M15 8h.01M8 11.5h8M9 19l3 2 3-2"/></svg></button>
               <button type="button" class="button ghost prompt-undo-button" id="enhance-undo" hidden title="Put back the prompt from before the last Enhance">&#8630; Undo</button>
-              <button type="button" class="button ghost prompt-enhance-button" id="enhance" title="Enhance: Hermes rewrites this prompt for H3 (nothing is rendered)"><span data-icon="sparkles"></span> Enhance</button>
+              <button type="button" class="button ghost prompt-enhance-button" id="enhance" aria-expanded="false" aria-controls="enhance-panel" title="Enhance: tell Hermes what to change; it rewrites this prompt for the model (nothing is rendered)"><span data-icon="sparkles"></span> Enhance</button>
               <button type="button" class="button ghost prompt-fullscreen-button" id="prompt-fullscreen" aria-pressed="false" title="Edit the prompt full screen (Esc to exit)"><svg class="prompt-fs-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg> Fullscreen</button>
+            </div>
+            <div class="enhance-panel" id="enhance-panel" hidden>
+              <input type="text" id="enhance-wish" maxlength="4000" placeholder="What should change? e.g. slower camera, rainy night, more dialogue (optional)" aria-label="What Enhance should change">
+              <button type="button" class="button ghost prompt-enhance-button" id="enhance-go"><span data-icon="sparkles"></span> Enhance</button>
+              <button type="button" class="button ghost prompt-undo-button" id="enhance-close" aria-label="Close">&#10005;</button>
             </div>
             <div class="prompt-ref-audio" id="prompt-ref-audio" hidden></div>
             <div class="prompt-workspace">
@@ -889,7 +902,7 @@
           <div class="reference-list" id="reference-list"></div>
           <div class="button-row">
             <button class="button" type="button" id="reference-upload">+ Add reference&hellip;</button>
-            <input id="reference-file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp,video/mp4,video/webm,video/quicktime,video/x-matroska,audio/mpeg,audio/wav,audio/mp4,audio/flac,audio/ogg" multiple hidden>
+            <input id="reference-file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp,video/mp4,video/webm,video/quicktime,video/x-matroska,audio/*,.mp3,.wav,.m4a,.flac,.ogg,.opus,.oga,.weba,.aac,.aif,.aiff,.aifc,.wma,.m4b,.amr,.caf,.mka,.ape,.wv,.ac3,.eac3,.mp2,.tta,.spx,.au,.dsf,.dff" multiple hidden>
           </div>
           <div class="url-music-row"><input id="reference-url" type="url" inputmode="url" placeholder="or paste a YouTube, TikTok or Instagram video link" aria-label="Video link to add as a reference"><button type="button" class="button" id="reference-url-add">Download</button></div>
           <div class="drop-zone" id="reference-drop-zone" data-drop-role="references">Drop reference images, videos, or audio here</div>
@@ -919,7 +932,7 @@
             <div class="reference-list" id="sh-audio-list"></div>
             <div class="button-row">
               <button class="button" type="button" id="sh-audio-upload">+ Add audio&hellip;</button>
-              <input id="sh-audio-file" type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/flac,audio/ogg" multiple hidden>
+              <input id="sh-audio-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.opus,.oga,.weba,.aac,.aif,.aiff,.aifc,.wma,.m4b,.amr,.caf,.mka,.ape,.wv,.ac3,.eac3,.mp2,.tta,.spx,.au,.dsf,.dff" multiple hidden>
             </div>
 
             <div class="anchor-block">
@@ -1433,6 +1446,12 @@
     <section class="jobs-panel" aria-label="Generations">
       <div class="jobs-panel-head">
         <h2>Generations</h2>
+        <div class="history-filters history-shelves" role="tablist" aria-label="Generation shelves">
+          <button type="button" class="is-active" data-shelf="single" title="Your own renders and Post-Edits">Singles <span class="filter-count" data-shelf-count="single"></span></button>
+          <button type="button" data-shelf="agentic" title="One card per Agentic or plan session">Agentic <span class="filter-count" data-shelf-count="agentic"></span><span class="shelf-alert" hidden title="A session is waiting for your approval"></span></button>
+          <button type="button" data-shelf="stitch" title="Stitched videos, including those made from a session">Stitches <span class="filter-count" data-shelf-count="stitch"></span></button>
+          <button type="button" data-shelf="all">All <span class="filter-count" data-shelf-count="all"></span></button>
+        </div>
         <div class="history-filters" role="tablist" aria-label="Generation filters">
           <button type="button" class="is-active" data-filter="all">All <span class="filter-count" data-filter-count="all"></span></button>
           <button type="button" data-filter="running">Running <span class="filter-count" data-filter-count="running"></span></button>
@@ -1495,7 +1514,7 @@
           <div class="reference-list" id="stitch-music-list"></div>
           <div class="button-row">
             <button type="button" class="button" id="stitch-music-upload">+ Add music&hellip;</button>
-            <input id="stitch-music-file" type="file" accept="audio/mpeg,audio/wav,audio/mp4,audio/flac,audio/ogg" hidden>
+            <input id="stitch-music-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.opus,.oga,.weba,.aac,.aif,.aiff,.aifc,.wma,.m4b,.amr,.caf,.mka,.ape,.wv,.ac3,.eac3,.mp2,.tta,.spx,.au,.dsf,.dff" hidden>
           </div>
           <div class="url-music-row"><input id="stitch-music-url" type="url" inputmode="url" placeholder="or paste a YouTube, TikTok or Instagram link" aria-label="YouTube, TikTok or Instagram link for background music"><button type="button" class="button" id="stitch-music-url-add">Download</button></div>
           <div class="drop-zone" id="stitch-music-drop-zone" data-drop-role="stitch-music">Drop a background music file here</div>
@@ -1657,6 +1676,25 @@
     </div>
   </div>
 
+  <!-- Revise a finished Agentic session (openReviseDialog): what Hermes should do next, queued as a new run in it. -->
+  <div class="ref-viewer" id="revise-dialog" hidden>
+    <div class="ref-viewer-backdrop" data-revise-close></div>
+    <div class="ref-viewer-dialog preset-dialog revise-dialog" role="dialog" aria-modal="true" aria-labelledby="revise-dialog-title">
+      <button type="button" class="ref-viewer-close" data-revise-close aria-label="Close">&#10005;</button>
+      <h2 class="job-info-title" id="revise-dialog-title">Revise session</h2>
+      <p class="hint revise-session" id="revise-dialog-session"></p>
+      <form class="revise-form" id="revise-form">
+        <label for="revise-input">What should Hermes do next?</label>
+        <textarea id="revise-input" rows="5" spellcheck="true" placeholder="e.g. Finish the story with two more clips where she reaches the lighthouse. Or: redo clip 3 with a slower camera, keep the rest."></textarea>
+        <p class="hint">Hermes keeps this session's plan, prompts and finished clips, and adds a run with these instructions. Ctrl+Enter queues it.</p>
+        <div class="alias-form-buttons">
+          <button type="button" class="secondary-button" id="revise-open" title="Load the session into the Agentic card to edit the prompt, guide and settings yourself">Open in composer</button>
+          <button type="submit" class="primary-button" id="revise-submit">Queue revision</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Presets "Save as": new name, overwrite any preset, or rename one (openPresetDialog). -->
   <div class="ref-viewer" id="preset-dialog" hidden>
     <div class="ref-viewer-backdrop" id="preset-dialog-backdrop"></div>
@@ -1708,5 +1746,6 @@
       <div class="ref-viewer-position" id="ref-viewer-position"></div>
     </div>
   </div>
+  <datalist id="lora-slider-zero"><option value="0"></option></datalist>
 </body>
 </html>

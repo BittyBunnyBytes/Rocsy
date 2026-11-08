@@ -12,6 +12,8 @@ services:
   lock:
     build: ./lock
     container_name: bunny-lock
+    # Distroless image: runs as the host user that owns lock/data (the installer writes ROCSY_UID).
+    user: "${ROCSY_UID:-1000}:${ROCSY_GID:-1000}"
     restart: unless-stopped
     network_mode: host
     environment:
@@ -19,15 +21,13 @@ services:
       QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
       # /Queue/... browser-facing page, routed through the gateway.
       QUEUE_MOUNT_PREFIX: /Queue
-      # Loopback base URLs (same values given to the gateway below) so this
-      # service can call each app's proceed/cancel endpoints directly.
+      # Apps get their turns over their own lease stream (lock/PROTOCOL.md); these
+      # loopback URLs are only polled for render progress when an app doesn't push it.
       VID_UPSTREAM: http://127.0.0.1:${H3_PORT:-8000}
       MUS_UPSTREAM: http://127.0.0.1:${MUS_PORT:-8200}
       KREA_UPSTREAM: http://127.0.0.1:${KREA_PORT:-8300}
       TRAINER_UPSTREAM: http://127.0.0.1:${TRAINER_PORT:-8500}
-      AGENT_UPSTREAM: http://127.0.0.1:${AGENT_PORT:-8900}
       VOICE_UPSTREAM: http://127.0.0.1:${VOICE_PORT:-8950}
-      FRAMEWORK_UPSTREAM: http://127.0.0.1:8700
       HERMES_API_URL: http://127.0.0.1:8642
       HERMES_API_KEY: ${HERMES_API_KEY:-}
       LLAMA_URL: http://127.0.0.1:${LLAMA_PORT:-8400}
@@ -45,6 +45,8 @@ services:
       FRAMEWORK_MAX_UPLOAD_MB: ${FRAMEWORK_MAX_UPLOAD_MB:-250}
       FRAMEWORK_MAX_PARALLEL: ${FRAMEWORK_MAX_PARALLEL:-2}
       FRAMEWORK_DATA_DIR: /data
+      FRAMEWORK_RAG_ROOT: /pinned-uploads
+      FRAMEWORK_RAG_INDEX: /pinned-cache-data/upload-cache.json
       LLAMA_URL: http://127.0.0.1:${LLAMA_PORT:-8400}
       LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
       HOSTCTL_URL: http://127.0.0.1:${HOSTCTL_PORT:-8899}     # external coding CLIs (Settings → Sub-agents)
@@ -61,6 +63,9 @@ services:
       - ../Krea/static/lora-gallery:/catalogs/krea:ro
       - ./shared/guides:/app/guides:ro
       - ../Llama/overrides:/llama-overrides:ro
+      # RAG library for @ calls in Agentic mode (shared/rag.py). uid 10001 can read only the 0644 pin indexes here.
+      - ../Video/uploads:/pinned-uploads:ro
+      - ./gateway/data:/pinned-cache-data:ro
       - framework-agentic-data:/data
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8700/health', timeout=3)"]
@@ -142,6 +147,8 @@ services:
       AGENT_PINNED_INDEX: /pinned-cache-data/upload-cache.json
       AGENT_PINNED_HERMES_DIR: /opt/data/rocsy-pinned
     volumes:
+      # Shared GPU queue client (protocol v2, lock/PROTOCOL.md).
+      - ./shared/bunnylock.py:/app/bunnylock.py:ro
       - /dev/dri:/dev/dri
       - ../core-backend-extras/yt-dlp:/opt/rocsy-tools/yt-dlp:ro
       - ./agent/data:/data
@@ -240,6 +247,8 @@ services:
       VOICE_QUEUE_URL: http://127.0.0.1:${LOCK_PORT:-8600}
       QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
     volumes:
+      # Shared GPU queue client (protocol v2, lock/PROTOCOL.md).
+      - ./shared/bunnylock.py:/app/bunnylock.py:ro
       # Same studio shell as Image / Music / Video (view tabs, cards, Generations panel).
       - ./shared/ui/h3-studio.css:/app/static/h3-studio.css:ro
       - ./shared/ui/h3-studio.js:/app/static/h3-studio.js:ro
@@ -348,6 +357,9 @@ services:
     volumes:
       # Site settings (theme, notifications, VAPID key) from the /Settings page.
       - ./gateway/data:/app/data
+      # Custom services: each core-backend-extras/plugins/<name>/plugin.json is proxied at its own
+      # path and listed in Models -> Manager -> Core Backend -> Plugins (plugins/README.md).
+      - ../core-backend-extras/plugins:/app/plugins:ro
       # Llama -> Parameters page: reads model defaults, writes per-model
       # <id>.args / <id>.ctx overrides that llama-launch applies on the next load.
       - ../Llama/config.yaml:/llama-config.yaml:ro
@@ -417,6 +429,9 @@ services:
       - ./shared/ui/h3-studio.js:/app/static/js/h3-studio.js:ro
       # Advanced workflow card (per-workflow model files): shared module + UI, live edits need a restart.
       - ./shared/workflow_models.py:/app/backend/workflow_models.py:ro
+      - ./shared/lora_menu.py:/app/backend/lora_menu.py:ro
+      # Shared GPU queue client (protocol v2, lock/PROTOCOL.md).
+      - ./shared/bunnylock.py:/app/backend/bunnylock.py:ro
       - ./shared/ui/workflow-models.js:/app/static/js/workflow-models.js:ro
       - ./shared/ui/workflow-models.css:/app/static/css/workflow-models.css:ro
       - ./shared/ui/missing-files.js:/app/static/js/missing-files.js:ro
@@ -473,6 +488,8 @@ services:
       - ./shared/ui/h3-studio.js:/app/static/js/h3-studio.js:ro
       # Advanced workflow card (per-workflow model files): shared module + UI, live edits need a restart.
       - ./shared/workflow_models.py:/app/backend/workflow_models.py:ro
+      # Shared GPU queue client (protocol v2, lock/PROTOCOL.md).
+      - ./shared/bunnylock.py:/app/backend/bunnylock.py:ro
       - ./shared/ui/workflow-models.js:/app/static/js/workflow-models.js:ro
       - ./shared/ui/workflow-models.css:/app/static/css/workflow-models.css:ro
       - ./shared/ui/missing-files.js:/app/static/js/missing-files.js:ro
@@ -520,6 +537,8 @@ services:
       - ./shared/ui/h3-studio.js:/app/static/js/h3-studio.js:ro
       # Advanced workflow card (per-workflow model files): shared module + UI, live edits need a restart.
       - ./shared/workflow_models.py:/app/backend/workflow_models.py:ro
+      # Shared GPU queue client (protocol v2, lock/PROTOCOL.md).
+      - ./shared/bunnylock.py:/app/backend/bunnylock.py:ro
       - ./shared/ui/workflow-models.js:/app/static/js/workflow-models.js:ro
       - ./shared/ui/workflow-models.css:/app/static/css/workflow-models.css:ro
       - ./shared/ui/missing-files.js:/app/static/js/missing-files.js:ro
@@ -704,6 +723,8 @@ services:
       HERMES_API_URL: http://127.0.0.1:8642
       HERMES_API_KEY: ${HERMES_API_KEY:-}
     volumes:
+      # Shared GPU queue client (protocol v2, lock/PROTOCOL.md).
+      - ./shared/bunnylock.py:/app/bunnylock.py:ro
       - ../Trainer/data:/data
       - ./Datasets:/datasets
       - ../Llama/config.yaml:/llama-config.yaml:ro
@@ -717,6 +738,8 @@ services:
       - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models:/models:ro
       # Publish to Image studio copies finished image LoRAs here (writable; the rest of /models stays read-only).
       - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/loras/KreaCustom:/models/loras/KreaCustom
+      # Finished YuE2 / MiniMax Music 3 LoRAs go here for the Music studio's LoRA gallery (writable).
+      - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/loras/Music:/models/loras/Music
       # Full fine-tunes save their checkpoints here, so ComfyUI and the Trainer's own base scan see them at once.
       - ${ROCSY_COMFY_ROOT:?Set ROCSY_COMFY_ROOT in .env}/models/diffusion_models/Trainer:/models/diffusion_models/Trainer
       # "Use in Llama" copies finished LLM LoRAs (.gguf) here; llama-launch loads them with --lora.

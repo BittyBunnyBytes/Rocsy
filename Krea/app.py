@@ -28,16 +28,16 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from backend.comfy import ComfyHTTPError, ComfyService, ServiceError, output_from_history
-from backend import custom_loras, gallery_hermes, lora_aliases, lora_catalog, lora_links, lora_previews
+from backend import custom_loras, speedups, gallery_hermes, lora_aliases, lora_catalog, lora_links, lora_previews
 from backend.config import BASE_DIR, settings
 from backend.events import EventBroker
 from backend.generation import (
     DEFAULT_LORA_ENABLED, GenerationError, LORA_SLOTS, batch_seed, build_enhanced_workflows, build_workflows, display_size,
 )
-from backend.lock import LockClient
+from backend.bunnylock import BunnyLock, PendingStore
 from backend.models import (
     ANIMA_VERSIONS, ANIMA_LORA_SLOTS, MOSS_LORA_SLOTS, MOSS_FAST_CHECKPOINT, MOSS_FAST_MODES, DEFAULT_QWEN_LORA_ENABLED, DEFAULT_REFERENCE_STRENGTHS, LORA_INFO, MAX_SIZE, QWEN_LORA_SLOTS, MODEL_ANIMA, MODEL_MOSS, MODEL_LUSTIFY, MODEL_QWEN_IMAGE_21, QWEN_DEFAULT_CFG, QWEN_DEFAULT_STEPS,
-    QWEN_MAX_PIXELS, QWEN_MAX_SIDE, QWEN_REFERENCE_SLOT_COUNT, REFERENCE_SLOT_COUNT, GenerationRequest,
+    QWEN_MAX_PIXELS, QWEN_MAX_SIDE, QWEN_REFERENCE_SLOT_COUNT, MOSS_REFERENCE_SLOT_COUNT, REFERENCE_SLOT_COUNT, GenerationRequest,
     PresetRenameRequest, PresetRequest, lora_family, lora_slots_for,
 )
 from backend.qwen import enhancer_text_from_history
@@ -46,7 +46,8 @@ from backend.models import KREA_STYLE_REFERENCE_LORA, QWEN_TEXT_ENCODERS, QWEN_V
 from backend.workflow_models import (LEARN_SKIP_INPUTS, MISSING_CODE, Slot, WorkflowModelRequest, WorkflowModels,
                                      missing_files, missing_message, slots_from_graph)
 from backend import checkpoints
-from backend.store import Store, utc_now
+from backend.job_stats import job_stats
+from backend.store import UNFINISHED_JOB_STATES, Store, utc_now
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -58,7 +59,7 @@ custom_loras.initialize()
 lora_catalog.initialize()
 store = Store(settings.data_dir / "krea.sqlite3")
 comfy = ComfyService(settings)
-lock = LockClient(settings)
+lock = BunnyLock(app="Krea", url=settings.lock_url, secret=settings.queue_internal_secret)
 events = EventBroker()
 
 
@@ -93,11 +94,9 @@ workflow_models = WorkflowModels(settings.data_dir / "workflow-models.json", set
 client_id = f"krea-web-{uuid.uuid4().hex}"
 
 submission_tasks: set[asyncio.Task[None]] = set()
-heartbeat_tasks: dict[str, tuple[asyncio.Task[None], asyncio.Event]] = {}
-# Jobs enqueued with bunny-lock but not yet given the go-ahead to submit to
-# ComfyUI - populated in generate(), consumed (and popped) in the internal
-# proceed endpoint once the coordinator calls back.
-pending_submissions: dict[str, dict[str, Any]] = {}
+# Jobs enqueued with bunny-lock but not yet given the GPU - populated in
+# generate(), consumed (and popped) by queue_grant() when the queue grants the turn.
+pending_submissions = PendingStore(settings.data_dir / "pending-submissions")
 
 PREFIX = settings.mount_prefix  # e.g. "" standalone, "/Image" behind the BunnyBytes gateway
 
@@ -201,36 +200,17 @@ def public_job(item: dict[str, Any]) -> dict[str, Any]:
 
 
 async def publish_jobs() -> None:
-    await events.publish("jobs", [public_job(item) for item in store.visible_jobs()])
-
-
-def start_heartbeat(job_id: str, token: str | None) -> None:
-    if not token:
-        return
-    stop_event = asyncio.Event()
-    task = asyncio.create_task(lock.heartbeat_loop(token, stop_event))
-    heartbeat_tasks[job_id] = (task, stop_event)
-
-
-async def stop_heartbeat(job_id: str) -> None:
-    entry = heartbeat_tasks.pop(job_id, None)
-    if not entry:
-        return
-    task, stop_event = entry
-    stop_event.set()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    jobs = store.visible_jobs()
+    await events.publish("jobs", [public_job(item) for item in jobs])
+    for item in jobs:   # the queue page's progress bar
+        if lock.held(item.get("lock_token")):
+            lock.progress(item["lock_token"], public_job(item))
 
 
 async def finalize_job_lock(job_id: str, token: str | None) -> None:
-    """Stop this job's heartbeat and release its lock token. Called on every
-    terminal state (complete/failed/cancelled) and on unhandled errors."""
-    try:
-        await stop_heartbeat(job_id)
-    finally:
-        # Shielded: a cancel arriving here must not skip the release (the slot
-        # would sit idle until its TTL expired).
-        await asyncio.shield(lock.release(token))
+    """Hand the GPU back. Called on every terminal state (complete/failed/
+    cancelled) and on unhandled errors; the release is shielded in the client."""
+    await lock.release(token)
 
 
 async def cancel_prompts(prompt_ids: list[str]) -> bool:
@@ -242,14 +222,41 @@ async def cancel_prompts(prompt_ids: list[str]) -> bool:
     return cancelled
 
 
-async def submit_prompts(job_id: str, workflows: list[dict[str, Any]]) -> list[str]:
+def _job_settings(job: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return json.loads(job.get("request_json") or "{}")
+    except (TypeError, ValueError):
+        return {}
+
+
+async def prepare_workflows(job_id: str, workflows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Model-file overrides + attention patch for every workflow, on copies (the
+    patches are not idempotent). Runs ahead of the GPU turn when the queue sends
+    a prepare-early notice, else right before submitting."""
+    job = store.job(job_id) or {}
+    model = job.get("model")
+    attention = speedups.resolve_attention(model, _job_settings(job).get("attention"))
+    if attention != "flash" and not await comfy.has_node(speedups.ATTENTION_NODE):
+        attention = "flash"   # this ComfyUI lacks the Bunny node pack: keep the default attention
+    ready = copy.deepcopy(workflows)
+    for workflow in ready:
+        workflow_models.apply(model, workflow)
+        speedups.apply_attention(workflow, attention)
+    return ready
+
+
+async def submit_prompts(job_id: str, workflows: list[dict[str, Any]], prepared: bool = False) -> list[str]:
     """Queue every image's workflow in ComfyUI (they run one after another),
     recording the ids as they go; stops early if the job is being cancelled."""
     prompt_ids: list[str] = []
-    model = (store.job(job_id) or {}).get("model")
-    for workflow in workflows:
-        workflow_models.apply(model, workflow)
-        prompt_ids.append(await comfy.submit(workflow, client_id))
+    if not prepared:
+        workflows = await prepare_workflows(job_id, workflows)
+    job = store.job(job_id) or {}
+    settings = _job_settings(job)
+    for index, workflow in enumerate(workflows):
+        prompt_ids.append(await comfy.submit(workflow, client_id, te_cache=settings.get("te_cache", True) is not False))
+        start_job_timing(job_id, prompt_ids[-1], workflow, "Prompt enhancer" if job.get("stage") == "enhance"
+                         else f"Image {index + 1}" if len(workflows) > 1 else "Render")
         store.update_job(job_id, prompt_id=prompt_ids[0], prompt_ids=json.dumps(prompt_ids))
         current = store.job(job_id)
         if current and current["state"] in {"cancelling", "cancelled"}:
@@ -257,14 +264,92 @@ async def submit_prompts(job_id: str, workflows: list[dict[str, Any]]) -> list[s
     return prompt_ids
 
 
-async def submit_job(job_id: str, workflows: list[dict[str, Any]], lock_token: str | None) -> None:
+# Per-node wall time of each ComfyUI prompt, for the info dialog's Stats tab
+# (backend/job_stats.py). ComfyUI announces each node with an "executing"
+# event, so a node runs from its event to the next one. Open nodes and their
+# progress ticks live here; closed segments are written to jobs.timings.
+job_timings: dict[str, dict[str, Any]] = {}  # job id -> {"timings": {"runs": [...]}, "open": segment | None}
+MAX_TIMING_TICKS = 1000
+
+
+def start_job_timing(job_id: str, prompt_id: str, workflow: dict[str, Any], label: str) -> None:
+    """A new ComfyUI prompt for this job (enhancer pre-pass, then one per image)."""
+    with contextlib.suppress(Exception):  # timing is best-effort
+        entry = job_timings.get(job_id)
+        if not entry:
+            stored = json.loads((store.job(job_id) or {}).get("timings") or "{}")
+            entry = job_timings[job_id] = {"timings": {"runs": list(stored.get("runs") or []) if isinstance(stored, dict) else []},
+                                           "open": None}
+        nodes = {str(node_id): [str(node.get("class_type") or ""), str((node.get("_meta") or {}).get("title") or "")]
+                 for node_id, node in workflow.items() if isinstance(node, dict)}
+        entry["timings"]["runs"].append({"prompt_id": prompt_id, "label": label, "submitted": time.time(),
+                                         "nodes": nodes, "cached": [], "segments": []})
+        store.update_job(job_id, timings=json.dumps(entry["timings"]))
+
+
+def note_job_timing(job_id: str, event_type: str, data: dict[str, Any]) -> None:
+    entry = job_timings.get(job_id)
+    if not entry:
+        return  # submitted before an app restart
+    prompt_id = str(data.get("prompt_id"))
+    run = next((item for item in entry["timings"]["runs"] if item["prompt_id"] == prompt_id), None)
+    if not run:
+        return
+    now = time.time()
+    current = entry["open"]
+    if current and current.get("prompt_id") != prompt_id:
+        current = None  # a stale node from a prompt that never reported its end
+    if event_type == "progress":
+        if current and len(current["ticks"]) < MAX_TIMING_TICKS:
+            current["ticks"].append([round(now - current["start"], 3), data.get("value"), data.get("max")])
+        return
+    if event_type == "execution_start":
+        run["started"] = now
+    elif event_type == "execution_cached":
+        run["cached"] = [str(node) for node in data.get("nodes") or []]
+    elif event_type in {"executing", "execution_success", "execution_error", "execution_interrupted"}:
+        if current:
+            run["segments"].append({key: value for key, value in current.items() if key != "prompt_id"} | {"end": now})
+        entry["open"] = None
+        if event_type == "executing" and data.get("node") is not None:
+            entry["open"] = {"prompt_id": prompt_id, "node": str(data["node"]), "start": now, "ticks": []}
+        else:
+            run.setdefault("finished", now)
+            if all(item.get("finished") for item in entry["timings"]["runs"]):
+                job_timings.pop(job_id, None)  # recreated from the database if another prompt follows
+    else:
+        return
+    with contextlib.suppress(Exception):
+        store.update_job(job_id, timings=json.dumps(entry["timings"]))
+
+
+def live_job_timings(job_id: str) -> dict[str, Any] | None:
+    """The stored timings plus the node running right now, while the job is in ComfyUI."""
+    entry = job_timings.get(job_id)
+    if not entry:
+        return None
+    timings = json.loads(json.dumps(entry["timings"]))
+    if current := entry["open"]:
+        run = next((item for item in timings["runs"] if item["prompt_id"] == current["prompt_id"]), None)
+        if run:
+            run["segments"].append({key: value for key, value in current.items() if key != "prompt_id"}
+                                   | {"end": time.time(), "running": True})
+    return timings
+
+
+async def submit_job(job_id: str, workflows: list[dict[str, Any]], lock_token: str | None,
+                     prepare: asyncio.Future | None = None) -> None:
     prompt_ids: list[str] = []
     try:
+        prepared = False
+        if prepare is not None:   # prepare-early already patched copies of the workflows
+            with contextlib.suppress(Exception):
+                workflows, prepared = await prepare, True
         # The fastest ComfyUI memory profile for this model (switches only while ComfyUI is idle).
         job = store.job(job_id)
         await comfy.ensure_profile("qwen" if job and job.get("model") == MODEL_QWEN_IMAGE_21 else "krea")
         store.update_job(job_id, started_at=utc_now())
-        prompt_ids = await submit_prompts(job_id, workflows)
+        prompt_ids = await submit_prompts(job_id, workflows, prepared)
         job = store.job(job_id)
         if job and job["state"] == "cancelling":
             await cancel_prompts(prompt_ids)
@@ -274,7 +359,6 @@ async def submit_job(job_id: str, workflows: list[dict[str, Any]], lock_token: s
         else:
             state = "enhancing" if job and job.get("stage") == "enhance" else "queued"
             store.update_job(job_id, state=state, progress=0)
-            start_heartbeat(job_id, lock_token)
             log.info("Submitted generation job %s as %d prompt(s), first %s", job_id[:8], len(prompt_ids), prompt_ids[0][:8])
     except Exception as exc:
         await cancel_prompts(prompt_ids)
@@ -407,11 +491,13 @@ async def publish_checkpoints(force: bool = False) -> None:
 
 
 async def monitor_jobs() -> None:
+    comfy_nudge: asyncio.Task | None = None
     while True:
         try:
             comfy_state = await comfy.status()
-            if not comfy_state["online"]:
-                asyncio.create_task(comfy.ensure_supervisor_started())
+            if not comfy_state["online"] and (comfy_nudge is None or comfy_nudge.done()):
+                # One self-heal nudge at a time, kept referenced (asyncio holds tasks only weakly).
+                comfy_nudge = asyncio.create_task(comfy.ensure_supervisor_started())
             running_ids = set(comfy_state.pop("running_ids", []))
             await events.publish("status", {"comfyui": comfy_state})
             if comfy_state["online"] and time.monotonic() - _checkpoint_checked >= CHECKPOINT_POLL_SECONDS:
@@ -430,6 +516,18 @@ async def monitor_jobs() -> None:
         await asyncio.sleep(settings.monitor_interval)
 
 
+async def release_when_gpu_done(job: dict[str, Any], prompt_id: str) -> None:
+    """ComfyUI finished the job's last prompt: hand the GPU on now. Reading the
+    outputs and making thumbnails needs no GPU; the monitor's own release later
+    is then a no-op. Not during the enhancer stage (the render prompts follow in
+    the same turn) or while prompts are still being submitted."""
+    ids = job_prompt_ids(job)
+    if (job.get("stage") == "enhance" or job["state"] not in {"queued", "rendering"} or not ids
+            or ids[-1] != prompt_id or len(ids) < int(job.get("batch_count") or 1)):
+        return
+    await lock.release(job.get("lock_token"))
+
+
 async def monitor_comfy_progress() -> None:
     """Persist ComfyUI websocket progress and forward it to connected browsers."""
     while True:
@@ -441,7 +539,12 @@ async def monitor_comfy_progress() -> None:
                 if not prompt_id:
                     continue
                 job = store.job_by_prompt(str(prompt_id))
+                if job:
+                    note_job_timing(job["id"], str(event_type), data)
                 if not job or job["state"] in {"cancelling", "cancelled", "complete", "failed"}:
+                    continue
+                if event_type == "executing" and data.get("node") is None:   # this prompt is done
+                    await release_when_gpu_done(job, str(prompt_id))
                     continue
                 if event_type == "progress" and job.get("stage") == "enhance":
                     continue
@@ -472,9 +575,19 @@ async def monitor_comfy_progress() -> None:
             await asyncio.sleep(settings.monitor_interval)
 
 
+def _saved_waiting_jobs() -> set[str]:
+    """Queued jobs that keep their place across a restart: saved and still waiting."""
+    return {job_id for job_id in pending_submissions if (store.job(job_id) or {}).get("state") == "waiting_for_gpu"}
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    removed = store.delete_unfinished_jobs()
+    kept = _saved_waiting_jobs()
+    pending_submissions.retain(kept)
+    removed = store.delete_unfinished_jobs(kept)
+    lock.start()
+    requeue = asyncio.create_task(lock.requeue_lost(
+        pending_submissions, lambda job_id, entry: store.update_job(job_id, queue_entry_id=entry["entry_id"])))
     log.info("Krea starting; workflow=%s; comfy_url=%s; removed_unfinished_jobs=%d", settings.workflow_path.name, settings.comfy_url, removed)
     monitor = asyncio.create_task(monitor_jobs())
     progress_monitor = asyncio.create_task(monitor_comfy_progress())
@@ -487,15 +600,15 @@ async def lifespan(_: FastAPI):
             await monitor
         with contextlib.suppress(asyncio.CancelledError):
             await progress_monitor
-        for job_id in tuple(heartbeat_tasks):
-            await stop_heartbeat(job_id)
         for task in tuple(submission_tasks):
             task.cancel()
         if submission_tasks:
             await asyncio.gather(*tuple(submission_tasks), return_exceptions=True)
-        removed = store.delete_unfinished_jobs()
+        requeue.cancel()
+        removed = store.delete_unfinished_jobs(_saved_waiting_jobs())
         if removed:
             log.info("Removed %d unfinished generation job(s) during shutdown", removed)
+        await lock.stop()
         store.close()
         log.info("Krea stopped")
 
@@ -562,7 +675,7 @@ async def index(request: Request):
             "model_config": {
                 "krea2": {"label": "Krea 2", "max_side": MAX_SIZE, "reference_slots": REFERENCE_SLOT_COUNT},
                 MODEL_ANIMA: {"label": "Anima", "max_side": MAX_SIZE, "reference_slots": 0, "versions": {key: label for key, (_, label) in ANIMA_VERSIONS.items()}},
-                MODEL_MOSS: {"label": "MOSS-Image", "max_side": MAX_SIZE, "reference_slots": 0, "steps": 50, "cfg": 3.0},
+                MODEL_MOSS: {"label": "MOSS-Image", "max_side": MAX_SIZE, "reference_slots": MOSS_REFERENCE_SLOT_COUNT, "steps": 50, "cfg": 3.0},
                 MODEL_QWEN_IMAGE_21: {
                     "label": "Qwen Image 2.1", "max_side": QWEN_MAX_SIDE, "max_pixels": QWEN_MAX_PIXELS,
                     "reference_slots": QWEN_REFERENCE_SLOT_COUNT, "steps": QWEN_DEFAULT_STEPS, "cfg": QWEN_DEFAULT_CFG,
@@ -628,6 +741,22 @@ async def register_downloaded_checkpoint(request: Request) -> dict[str, Any]:
 @app.get(p("/api/health"))
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get(p("/api/speedups"))
+async def speedup_options() -> dict[str, Any]:
+    """Speedup & Saves card: attention backends this ComfyUI has, per-model 'auto' picks,
+    and whether the text-encoder cache node is installed."""
+    available = ["flash"]
+    try:
+        info = await comfy.request("GET", f"/object_info/{speedups.ATTENTION_NODE}", timeout=5)
+        registered = info.get(speedups.ATTENTION_NODE, {}).get("input", {}).get("required", {}).get("attention", [[]])[0]
+        available += [name for name, reg in speedups.ATTENTION_BACKENDS.items() if reg and reg in registered]
+        te_cache = await comfy.has_node("BunnyCachedEncode")
+    except ServiceError:
+        te_cache = False
+    return {"available": available, "best": speedups.ATTENTION_BEST, "fixed": speedups.ATTENTION_FIXED,
+            "te_cache_available": te_cache}
 
 
 @app.get(p("/api/lora-gallery/shared"))
@@ -829,8 +958,12 @@ async def register_downloaded_lora(request: Request) -> dict[str, Any]:
                                        triggers=[w for w in body.get("triggers") or [] if isinstance(w, str)])
         changes = {key: body[key] for key in ("description", "creator", "version", "base_model", "url", "strength_note")
                    if isinstance(body.get(key), str)}
+        slider = bool(body.get("slider")) or item.get("slider") or custom_loras.looks_like_slider(
+            str(body.get("label", "")), str(body.get("description", ""))[:300])
+        changes["slider"] = slider
         strength = body.get("default_strength")
-        if isinstance(strength, (int, float)) and not isinstance(strength, bool) and 0 <= strength <= 2:
+        low = -custom_loras.SLIDER_RANGE if slider else 0
+        if isinstance(strength, (int, float)) and not isinstance(strength, bool) and low <= strength <= (custom_loras.SLIDER_RANGE if slider else 2):
             changes["default_strength"] = float(strength)
         item = custom_loras.update(item["id"], changes)
     except ValueError as exc:
@@ -906,7 +1039,10 @@ async def _download_linked_lora(task_id: str, inspection: dict[str, Any], candid
                 changes["strength_note"] = str(recommendation.get("strength_note") or "")[:500]
                 changes["triggers"] = [word for word in recommendation.get("triggers", []) if isinstance(word, str)][:12]
                 strength = recommendation.get("recommended_strength")
-                if isinstance(strength, (int, float)) and not isinstance(strength, bool) and 0 <= strength <= 2:
+                slider = bool(recommendation.get("slider")) or custom_loras.looks_like_slider(result.get("title", ""), item.get("label", ""))
+                changes["slider"] = slider
+                low, high = (-custom_loras.SLIDER_RANGE, custom_loras.SLIDER_RANGE) if slider else (0, 2)
+                if isinstance(strength, (int, float)) and not isinstance(strength, bool) and low <= strength <= high:
                     changes["default_strength"] = strength
             item = custom_loras.update(item["id"], changes)
             if recommendation and isinstance(recommendation.get("category"), str) and recommendation["category"].strip():
@@ -1135,7 +1271,11 @@ async def create_generation(request: GenerationRequest, *, hidden: bool = False,
         label, group = f"{Path(request.test_lora).stem} · seed {seed}: {request.prompt[:60]}", "IMAGE - EPOCH TESTING"
     entry = None
     if not under_lock:
-        entry = await lock.enqueue(app="Krea", job_id=job_id, label=label, group=group)
+        # model + config file the job's measured VRAM peak (concurrent jobs, Queue page).
+        queue_key = {"queue_model": selected_model_label,
+                     "queue_config": f"{width}x{height}" + (f" x{request.count}" if request.count > 1 else "")}
+        entry = await lock.enqueue(job_id, label, group=group, uses_llm=False, model=queue_key["queue_model"],
+                                   config=queue_key["queue_config"])
         if entry is None:
             raise APIError(503, "queue_unavailable", "Could not reach the GPU queue coordinator. Try again shortly.")
     item = {
@@ -1146,7 +1286,7 @@ async def create_generation(request: GenerationRequest, *, hidden: bool = False,
     }
     store.create_job(item)
     if entry:
-        pending_submissions[job_id] = {"workflows": workflows}
+        pending_submissions[job_id] = {"workflows": workflows, "label": label, "group": group, **queue_key}
     else:
         # No token of its own: the caller's slot stays held (and is released) by the caller.
         task = asyncio.create_task(submit_job(job_id, workflows, None))
@@ -1165,6 +1305,34 @@ def _require_internal(http_request: Request) -> None:
         raise APIError(403, "forbidden", "Internal endpoint")
 
 
+# Idempotency-Key: a render re-sent after a dropped connection (the Trainer's epoch tests) gets the job the first
+# request made instead of a duplicate. Process memory is enough: a restart drops unfinished jobs anyway.
+_idem_jobs: dict[str, asyncio.Future] = {}
+
+
+async def idempotent_job(key: str | None, make: Any) -> dict[str, Any]:
+    if not key or not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", key):
+        return await make()
+    earlier = _idem_jobs.get(key)
+    if earlier is not None:
+        job_id = await asyncio.shield(earlier)       # the first request may still be running
+        item = store.job(job_id) if job_id else None
+        if item:
+            return public_job(item)
+    future = asyncio.get_running_loop().create_future()
+    _idem_jobs[key] = future
+    while len(_idem_jobs) > 2000:
+        _idem_jobs.pop(next(iter(_idem_jobs)))
+    try:
+        out = await make()
+    except BaseException:
+        _idem_jobs.pop(key, None)
+        future.set_result(None)                      # a refused request isn't remembered: the next try runs fresh
+        raise
+    future.set_result(out.get("id"))
+    return out
+
+
 @app.post(p("/api/internal/generate"), status_code=202)
 async def internal_generate(http_request: Request) -> dict[str, Any]:
     """Renders for other Rocsy services (e.g. the GPU tuning benchmark): body {"request": GenerationRequest, "under_lock": bool}.
@@ -1176,7 +1344,8 @@ async def internal_generate(http_request: Request) -> dict[str, Any]:
         request = GenerationRequest.model_validate(body.get("request") or {})
     except ValueError as exc:
         raise APIError(422, "invalid_request", str(exc)) from exc
-    return await create_generation(request, hidden=True, under_lock=bool(body.get("under_lock")))
+    return await idempotent_job(http_request.headers.get("Idempotency-Key"),
+                                lambda: create_generation(request, hidden=True, under_lock=bool(body.get("under_lock"))))
 
 
 @app.delete(p("/api/internal/jobs/{job_id}"))
@@ -1203,37 +1372,55 @@ async def internal_delete_job(job_id: str, http_request: Request) -> dict[str, b
     return {"deleted": True}
 
 
-@app.post(p("/api/internal/queue/proceed/{job_id}"))
-async def queue_proceed(job_id: str, http_request: Request) -> dict[str, Any]:
-    """Called by the bunny-lock queue coordinator when it's this job's turn.
-    Loopback + shared-secret only - never routed through the gateway."""
-    client_host = http_request.client.host if http_request.client else None
-    if client_host not in ("127.0.0.1", "::1"):
-        raise APIError(403, "forbidden", "This endpoint is only reachable from localhost.")
-    if http_request.headers.get("X-Queue-Internal-Secret") != settings.queue_internal_secret:
-        raise APIError(403, "forbidden", "Missing or invalid X-Queue-Internal-Secret.")
-    body = await http_request.json()
-    token = body.get("token")
-    # The coordinator can grant the GPU while /api/generate is still setting this job up
-    # (enqueue returns, then the job is saved and registered below it - H3 snapshots its
-    # references in between). Wait for that instead of dropping the turn.
-    for _ in range(300):
+async def queue_grant(job_id: str, entry_id: str, token: str) -> bool:
+    """bunny-lock granted this job the GPU (over the client's stream). True = started."""
+    # generate() registers the job right after its enqueue returns; the client
+    # already waits for that, this only covers a slow save.
+    for _ in range(100):
         item = store.job(job_id)
         if job_id in pending_submissions or (item and item["state"] != "waiting_for_gpu"):
             break
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.02)
     item = store.job(job_id)
     pending = pending_submissions.pop(job_id, None)
     if not item or item["state"] != "waiting_for_gpu" or pending is None:
-        if token:
-            await lock.release(token)
-        return {"accepted": False}
+        return False
     store.update_job(job_id, state="preparing", lock_token=token)
-    task = asyncio.create_task(submit_job(job_id, pending["workflows"], token))
+    task = asyncio.create_task(submit_job(job_id, pending["workflows"], token, pending.get("prepare")))
     submission_tasks.add(task)
     task.add_done_callback(submission_tasks.discard)
     await publish_jobs()
-    return {"accepted": True}
+    return True
+
+
+async def queue_prepare(job_id: str, entry_id: str) -> None:
+    """Prepare-early (Settings -> Services): this job is next, so patch its
+    workflows now and the turn only has to submit them."""
+    pending = pending_submissions.get(job_id)
+    if pending is not None and "prepare" not in pending:
+        pending["prepare"] = asyncio.ensure_future(prepare_workflows(job_id, pending["workflows"]))
+
+
+async def queue_cancel(job_id: str, entry_id: str) -> tuple[int, dict[str, Any]]:
+    """The queue page's Cancel: the same as the card's Cancel button."""
+    try:
+        return 200, await cancel_job(job_id)
+    except APIError as exc:
+        return exc.status_code, {"error": exc.code, "message": exc.message}
+
+
+async def queue_adopt(job_id: str, entry_id: str, active: bool, token: str | None) -> bool:
+    """After a restart: this entry was ours. A saved waiting job keeps its place
+    (or starts now, if its turn came while the app was down)."""
+    item = store.job(job_id)
+    if not item or item["state"] != "waiting_for_gpu" or job_id not in pending_submissions:
+        return False
+    store.update_job(job_id, queue_entry_id=entry_id)
+    return await queue_grant(job_id, entry_id, token) if active and token else True
+
+
+lock.on_grant, lock.on_prepare, lock.on_cancel = queue_grant, queue_prepare, queue_cancel
+lock.on_adopt = queue_adopt
 
 
 @app.post(p("/api/jobs/{job_id}/retry"), status_code=202)
@@ -1308,6 +1495,15 @@ async def job(job_id: str) -> dict[str, Any]:
     if not item:
         raise APIError(404, "job_not_found", "Generation not found.")
     return public_job(item)
+
+
+@app.get(p("/api/jobs/{job_id}/stats"))
+async def job_stats_route(job_id: str) -> dict[str, Any]:
+    item = store.job(job_id)
+    if not item:
+        raise APIError(404, "job_not_found", "Generation not found.")
+    live = live_job_timings(job_id) if item["state"] in UNFINISHED_JOB_STATES else None
+    return job_stats(item, live)
 
 
 @app.post(p("/api/jobs/{job_id}/cancel"))
@@ -1501,7 +1697,7 @@ async def agentic_lora_options(model: str) -> dict[str, Any]:
             continue
         extra = gallery.get(filename) or {}
         triggers = [t for t in map(_lora_note_trigger, info.get("triggers") or extra.get("trained_words") or []) if t][:4]
-        rows.append({"slot": slot, "label": info.get("label") or extra.get("name") or filename.removesuffix(".safetensors"),
+        rows.append({"slot": slot, "filename": filename, "label": info.get("label") or extra.get("name") or filename.removesuffix(".safetensors"),
                      "group": assignments.get(filename) or info.get("group") or "Other", "triggers": triggers,
                      "strength": info.get("strength", 1.0),
                      "description": _lora_note_text(str(extra.get("description") or ""))[:180]})
@@ -1511,7 +1707,7 @@ async def agentic_lora_options(model: str) -> dict[str, Any]:
 # Agentic sessions, Hermes settings, model guides and the Hermes terminal live in the
 # internal framework (BunnyBytes/shared). The browser goes through this studio so the
 # framework secret stays server-side; one route forwards the allowed paths.
-_AGENTIC_PATH = re.compile(r"^(models|settings|guides|preview|sessions(/[a-f0-9]{32}(/(cancel|plan|steer|feedback))?)?)$")
+_AGENTIC_PATH = re.compile(r"^(models|settings|guides|preview|rag|attachments|sessions(/[a-f0-9]{32}(/(cancel|pause|resume|plan|steer|feedback))?)?)$")
 
 
 @app.api_route(p("/api/agentic/{path:path}"), methods=["GET", "POST", "PUT", "DELETE"])
@@ -1522,7 +1718,7 @@ async def agentic_proxy(path: str, request: Request):
     url = base + ("/v1/agentic/models" if path == "models" else "/v1/agentic/image/" + path)
     body = await request.body()
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=120 if path == "attachments" else 30) as client:
             response = await client.request(request.method, url, content=body or None,
                 headers={"X-Queue-Internal-Secret": (os.getenv("QUEUE_INTERNAL_SECRET") or os.getenv("KREA_QUEUE_INTERNAL_SECRET") or os.getenv("MUS_QUEUE_INTERNAL_SECRET") or ""), "Content-Type": "application/json"})
         return JSONResponse(response.json(), status_code=response.status_code)

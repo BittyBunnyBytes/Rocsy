@@ -144,3 +144,6 @@
   .rb-bar.rb-bar :is(.view-tab, .tab) { flex: 1; padding: 0 8px; }
   .rb-bar.rb-bar .service-state > span:not(.status-dot) { display: none; }
 }
+/* Plugins with their own icon picture */
+.rb-bar .rb-app-icon-img { overflow: hidden; background: color-mix(in srgb, var(--rb-accent) 10%, transparent); }
+.rb-bar .rb-app-icon-img img { display: block; width: 20px; height: 20px; object-fit: contain; border-radius: 4px; }

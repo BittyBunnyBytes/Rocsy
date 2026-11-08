@@ -63,7 +63,7 @@ def main():
         queue = request(f"{QUEUE}/Queue/api/queue").get("entries") or []
         if queue:
             sys.exit(f"refused: the GPU queue is busy ({len(queue)} entr{'y' if len(queue) == 1 else 'ies'}); try again when it's empty")
-        request(f"{LLAMA}/unload", headers={"Authorization": f"Bearer {ENV.get('LLAMA_API_KEY', '')}"}, timeout=30)
+        request(f"{LLAMA}/unload", headers={"Authorization": f"Bearer {ENV.get('LLAMA_API_KEY', '')}"}, timeout=480)
         body = {"seconds": a.seconds, "screenshots": a.screenshots, "uninstall": a.uninstall, "install": a.install, "user_files": a.user_files}
         result = request(f"{HOSTCTL}/rea/mods/{a.mod}/play", "POST", body, auth, timeout=2 * a.seconds + 480)
     else:

@@ -11,6 +11,7 @@ from urllib.parse import urlencode, urlparse, urlunparse
 import httpx
 import websockets
 
+from . import condcache
 from .config import Settings
 
 
@@ -73,7 +74,16 @@ class ComfyService:
         except ServiceError:
             return {"online": False, "rendering": 0, "waiting": 0, "running_ids": []}
 
-    async def submit(self, workflow: dict[str, Any], client_id: str) -> str:
+    async def has_node(self, class_type: str) -> bool:
+        try:
+            return class_type in await self.request("GET", f"/object_info/{class_type}", timeout=5)
+        except ServiceError:
+            return False
+
+    async def submit(self, workflow: dict[str, Any], client_id: str, te_cache: bool = True) -> str:
+        # Reuse text-encoder outputs for inputs ComfyUI has already encoded (see condcache.py).
+        if te_cache and condcache.needs_node(workflow) and await self.has_node(condcache.NODE):
+            workflow = condcache.wrap(workflow)
         result = await self.request("POST", "/prompt", {"prompt": workflow, "client_id": client_id}, timeout=30)
         prompt_id = result.get("prompt_id")
         if not prompt_id:

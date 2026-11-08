@@ -1,5 +1,5 @@
 (() => {
-  const base = window.TRAINER_BASE || "/Trainer";
+  const base = window.TRAINER_BASE || document.body?.dataset.base || "/Trainer";
   const grid = document.querySelector("#shared-lora-grid");
   const search = document.querySelector("#shared-lora-search");
   const studio = document.querySelector("#shared-lora-studio");

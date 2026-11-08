@@ -47,7 +47,8 @@ TRANSIENT_DOWNLOAD = re.compile(r'failed retrieving file|failed to retrieve some
                                 r'Operation too slow|Unable to connect|failed to fetch', re.I)
 # What the installer can set up. Services are Compose profiles (COMPOSE_PROFILES in BunnyBytes/.env,
 # so later rebuilds keep the choice); backends run once, after Rocsy is up, and each may fail alone.
-COMPONENTS = {'motion': True, 'rea': False, 'trainer': False, 'comfyui': True, 'hermes': True, 'ytdlp': True}
+COMPONENTS = {'motion': True, 'rea': False, 'trainer': False, 'comfyui': True, 'hermes': True, 'ytdlp': True,
+              'music': False}
 # Bundled starting points that become the user's own once installed (Models → Manager adds the LLMs it
 # downloads to Llama/config.yaml): written on a fresh install, never replaced by Update or Repair.
 USER_SEED_FILES = frozenset({'Llama/config.yaml'})
@@ -221,7 +222,6 @@ def prepare_bind_mount_permissions(compose_dir, use_group, progress):
     # run as non-root users and need to create databases and working folders.
     services = (
         ('gateway', 'bunnygate', ('/app/data',)),
-        ('lock', 'bunnylock', ('/app/data',)),
         ('connections', 'connections', ('/data',)),
         ('agent', 'agent', ('/data', '/attachments', '/workspace')),
         ('modelhub', f'{os.getuid()}:{os.getgid()}', ('/data',)),
@@ -229,6 +229,9 @@ def prepare_bind_mount_permissions(compose_dir, use_group, progress):
         ('music', 'music', ('/data/app', '/data/logs')),
         ('krea', 'krea', ('/data/app', '/data/logs')),
     )
+    # bunny-lock's image is distroless (no chown) and runs as ROCSY_UID, so its bind mount is simply
+    # made here, by this user, before Docker could create it as root.
+    (compose_dir / 'lock' / 'data').mkdir(parents=True, exist_ok=True)
     for service, owner, paths in services:
         account = owner if ':' in owner else f'{owner}:{owner}'
         command = ['docker', 'compose', 'run', '--rm', '--no-deps', '--user', '0',
@@ -241,6 +244,12 @@ def prepare_bind_mount_permissions(compose_dir, use_group, progress):
                '--entrypoint', 'chown', 'video', 'h3web:h3web', '/data/input']
     run_command(docker_command(command, use_group), progress, 93,
                 'Preparing H3 input folder…', cwd=compose_dir)
+    # Image (uid 999) and the Models hub (the install user) both write new LoRAs here, so
+    # neither can own it alone. Only the folder itself: files keep their owners.
+    command = ['docker', 'compose', 'run', '--rm', '--no-deps', '--user', '0',
+               '--entrypoint', 'chmod', 'krea', '777', '/models/loras/KreaCustom']
+    run_command(docker_command(command, use_group), progress, 93,
+                'Preparing Image LoRA folder…', cwd=compose_dir)
 
 
 def log_docker_diagnostics():
@@ -704,6 +713,14 @@ def ytdlp_ready(dest):
     return (dest / 'core-backend-extras' / 'yt-dlp' / 'yt-dlp').is_file()
 
 
+def music_ready(dest):
+    """Music covers (Core Backend job rsp-install) finished: RSP, Seed-VC and every model file."""
+    try:
+        return json.loads((dest / 'core-backend-extras' / 'rsp.json').read_text()).get('phase') == 'ready'
+    except (OSError, ValueError):
+        return False
+
+
 def supervisor_installed(dest):
     return comfyinstall.supervisor_status(dest)['state'] == 'ours'
 
@@ -714,7 +731,8 @@ def current_components(dest):
     if not (dest / 'BunnyBytes' / '.env').is_file() or 'COMPOSE_PROFILES' not in (dest / 'BunnyBytes' / '.env').read_text():
         profiles = {'motion', 'rea', 'trainer'}  # installs made before components existed had all three
     return {'motion': 'motion' in profiles, 'rea': 'rea' in profiles, 'trainer': 'trainer' in profiles,
-            'comfyui': supervisor_installed(dest), 'hermes': hermes_ready(dest), 'ytdlp': ytdlp_ready(dest)}
+            'comfyui': supervisor_installed(dest), 'hermes': hermes_ready(dest), 'ytdlp': ytdlp_ready(dest),
+            'music': music_ready(dest)}
 
 
 def chosen_components(raw, existing_dest=None):
@@ -730,8 +748,8 @@ def ensure_host_tools(progress, components, host_helper, download_comfy):
     """git for ComfyUI/Hermes, PyYAML for the host helper and Core Backend jobs, venv for ComfyUI.
     With the host helper on, anything skipped here can be installed later in Models → Core Backend,
     so it gets every tool those jobs use (git, PyYAML, venv) whether or not it is chosen now."""
-    needs_git = host_helper or (components['comfyui'] and download_comfy) or components['hermes']
-    needs_yaml = host_helper or components['hermes'] or components['ytdlp']
+    needs_git = host_helper or (components['comfyui'] and download_comfy) or components['hermes'] or components['music']
+    needs_yaml = host_helper or components['hermes'] or components['ytdlp'] or components['music']
     missing = []
     if needs_git and not shutil.which('git'):
         missing.append('git')
@@ -779,13 +797,6 @@ def run_backend_job(dest, job, use_group, progress, percent, message):
 
 def comfy_python():
     """The newest Python 3.10–3.14 on PATH (PyTorch's ROCm wheels cover those)."""
-    for name in ('python3.13', 'python3.12', 'python3.14', 'python3.11', 'python3.10', 'python3'):
-        if (path := shutil.which(name)) and command_ok([path, '-c', 'import sys; raise SystemExit(not (3, 10) <= sys.version_info[:2] <= (3, 14))']):
-            return path
-    raise RuntimeError('ComfyUI needs Python 3.10–3.14; install one (for example python3.13), then run Repair.')
-
-
-def comfy_python():
     return comfyinstall.find_python()
 
 
@@ -809,7 +820,12 @@ def setup_h3(dest, comfy, progress):
     problems = comfyinstall.h3_setup(comfy, dest, run)
     for problem in problems:
         log_line(f'H3 optimizations: {problem}')
-    return problems
+    # The YuE2 pack, RSP (Music) and bunny_cond_cache (Krea): code only, RSP's models are the
+    # Music covers component (Core Backend job rsp-install).
+    studio = comfyinstall.studio_setup(comfy, dest, run)
+    for problem in studio:
+        log_line(f'Studio node packs: {problem}')
+    return problems + studio
 
 
 def setup_supervisor(dest, comfy):
@@ -850,6 +866,15 @@ def install_backends(dest, comfy, existing_comfy, components, use_group, progres
                 note += f' ROCm for WSL is missing, so it can\'t use the GPU yet: {windowshost.ROCM_WSL_DOCS}'
             return ('Ready; the studios start it when they need it.' if not existing_comfy else 'Supervisor set up for your ComfyUI folder.') + note
         attempt('ComfyUI', comfyui)
+    if components['music'] and not music_ready(dest):
+        def music():
+            if not comfyinstall.ready(comfy):
+                raise RuntimeError('Music covers need ComfyUI, which isn’t set up.')
+            os.environ['CORE_COMFY_DIR'] = str(comfy)  # the job's ComfyUI is this install's
+            run_backend_job(dest, 'rsp-install', use_group, progress, 95,
+                            'Music covers: YuE2, RSP, Seed-VC and their models (about 15 GB)…')
+            return 'Installed; ComfyUI loads RSP the next time it starts.'
+        attempt('Music covers', music)
     if components['hermes'] and not hermes_ready(dest):
         def hermes():
             run_backend_job(dest, 'hermes-download', use_group, progress, 96,
@@ -1033,10 +1058,17 @@ def install(payload, progress=lambda _percent, _message: None):
     (dest / 'external' / 'ComfyUI').mkdir(parents=True, exist_ok=True)
     # Read-only mounts of REA and the Agent: created here so Docker doesn't make them root-owned.
     # Models → Core Backend fills them (REA engines/mod loaders, yt-dlp).
-    for relative in ('rea-engines', 'rea-mod-installs', 'yt-dlp'):
+    # plugins/ holds the user's own custom services (BunnyBytes/plugins/README.md).
+    for relative in ('rea-engines', 'rea-mod-installs', 'yt-dlp', 'plugins'):
         (dest / 'core-backend-extras' / relative).mkdir(parents=True, exist_ok=True)
+    # The example plugin (shipped in BunnyBytes/plugins/example, turned off): the user's copy once there.
+    example = dest / 'core-backend-extras' / 'plugins' / 'example'
+    if (dest / 'BunnyBytes' / 'plugins' / 'example').is_dir() and not example.exists():
+        shutil.copytree(dest / 'BunnyBytes' / 'plugins' / 'example', example)
     try:
-        for relative in ('models', 'input/VoiceRefs', 'output/postedit-sep'):
+        # Writable LoRA mounts of the Trainer: made here so Docker doesn't create them root-owned.
+        for relative in ('models', 'input/VoiceRefs', 'output/postedit-sep', 'models/loras/KreaCustom',
+                         'models/loras/Music/YuE2', 'models/loras/Music/MiniMaxMusic3', 'models/llm/loras'):
             (comfy / relative).mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise RuntimeError(f'ComfyUI folder is not writable: {exc}') from exc
@@ -1332,6 +1364,7 @@ COMPONENT_TEXT = {
     'comfyui': ('ComfyUI', 'every studio renders through it; downloads ComfyUI + PyTorch for ROCm (several GB)'),
     'hermes': ('Hermes Agent', 'runs the Master Agent and Agentic modes'),
     'ytdlp': ('yt-dlp', 'web video references for the agent'),
+    'music': ('Music covers', 'covers and custom voices in Music: YuE2, RSP, Seed-VC and their models (about 15 GB)'),
 }
 
 
@@ -1395,9 +1428,9 @@ def customize(ask, style, dest_default, family, no_password=False):
     kept = current_components(dest) if prior and payload['mode'] != 'reinstall' else {}
     defaults = kept or COMPONENTS
     chosen = {}
-    for key in ('motion', 'rea', 'trainer', 'comfyui', 'hermes', 'ytdlp'):
+    for key in ('motion', 'rea', 'trainer', 'comfyui', 'hermes', 'ytdlp', 'music'):
         name, text = COMPONENT_TEXT[key]
-        if key in ('comfyui', 'hermes', 'ytdlp') and kept.get(key):
+        if key in ('comfyui', 'hermes', 'ytdlp', 'music') and kept.get(key):
             print(f'  {name}: {style.ok("installed")} (kept; remove it in Models → Core Backend)')
             chosen[key] = True
             continue

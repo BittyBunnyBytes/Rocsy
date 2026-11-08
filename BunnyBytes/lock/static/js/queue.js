@@ -2,6 +2,25 @@
   const PREFIX = document.body.dataset.mountPrefix || "";
   const entriesEl = document.getElementById("entries");
   const emptyEl = document.getElementById("empty");
+  const activeEl = document.getElementById("active-entries");
+  const activeEmptyEl = document.getElementById("active-empty");
+  const statsEl = document.getElementById("stats");
+  const runningCountEl = document.getElementById("running-count");
+  const waitingCountEl = document.getElementById("waiting-count");
+  const gpuPanel = document.getElementById("gpu-panel");
+  const gpuMode = document.getElementById("gpu-mode");
+  const gpuNumbers = document.getElementById("gpu-numbers");
+  const gpuBar = document.getElementById("gpu-bar");
+  const gpuLegend = document.getElementById("gpu-legend");
+  const setConcurrent = document.getElementById("set-concurrent");
+  const setPrepare = document.getElementById("set-prepare");
+  const setReserve = document.getElementById("set-reserve");
+  const setTotal = document.getElementById("set-total");
+  const setTotalHelp = document.getElementById("set-total-help");
+  const peaksBody = document.getElementById("peaks-body");
+  const peaksEmpty = document.getElementById("peaks-empty");
+  let vram = null;
+  let settings = null;
   const messageEl = document.getElementById("queue-message");
   const demoToggle = document.getElementById("demo-toggle");
   const restartComfyui = document.getElementById("restart-comfyui");
@@ -51,6 +70,7 @@
       shutdown_at: null,
       position: index === 0 ? null : index,
       progress: index === 0 ? { percent: 42, remaining_seconds: 155, stage: "render" } : null,
+      vram_mb: index % 4 === 3 ? null : 2048 + ((index * 1531) % 9000),
     }));
   }
 
@@ -183,7 +203,7 @@
   }
 
   function updateProgressBars() {
-    for (const wrap of entriesEl.querySelectorAll("[data-progress-for]")) fillProgress(wrap, progressById[wrap.dataset.progressFor]);
+    for (const wrap of document.querySelectorAll("[data-progress-for]")) fillProgress(wrap, progressById[wrap.dataset.progressFor]);
   }
 
   async function cancelEntry(entry, quiet = false) {
@@ -201,9 +221,12 @@
       const response = await fetch(`${PREFIX}/api/queue/${encodeURIComponent(entry.entry_id)}/cancel`, { method: "POST" });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.message || result.detail || `Cancel failed (HTTP ${response.status}).`);
+      const appName = APP_LABELS[entry.app] || entry.app;
       if (!quiet) showMessage(result.removed === "orphan"
-        ? `${APP_LABELS[entry.app] || entry.app} no longer had this job, so it was removed from the queue.`
-        : `Cancel request sent for ${APP_LABELS[entry.app] || entry.app}.`);
+        ? `${appName} no longer had this job, so it was removed from the queue.`
+        : result.removed === "app_down"
+          ? `${appName} isn't running, so its job was removed from the queue.`
+          : `Cancel request sent for ${appName}.`);
       if (!quiet) await loadOnce();
     } catch (err) {
       console.error("Cancel failed", err);
@@ -222,22 +245,26 @@
     const open = openGroups.has(name);
     const row = document.createElement("div");
     row.className = "queue-card queue-group" + (active ? " is-active" : " is-waiting") + (open ? " is-open" : "");
+    row.dataset.app = (active || members[0]).app;
     const posEl = document.createElement("div");
     posEl.className = "queue-order";
     posEl.textContent = active ? "▶" : String(waiting[0]?.position ?? "?");
     row.appendChild(posEl);
     const body = document.createElement("div");
     body.className = "queue-card-body";
+    const head = document.createElement("div");
+    head.className = "queue-card-head";
     const title = document.createElement("span");
     title.className = "queue-app";
     title.textContent = name;
+    head.append(title, badge(`${members.length} job${members.length === 1 ? "" : "s"}`));
     const count = document.createElement("span");
     count.className = "queue-label";
-    count.textContent = `${members.length} job${members.length === 1 ? "" : "s"}` + (active ? " · 1 running" : "") + (waiting.length ? ` · ${waiting.length} waiting` : "");
-    body.append(title, count);
+    count.textContent = active ? active.label : (waiting[0]?.label || "");
+    body.append(head, count);
     const meta = document.createElement("div");
     meta.className = "queue-meta";
-    meta.textContent = active ? `Now: ${active.label}` : `Next: ${waiting[0]?.label || ""}`;
+    meta.textContent = (active ? "1 running" : "") + (active && waiting.length ? " · " : "") + (waiting.length ? `${waiting.length} waiting` : "");
     body.appendChild(meta);
     if (active) body.appendChild(progressBar(active));
     if (open) {
@@ -285,13 +312,59 @@
     });
     actions.append(toggle, cancelAll);
     row.appendChild(actions);
-    entriesEl.appendChild(row);
+    (active ? activeEl : entriesEl).appendChild(row);
+  }
+
+  const gb = (mb) => `${(mb / 1024).toFixed(mb >= 10240 ? 0 : 1)} GB`;
+
+  // The job's planned VRAM (recorded peak / override); shown once the queue measures VRAM.
+  function vramTag(entry) {
+    if (entry.is_informational || !(demoMode || vram?.available)) return null;
+    const known = entry.vram_mb != null;
+    const el = badge(known ? `≈ ${gb(entry.vram_mb)}` : "VRAM unmeasured", "vram");
+    if (!known) el.classList.add("is-unknown");
+    el.title = known
+      ? `Planned VRAM for ${entry.vram_key || entry.app} (its recorded peak)`
+      : `${entry.vram_key || entry.app} has not been measured yet: it runs alone the first time`;
+    return el;
+  }
+
+  function badge(text, kind = "") {
+    const el = document.createElement("span");
+    el.className = "badge" + (kind ? ` badge-${kind}` : "");
+    el.textContent = text;
+    return el;
+  }
+
+  function renderStats(entries) {
+    const running = entries.filter((entry) => entry.state === "active").length;
+    const waiting = entries.length - running;
+    const locked = entries.filter((entry) => entry.state === "waiting" && entry.is_locked).length;
+    const stats = [["Running", running, "is-running"], ["Waiting", waiting, ""], ["Locked", locked, ""]];
+    statsEl.innerHTML = "";
+    for (const [label, value, cls] of stats) {
+      const item = document.createElement("div");
+      item.className = "stat" + (cls ? ` ${cls}` : "");
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = String(value);
+      item.append(dt, dd);
+      statsEl.appendChild(item);
+    }
+    runningCountEl.textContent = running ? String(running) : "";
+    waitingCountEl.textContent = waiting ? String(waiting) : "";
   }
 
   function render(entries) {
     entriesEl.innerHTML = "";
-    emptyEl.hidden = entries.length > 0;
-    emptyEl.textContent = demoMode ? "All test jobs cancelled. Show the live queue or reload the test jobs." : "Nothing queued right now.";
+    activeEl.innerHTML = "";
+    renderStats(entries);
+    const hasActive = entries.some((entry) => entry.state === "active");
+    const hasWaiting = entries.some((entry) => entry.state !== "active");
+    activeEmptyEl.hidden = hasActive;
+    emptyEl.hidden = hasWaiting;
+    emptyEl.textContent = demoMode && !entries.length ? "All test jobs cancelled. Show the live queue or reload the test jobs." : "Nothing waiting.";
     const drawn = new Set();
     for (const entry of entries) {
       if (entry.group) {
@@ -303,7 +376,9 @@
       }
       const row = document.createElement("div");
       row.className = "queue-card" + (entry.state === "active" ? " is-active" : " is-waiting") + (entry.is_continuous ? " is-continuous" : "") + (entry.is_locked ? " is-locked" : "") + (entry.is_informational ? " is-informational" : "");
+      row.dataset.app = entry.app;
       row.draggable = entry.state === "waiting" && !entry.is_locked && !entry.is_informational;
+      if (row.draggable) row.title = "Drag to reorder";
       if (row.draggable) {
         row.addEventListener("dragstart", (event) => {
           if (event.target?.tagName === "BUTTON" || event.target?.tagName === "INPUT") {
@@ -355,27 +430,29 @@
       const labelSpan = document.createElement("span");
       labelSpan.className = "queue-label";
       labelSpan.textContent = entry.label;
-      body.appendChild(appSpan);
+      const head = document.createElement("div");
+      head.className = "queue-card-head";
+      head.appendChild(appSpan);
+      if (entry.is_continuous) head.appendChild(badge("Continuous", "continuous"));
+      if (entry.is_locked) head.appendChild(badge("🔒 Locked", "locked"));
+      const countdownBadge = fmtCountdown(entry.shutdown_at);
+      if (countdownBadge) head.appendChild(badge(countdownBadge, "time"));
+      if (entry.is_informational) head.appendChild(badge("Informational", "info"));
+      const vramBadge = vramTag(entry);
+      if (vramBadge) head.appendChild(vramBadge);
+      body.appendChild(head);
       body.appendChild(labelSpan);
 
       const meta = document.createElement("div");
       meta.className = "queue-meta";
-      const metaParts = [entry.state === "active" ? "Running" : "Waiting for GPU"];
-      if (entry.is_continuous) metaParts.push("Continuous");
-      if (entry.is_informational) metaParts.push("Remote API · Llama loaded · Informational");
+      const metaParts = [];
+      if (entry.is_informational) metaParts.push("Remote API · Llama loaded");
       if (entry.hermes) metaParts.push("Hermes" + (entry.hermes.runs > 1 ? ` · ${entry.hermes.runs} runs` : "") + (entry.hermes.loaded_model ? ` · ${entry.hermes.loaded_model} loaded` : ""));
-      const countdown = fmtCountdown(entry.shutdown_at);
-      if (countdown) metaParts.push(countdown);
       meta.textContent = metaParts.join(" · ");
       body.appendChild(meta);
       if (entry.state === "active" && !entry.is_informational) body.appendChild(progressBar(entry));
 
       row.appendChild(body);
-
-      const stateEl = document.createElement("div");
-      stateEl.className = "queue-status";
-      stateEl.textContent = entry.state === "active" ? "active" : "waiting";
-      row.appendChild(stateEl);
 
       const actions = document.createElement("div");
       actions.className = "queue-actions";
@@ -383,7 +460,7 @@
         const lockBtn = document.createElement("button");
         lockBtn.className = "queue-lock";
         lockBtn.type = "button";
-        lockBtn.textContent = entry.is_locked ? "Unlock position" : "Lock position";
+        lockBtn.textContent = entry.is_locked ? "Unlock" : "Lock";
         lockBtn.setAttribute("aria-label", `${entry.is_locked ? "Unlock" : "Lock"} position of ${APP_LABELS[entry.app] || entry.app} job`);
         lockBtn.disabled = locking.has(entry.entry_id);
         lockBtn.addEventListener("click", () => toggleLock(entry));
@@ -402,7 +479,7 @@
       }
       if (actions.childElementCount) row.appendChild(actions);
 
-      entriesEl.appendChild(row);
+      (entry.state === "active" ? activeEl : entriesEl).appendChild(row);
     }
   }
 
@@ -410,6 +487,177 @@
     progressById = {};
     for (const entry of entries) if (entry.progress) progressById[entry.entry_id] = entry.progress;
   }
+
+  // ---------------------------------------------------------------- GPU memory
+
+  function renderGpu() {
+    gpuPanel.hidden = !vram || !vram.available;
+    if (gpuPanel.hidden) return;
+    const total = vram.total_mb || 1;
+    const pct = (mb) => `${Math.max(0, Math.min(100, (mb / total) * 100))}%`;
+    const floor = vram.floor_mb || 0;
+    const planned = vram.running.reduce((sum, job) => sum + (job.estimate_mb || 0), 0);
+    const beyond = vram.used_mb - floor - planned;
+    const extra = beyond >= 256 ? beyond : 0;   // smaller is reading noise
+    gpuMode.textContent = vram.active ? "Jobs share the GPU" : "One job at a time";
+    gpuMode.className = "badge" + (vram.active ? " badge-on" : "");
+    gpuNumbers.textContent = `${gb(vram.used_mb)} used of ${gb(total)}` + (vram.active ? ` · ${gb(vram.free_for_jobs_mb)} free for another job` : "");
+    gpuBar.innerHTML = "";
+    const segment = (cls, mb, title, app) => {
+      if (mb <= 0) return;
+      const el = document.createElement("span");
+      el.className = cls;
+      el.style.width = pct(mb);
+      el.title = `${title}: ${gb(mb)}`;
+      if (app) el.dataset.app = app;
+      gpuBar.appendChild(el);
+    };
+    segment("seg-floor", floor, "Desktop (lowest reading)");
+    for (const job of vram.running) segment("seg-job", job.estimate_mb || 0, `${job.label} (planned)`, job.app);
+    segment("seg-extra", extra, "Beyond the plan (cached models, other programs)");
+    segment("seg-reserve", vram.reserve_mb, "Always kept free");
+    const mark = document.createElement("span");
+    mark.className = "used-mark";
+    mark.style.left = pct(vram.used_mb);
+    mark.title = `Used now: ${gb(vram.used_mb)}`;
+    gpuBar.appendChild(mark);
+    gpuBar.setAttribute("aria-label", gpuNumbers.textContent);
+    gpuLegend.innerHTML = "";
+    const legend = (cls, text, app) => {
+      const item = document.createElement("span");
+      const swatch = document.createElement("i");
+      if (cls) swatch.className = cls;
+      if (app) swatch.dataset.app = app;
+      item.append(swatch, text);
+      gpuLegend.appendChild(item);
+    };
+    legend("k-floor", `Desktop ${gb(floor)}`);
+    for (const job of vram.running) legend("", `${job.key} ${job.estimate_mb ? gb(job.estimate_mb) : "(unmeasured)"}`, job.app);
+    if (extra > 0) legend("k-extra", `Beyond plan ${gb(extra)}`);
+    legend("k-reserve", `Reserve ${gb(vram.reserve_mb)}`);
+    legend("k-used", "Used now");
+  }
+
+  function renderSettings() {
+    if (settings) {
+      setConcurrent.checked = !!settings.concurrent;
+      setPrepare.checked = settings.prepare_early !== false;
+      if (document.activeElement !== setReserve) setReserve.value = +(settings.vram_reserve_mb / 1024).toFixed(2);
+      if (document.activeElement !== setTotal) setTotal.value = +((settings.vram_total_mb || 0) / 1024).toFixed(2);
+    }
+    if (!vram) return;
+    setConcurrent.disabled = !vram.available;
+    setTotalHelp.textContent = vram.available
+      ? `Leave at 0 to use the size the card reports (${gb(vram.detected_total_mb)}).`
+      : "The GPU's memory counters can't be read, so jobs always run one at a time.";
+    renderPeaks();
+  }
+
+  function renderPeaks() {
+    if (peaksBody.contains(document.activeElement)) return;   // don't redraw under the cursor
+    peaksBody.innerHTML = "";
+    peaksEmpty.hidden = vram.profiles.length > 0;
+    for (const profile of vram.profiles) {
+      const row = document.createElement("tr");
+      row.classList.toggle("is-overridden", profile.override_mb != null);
+      const name = document.createElement("td");
+      name.textContent = profile.key;
+      const peak = document.createElement("td");
+      peak.className = "peak";
+      peak.textContent = profile.peak_mb != null ? gb(profile.peak_mb) : "–";
+      const recent = document.createElement("td");
+      recent.className = "recent";
+      recent.textContent = profile.recent.length ? profile.recent.map(gb).join(", ") : "–";
+      recent.title = `${profile.runs} run${profile.runs === 1 ? "" : "s"} measured`;
+      const overrideCell = document.createElement("td");
+      const input = document.createElement("input");
+      input.type = "number";
+      input.min = "0";
+      input.step = "0.5";
+      input.placeholder = "GB";
+      input.setAttribute("aria-label", `VRAM to plan for ${profile.key}, GB`);
+      if (profile.override_mb != null) input.value = +(profile.override_mb / 1024).toFixed(2);
+      input.addEventListener("change", () => {
+        const value = parseFloat(input.value);
+        saveSettings({ vram_overrides: { [profile.key]: value > 0 ? Math.round(value * 1024) : null } });
+      });
+      overrideCell.appendChild(input);
+      const actions = document.createElement("td");
+      if (profile.peak_mb != null) {
+        const forget = document.createElement("button");
+        forget.type = "button";
+        forget.className = "queue-cancel";
+        forget.textContent = "Forget";
+        forget.addEventListener("click", () => forgetPeak(profile.key));
+        actions.appendChild(forget);
+      }
+      row.append(name, peak, recent, overrideCell, actions);
+      peaksBody.appendChild(row);
+    }
+  }
+
+  async function loadSettings() {
+    try {
+      const [s, v] = await Promise.all([
+        fetch(`${PREFIX}/api/settings`).then((r) => r.ok ? r.json() : null),
+        fetch(`${PREFIX}/api/vram`).then((r) => r.ok ? r.json() : null),
+      ]);
+      if (s) settings = s;
+      if (v) vram = v;
+      renderSettings();
+      renderGpu();
+      refresh();
+    } catch (err) {
+      console.error("Failed to load queue settings", err);
+    }
+  }
+
+  async function saveSettings(patch) {
+    try {
+      const response = await fetch(`${PREFIX}/api/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || `Saving failed (HTTP ${response.status}).`);
+      settings = result;
+      showMessage("Queue settings saved.");
+      await loadSettings();
+    } catch (err) {
+      showMessage(err.message || "Unable to save the queue settings.", true);
+      renderSettings();
+    }
+  }
+
+  async function forgetPeak(key) {
+    if (!confirm(`Forget the recorded VRAM peak of ${key}? It will run alone until it is measured again.`)) return;
+    try {
+      const response = await fetch(`${PREFIX}/api/vram/forget`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || `Forget failed (HTTP ${response.status}).`);
+      vram = result;
+      renderSettings();
+      renderGpu();
+    } catch (err) {
+      showMessage(err.message || "Unable to forget that peak.", true);
+    }
+  }
+
+  setConcurrent.addEventListener("change", () => saveSettings({ concurrent: setConcurrent.checked }));
+  setPrepare.addEventListener("change", () => saveSettings({ prepare_early: setPrepare.checked }));
+  setReserve.addEventListener("change", () => {
+    const value = parseFloat(setReserve.value);
+    if (value >= 0) saveSettings({ vram_reserve_mb: Math.round(value * 1024) });
+  });
+  setTotal.addEventListener("change", () => {
+    const value = parseFloat(setTotal.value);
+    if (value >= 0) saveSettings({ vram_total_mb: Math.round(value * 1024) });
+  });
 
   async function loadOnce() {
     try {
@@ -424,8 +672,9 @@
     }
   }
 
+  let source = null;
   function subscribe() {
-    const source = new EventSource(`${PREFIX}/api/queue/events`);
+    source = new EventSource(`${PREFIX}/api/queue/events`);
     source.addEventListener("queue", (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -434,6 +683,15 @@
         if (!demoMode && !draggingId && !reorderPending) refresh();
       } catch (err) {
         console.error("Bad queue event", err);
+      }
+    });
+    source.addEventListener("vram", (event) => {
+      try {
+        vram = JSON.parse(event.data);
+        renderGpu();
+        renderSettings();
+      } catch (err) {
+        console.error("Bad vram event", err);
       }
     });
     source.addEventListener("progress", (event) => {
@@ -484,10 +742,12 @@
   }
   refresh();
   loadOnce();
+  loadSettings();
   subscribe();
-  setInterval(loadOnce, 30000);
+  // Only a fallback: the live stream already carries every change.
+  setInterval(() => { if (!source || source.readyState !== EventSource.OPEN) loadOnce(); }, 30000);
   // A backgrounded tab (phone screen off, other machine) can miss events: catch up on return.
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") loadOnce();
+    if (document.visibilityState === "visible") { loadOnce(); loadSettings(); }
   });
 })();

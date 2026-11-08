@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import reference
+from bunnylock import BunnyLock, LockUnavailable
 import settings as voice_settings
 
 PREFIX = "/Voice"
@@ -291,9 +292,21 @@ def _output_meta(path: Path) -> dict:
         return {}
 
 
+# Queued generation -> its GPU turn, for progress pushes (kept out of the job JSON the page sees).
+job_tokens: dict[str, str] = {}
+
+
 def _set_job(job_id: str, **fields):
     with jobs_lock:
-        jobs[job_id].update(fields)
+        job = jobs[job_id]
+        job.update(fields)
+        if "chunk" in fields and job.get("chunks"):
+            job["progress"] = round(100 * job["chunk"] / job["chunks"], 1)
+            done, total = job["chunk"], job["chunks"]
+        else:
+            return
+    if token := job_tokens.get(job_id):   # the queue page's progress bar (thread-safe in the client)
+        GPU.progress(token, percent=100 * done / total, stage=f"Part {done + 1} of {total}")
 
 
 def _run_qwen(job_id: str, payload: Generate):
@@ -362,30 +375,28 @@ async def _run_worker(job_id: str, payload: Generate):
         _set_job(job_id, state="failed", error=detail)
 
 
-def _queue_post(path: str, body: dict):
-    with httpx.Client(timeout=10) as client:
-        response = client.post(f"{QUEUE}{path}", json=body,
-                               headers={"X-Queue-Internal-Secret": QUEUE_SECRET})
-        response.raise_for_status()
-        return response.json()
+# Fire-and-forget work: asyncio only keeps a weak reference to a task, so one nobody holds
+# can be garbage-collected mid-await and silently never finish.
+_spawned: set[asyncio.Task] = set()
 
 
-def _heartbeat(token: str, stop: threading.Event):
-    while not stop.wait(20):
-        try:
-            _queue_post("/heartbeat", {"token": token})
-        except httpx.HTTPError:
-            pass
+def spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _spawned.add(task)
+    task.add_done_callback(_spawned.discard)
+    return task
+
+
+# The shared GPU queue (bunnylock.py): turns arrive over its stream; held turns
+# are heartbeated by the client.
+GPU = BunnyLock(app="Voice", url=QUEUE, secret=QUEUE_SECRET)
 
 
 def _run_qwen_queued(job_id: str, payload: Generate, token: str):
     global qwen_model
-    stop = threading.Event()
-    threading.Thread(target=_heartbeat, args=(token, stop), daemon=True).start()
     try:
         _run_qwen(job_id, payload)
     finally:
-        stop.set()
         with model_lock:
             qwen_model = None
             try:
@@ -394,98 +405,71 @@ def _run_qwen_queued(job_id: str, payload: Generate, token: str):
                     torch.cuda.empty_cache()
             except Exception:
                 pass
-        try:
-            _queue_post("/release", {"token": token})
-        except httpx.HTTPError:
-            pass
+        job_tokens.pop(job_id, None)
+        GPU.release_sync(token)
 
 
 async def _run_worker_queued(job_id: str, payload: Generate, token: str):
-    stop = threading.Event()
-    threading.Thread(target=_heartbeat, args=(token, stop), daemon=True).start()
     try:
         await _run_worker(job_id, payload)
     finally:
-        stop.set()
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 await client.post(f"{WORKER}/eject", headers={"X-Voice-Worker-Secret": WORKER_SECRET})
         except httpx.HTTPError:
             pass
-        try:
-            await asyncio.to_thread(_queue_post, "/release", {"token": token})
-        except httpx.HTTPError:
-            pass
-
-
-# Reference cleanup / transcription steps waiting for their GPU queue turn.
-gpu_waiters: dict[str, asyncio.Future] = {}
+        job_tokens.pop(job_id, None)
+        await GPU.release(token)
 
 
 class GpuSlot:
-    """Hold the shared GPU queue for one reference step (music removal or
-    transcription): enqueue, wait for the proceed callback, heartbeat, release."""
+    """Hold the shared GPU queue for one reference step (music removal,
+    transcription, voice design): wait for the turn, hand it back on exit."""
 
     def __init__(self, job_id: str, label: str):
-        self.job_id, self.label, self.token, self.beat = job_id, label, None, None
+        # The step ("transcribe" = whisper, ...) files its own VRAM peak (concurrent jobs, Queue page).
+        self._lease = GPU.lease(job_id, label, uses_llm=False, model=label.removeprefix("Voice: "))
 
     async def __aenter__(self):
-        waiter = asyncio.get_running_loop().create_future()
-        gpu_waiters[self.job_id] = waiter
         try:
-            await asyncio.to_thread(_queue_post, "/enqueue", {"app": "Voice", "job_id": self.job_id, "label": self.label})
-        except httpx.HTTPError as exc:
-            gpu_waiters.pop(self.job_id, None)
+            await self._lease.__aenter__()
+        except LockUnavailable as exc:
             raise reference.CleanupError("The GPU queue is unavailable") from exc
-        try:
-            self.token = await waiter
-        finally:
-            gpu_waiters.pop(self.job_id, None)
-        self.beat = asyncio.create_task(self._heartbeat())
         return self
 
-    async def _heartbeat(self):
-        while True:
-            await asyncio.sleep(20)
-            try:
-                await asyncio.to_thread(_queue_post, "/heartbeat", {"token": self.token})
-            except httpx.HTTPError:
-                pass
-
     async def __aexit__(self, *exc):
-        if self.beat:
-            self.beat.cancel()
-        if self.token:
-            try:
-                await asyncio.to_thread(_queue_post, "/release", {"token": self.token})
-            except httpx.HTTPError:
-                pass
+        return await self._lease.__aexit__(*exc)
 
 
-@app.post(f"{PREFIX}/api/internal/queue/proceed/{{job_id}}")
-async def proceed(job_id: str, request: Request):
-    if request.headers.get("X-Queue-Internal-Secret") != QUEUE_SECRET:
-        raise HTTPException(403, "Forbidden")
-    body = await request.json()
-    token = body.get("token")
-    waiter = gpu_waiters.get(job_id)
-    if waiter is not None:
-        if token and not waiter.done():
-            waiter.set_result(token)
-        return {"ok": True}
+def queue_grant(job_id: str, entry_id: str, token: str) -> bool:
+    """bunny-lock granted a queued generation the GPU (over the client's stream)."""
     with jobs_lock:
         payload = pending.get(job_id)
-        if not payload or not token:
-            raise HTTPException(404, "Unknown queued job")
+        if not payload:
+            return False
         if job_id in started:
-            return {"ok": True}
+            return True
         started.add(job_id)
         jobs[job_id]["state"] = "running"
+        job_tokens[job_id] = token
     if payload.engine == "qwen3":
         threading.Thread(target=_run_qwen_queued, args=(job_id, payload, token), daemon=True).start()
     else:
-        asyncio.create_task(_run_worker_queued(job_id, payload, token))
-    return {"ok": True}
+        spawn(_run_worker_queued(job_id, payload, token))
+    return True
+
+
+async def queue_cancel(job_id: str, entry_id: str):
+    """The Queue page's Cancel (a reference step still waiting is cancelled by the client)."""
+    if job_id not in jobs:
+        return None
+    try:
+        return 200, await cancel_job(job_id)
+    except HTTPException as exc:
+        return exc.status_code, {"detail": exc.detail}
+
+
+GPU.on_grant, GPU.on_cancel = queue_grant, queue_cancel
 
 
 # ---- new characters: upload -> clean (clip + effects) -> transcribe -> save ----
@@ -567,7 +551,7 @@ async def reference_youtube(body: YouTubeRequest):
     with jobs_lock:
         jobs[job_id] = {"id": job_id, "engine": "reference", "kind": "import", "state": "queued",
                         "stage": "Starting…", "created": time.time()}
-    asyncio.create_task(_run_youtube_import(job_id, url))
+    spawn(_run_youtube_import(job_id, url))
     return jobs[job_id]
 
 
@@ -663,7 +647,7 @@ async def reference_clean(upload_id: str, body: CleanRequest):
     with jobs_lock:
         jobs[job_id] = {"id": job_id, "engine": "reference", "kind": "reference", "state": "queued",
                         "stage": "Starting…", "created": time.time()}
-    asyncio.create_task(_run_clean(job_id, source, body))
+    spawn(_run_clean(job_id, source, body))
     return jobs[job_id]
 
 
@@ -696,7 +680,7 @@ async def reference_transcribe(clip_id: str):
     with jobs_lock:
         jobs[job_id] = {"id": job_id, "engine": "transcribe", "kind": "transcribe", "state": "queued",
                         "stage": "Starting…", "created": time.time()}
-    asyncio.create_task(_run_transcribe(job_id, clip))
+    spawn(_run_transcribe(job_id, clip))
     return jobs[job_id]
 
 
@@ -758,7 +742,7 @@ async def reference_design(body: DesignRequest):
     with jobs_lock:
         jobs[job_id] = {"id": job_id, "engine": body.engine, "kind": "design", "state": "queued",
                         "stage": "Starting…", "created": time.time()}
-    asyncio.create_task(_run_design(job_id, body))
+    spawn(_run_design(job_id, body))
     return jobs[job_id]
 
 
@@ -927,17 +911,12 @@ async def generate(payload: Generate):
                     "text": payload.text, "voice_id": payload.voice_id, "language": payload.language,
                     "settings": payload.settings}
     pending[job_id] = payload
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(f"{QUEUE}/enqueue", json={
-                "app": "Voice", "job_id": job_id, "label": payload.engine},
-                headers={"X-Queue-Internal-Secret": QUEUE_SECRET})
-            response.raise_for_status()
-            jobs[job_id]["queue_entry_id"] = response.json()["entry_id"]
-    except httpx.HTTPError as exc:
+    entry = await GPU.enqueue(job_id, f"Voice: {payload.engine}", uses_llm=False, model=payload.engine)
+    if entry is None:
         pending.pop(job_id, None)
         jobs.pop(job_id, None)
-        raise HTTPException(503, "GPU queue unavailable") from exc
+        raise HTTPException(503, "GPU queue unavailable")
+    jobs[job_id]["queue_entry_id"] = entry["entry_id"]
     return jobs[job_id]
 
 
@@ -959,13 +938,8 @@ async def cancel_job(job_id: str):
         entry_id = job.get("queue_entry_id")
         job["state"] = "cancelled"
         pending.pop(job_id, None)
-    if entry_id:
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(f"{QUEUE}/dequeue/{entry_id}",
-                                  headers={"X-Queue-Internal-Secret": QUEUE_SECRET})
-        except httpx.HTTPError:
-            pass  # proceed sees no pending payload and cannot start the cancelled job
+    # If the dequeue is lost, queue_grant finds no pending payload and hands the turn back.
+    await GPU.dequeue(entry_id)
     return job
 
 
@@ -1014,7 +988,7 @@ async def page():
 # Agentic sessions, Hermes settings, model guides and the Hermes terminal live in the
 # internal framework (BunnyBytes/shared). The browser goes through this studio so the
 # framework secret stays server-side; one route forwards the allowed paths.
-_AGENTIC_PATH = re.compile(r"^(models|settings|guides|preview|sessions(/[a-f0-9]{32}(/(cancel|plan|steer))?)?)$")
+_AGENTIC_PATH = re.compile(r"^(models|settings|guides|preview|rag|attachments|sessions(/[a-f0-9]{32}(/(cancel|pause|resume|plan|steer))?)?)$")
 
 
 @app.api_route(f"{PREFIX}/api/agentic/{{path:path}}", methods=["GET", "POST", "PUT", "DELETE"])
@@ -1025,7 +999,7 @@ async def agentic_proxy(path: str, request: Request):
     url = base + ("/v1/agentic/models" if path == "models" else "/v1/agentic/voice/" + path)
     body = await request.body()
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=120 if path == "attachments" else 30) as client:
             response = await client.request(request.method, url, content=body or None,
                 headers={"X-Queue-Internal-Secret": (os.getenv("QUEUE_INTERNAL_SECRET") or os.getenv("KREA_QUEUE_INTERNAL_SECRET") or os.getenv("MUS_QUEUE_INTERNAL_SECRET") or ""), "Content-Type": "application/json"})
         return JSONResponse(response.json(), status_code=response.status_code)

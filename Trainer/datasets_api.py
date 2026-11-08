@@ -29,7 +29,11 @@ import llm_data
 VIDEO = {".mp4", ".mov", ".webm", ".mkv"}
 IMAGE = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}   # what Fizgig trains on
 AUDIO = {".wav", ".flac", ".m4a", ".mp3", ".ogg"}
-UPLOAD_TYPES = VIDEO | IMAGE | AUDIO | {".txt", ".csv"} | llm_data.TEXT_EXTS
+LYRICS = (".lyrics", ".lrc")                        # a song's lyrics next to it: <name>.lyrics (or a timed .lrc)
+UPLOAD_TYPES = VIDEO | IMAGE | AUDIO | {".txt", ".csv"} | set(LYRICS) | llm_data.TEXT_EXTS
+MUSIC_FAMILIES = {"yue2", "minimax_music3"}
+LRC_STAMP = re.compile(r"^\s*(?:\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]\s*)+|^\s*\[(?:ar|ti|al|by|offset|length|re|ve|au):[^\]]*\]\s*$", re.I)
+LYRICS_SECTION = re.compile(r"^\s*\[lyrics\]\s*$", re.I | re.M)
 H3_FRAMES = [5 + 17 * n for n in range(8)]          # 5, 22, 39 … 124
 H3_AUDIO_SECONDS = [f / 24 for f in H3_FRAMES if f >= 22]   # voice clips must be one of these (±25 ms)
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}")
@@ -89,6 +93,18 @@ def video_key(url: str) -> str:
 
 class CaptionBody(BaseModel):
     caption: str = Field(max_length=20000)
+
+
+class LyricsBody(BaseModel):
+    lyrics: str = Field(max_length=40000)
+
+
+def split_music_caption(text: str) -> tuple[str, str]:
+    """A song caption written YuE2's way ("style ... [Lyrics] lyrics ...") -> (style, lyrics)."""
+    m = LYRICS_SECTION.search(text)
+    if not m:
+        return text.strip(), ""
+    return text[:m.start()].strip(), text[m.end():].strip()
 
 
 class NewDataset(BaseModel):
@@ -184,6 +200,21 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
                 return p
         return exact
 
+    def lyrics_of(media: Path) -> Path | None:
+        """The song's lyrics file: <stem>.lyrics, else <stem>.lrc (case-insensitive), else None."""
+        key = media.stem.casefold()
+        found = {p.suffix.lower(): p for p in media.parent.iterdir() if p.is_file() and p.suffix.lower() in LYRICS and p.stem.casefold() == key}
+        return found.get(".lyrics") or found.get(".lrc")
+
+    def read_lyrics(media: Path) -> str:
+        path = lyrics_of(media)
+        if not path:
+            return ""
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if path.suffix.lower() == ".lrc":          # timed lyrics: drop the [mm:ss.xx] stamps and the [ar:]/[ti:] tags
+            text = "\n".join(LRC_STAMP.sub("", line) for line in text.splitlines())
+        return re.sub(r"\n{3,}", "\n\n", text).strip()
+
     def remove_captions(ds: Path, media: Path) -> list[str]:
         """Delete the tagging caption(s) of a removed clip: any .txt whose name matches the clip's
         (case-insensitive, like Fizgig's matching), unless another media file still uses it."""
@@ -192,7 +223,7 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
             return []          # e.g. foo.png still needs foo.txt
         removed = []
         for p in ds.iterdir():
-            if p.is_file() and p.suffix.lower() == ".txt" and p.stem.casefold() == key:
+            if p.is_file() and p.suffix.lower() in (".txt", *LYRICS) and p.stem.casefold() == key:
                 p.unlink(missing_ok=True)
                 removed.append(p.name)
         return removed
@@ -327,6 +358,7 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
                     item["h3_issues"] = h3_issues(p, info)
                 elif k == "audio":
                     item["info"] = probe(p)
+                    item["lyrics"] = read_lyrics(p) or None
                 items.append(item)
             originals = (ds / ORIGINALS)
             incoming = ds / INCOMING
@@ -379,7 +411,7 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
                 "counts": {"video": 0, "image": 0, "audio": 0, "text": records}, "trigger_guess": "", "uncaptioned": 0,
                 "problems": excluded}
 
-    def training_plan(name: str, model: str = "minimax_h3", trigger: str = "") -> dict[str, Any]:
+    def training_plan(name: str, model: str = "minimax_h3", trigger: str = "", max_seconds: float = 0) -> dict[str, Any]:
         """What a training run on this dataset would actually use. Uncaptioned files and anything
         Fizgig would refuse or silently drop are LEFT OUT (with the reason) instead of failing the run."""
         ds = ds_path(name)
@@ -396,6 +428,8 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
         accepts = fam.media if fam else frozenset({"image", "video", "audio"})
         fam_title = fam.title if fam else model
         h3 = model == "minimax_h3"
+        music = model in MUSIC_FAMILIES
+        no_lyrics = []
         for p in media:
             k = kind_of(p)
             cap = caption_of(p)
@@ -431,15 +465,33 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
                 d = probe(p).get("duration") or 0
                 if not any(abs(d - g) <= 0.025 for g in H3_AUDIO_SECONDS):
                     why = f"audio is {d:.3f}s; it must be one of " + "/".join(f"{g:.3f}" for g in H3_AUDIO_SECONDS) + " s"
+            elif k == "audio" and music:
+                info = probe(p)
+                d = info.get("duration") or 0
+                if info.get("error") or not d:
+                    why = "unreadable audio file"
+                elif d < 5:
+                    why = f"only {d:.1f}s of audio (use at least a 5 s section)"
+                elif max_seconds and d > max_seconds + 0.5:
+                    why = f"{d:.0f}s long; this run uses tracks up to {max_seconds:.0f}s (raise Max seconds, or trim it into sections)"
             if why is None and p.stem.casefold() in stems:
                 why = f"shares its name with {stems[p.stem.casefold()]} (the trainer refuses two items with the same name)"
             if why:
                 excluded.append({"file": p.name, "reason": why, "uncaptioned": why in ("no caption yet", "caption is empty")})
                 continue
             stems[p.stem.casefold()] = p.name
-            included.append({"file": p.name, "kind": k, "caption": text})
+            entry = {"file": p.name, "kind": k, "caption": text}
+            if music:
+                style, inline = split_music_caption(text)
+                entry.update(caption=style, lyrics=read_lyrics(p) or inline)
+                if not entry["lyrics"]:
+                    no_lyrics.append(p.name)
+            included.append(entry)
             if trig and trig not in text.casefold():
                 no_trigger.append(p.name)
+        if no_lyrics:
+            warnings.append(f"{len(no_lyrics)} track(s) have no lyrics and train as instrumentals: "
+                            + ", ".join(no_lyrics[:4]) + ("…" if len(no_lyrics) > 4 else ""))
         if no_trigger:
             warnings.append(f"{len(no_trigger)} caption(s) don't contain the trigger word “{trigger.strip()}”: "
                             + ", ".join(no_trigger[:4]) + ("…" if len(no_trigger) > 4 else ""))
@@ -466,8 +518,15 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
         dest.mkdir(parents=True)
         for it in plan["included"]:
             (dest / it["file"]).symlink_to(ds / it["file"])
-            if it["kind"] != "text":
-                (dest / f"{Path(it['file']).stem}.txt").write_text(it["caption"] + "\n", encoding="utf-8")
+            stem = Path(it["file"]).stem
+            if plan.get("model") == "yue2":          # YuE2's own prompt layout: style, a [Lyrics] line, the lyrics
+                text = it["caption"] + ("\n[Lyrics]\n" + it["lyrics"] if it.get("lyrics") else "")
+                (dest / f"{stem}.txt").write_text(text + "\n", encoding="utf-8")
+            elif plan.get("model") == "minimax_music3":   # SimpleTuner: description in .txt, lyrics in .lyrics
+                (dest / f"{stem}.txt").write_text(it["caption"] + "\n", encoding="utf-8")
+                (dest / f"{stem}.lyrics").write_text((it.get("lyrics") or "") + "\n", encoding="utf-8")
+            elif it["kind"] != "text":
+                (dest / f"{stem}.txt").write_text(it["caption"] + "\n", encoding="utf-8")
         return len(plan["included"])
 
     router.training_plan = training_plan
@@ -598,6 +657,26 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
         give_back(ds)
         return {"file": filename, "caption": text or None}
 
+    @router.put("/api/datasets/{name}/lyrics/{filename}")
+    async def put_lyrics(name: str, filename: str, body: LyricsBody) -> dict[str, Any]:
+        """A song's lyrics, saved as <stem>.lyrics (an .lrc it came with is replaced by the edited text)."""
+        ds = ds_path(name)
+        guard_busy(name)
+        path = item_path(ds, filename)
+        if not path.is_file() or kind_of(path) != "audio":
+            raise HTTPException(404, "Audio file not found.")
+        text = body.lyrics.strip()
+        old = lyrics_of(path)
+        target = path.with_suffix(".lyrics")
+        if text:
+            target.write_text(text + "\n", encoding="utf-8")
+        else:
+            target.unlink(missing_ok=True)
+        if old and old.suffix.lower() == ".lrc":
+            old.unlink(missing_ok=True)
+        give_back(ds)
+        return {"file": filename, "lyrics": text or None}
+
     @router.post("/api/datasets/{name}/trigger")
     async def add_trigger(name: str, body: TriggerBody) -> dict[str, int]:
         ds = ds_path(name)
@@ -653,7 +732,7 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
         guard_busy(name)
         safe = re.sub(r"[^A-Za-z0-9._ -]+", "_", Path(filename).name).strip(" .")
         if not safe or Path(safe).suffix.lower() not in UPLOAD_TYPES:
-            raise HTTPException(415, "Upload videos (.mp4 .mov .webm .mkv), images (.jpg .png .webp), audio, .txt captions, or .jsonl/.json LLM data.")
+            raise HTTPException(415, "Upload videos (.mp4 .mov .webm .mkv), images (.jpg .png .webp), audio, .txt captions, .lyrics/.lrc lyrics, or .jsonl/.json LLM data.")
         if not (0 <= offset <= total <= 8 * 1024**3):
             raise HTTPException(400, "Invalid upload range.")
         staged = staged and kind_of(Path(safe)) == "video"
@@ -662,6 +741,8 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
             folder.mkdir(exist_ok=True)
         if Path(safe).suffix.lower() == ".txt" and Path(safe).suffix != ".txt":
             safe = Path(safe).stem + ".txt"          # Fizgig only reads lower-case .txt captions
+        if Path(safe).suffix.lower() in LYRICS:
+            safe = Path(safe).stem + Path(safe).suffix.lower()
         final = item_path(ds, safe, staged)
         part = ds / ".uploads" / (safe + ".part")
         part.parent.mkdir(exist_ok=True)
@@ -679,7 +760,7 @@ def build_router(prefix: str, dataset_root: Path, data_dir: Path, busy_datasets,
         if size == total:
             if kind_of(final):
                 final = free_media_name(folder, final.name)
-            elif final.exists():
+            elif final.exists() and final.suffix not in LYRICS:   # new lyrics replace the old ones
                 stem, ext = final.stem, final.suffix
                 n = 2
                 while (folder / f"{stem}_{n}{ext}").exists():

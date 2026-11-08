@@ -20,6 +20,17 @@ from .models import MODE_LABELS, MODEL_LABELS
 STATE_KEY = "enhancement_settings"
 REFERENCE_DIR = Path(__file__).resolve().parent
 REFERENCE_FILES = ("h3-additional-syntax.md", "h3-guide.md", "h3-example.md")
+# LTX 2.5 and Wan 2.2: one prompting guide each, from their makers' own prompt enhancers.
+MODEL_GUIDES = {"ltx_2_5": "ltx-guide.md", "wan_2_2": "wan-guide.md"}
+
+
+def model_guide(model: str) -> str:
+    """The prompting guide for LTX 2.5 / Wan 2.2 ("" for other models)."""
+    name = MODEL_GUIDES.get(model)
+    try:
+        return (REFERENCE_DIR / name).read_text(encoding="utf-8").strip() if name else ""
+    except OSError:
+        return ""
 LLAMA_URL = os.getenv("H3_LLAMA_URL", "http://127.0.0.1:8400").rstrip("/")
 LLAMA_KEY = os.getenv("H3_LLAMA_API_KEY", "")
 # llama-swap reads <model id>.ctx here when it starts a model (see ~/AI/Llama/llama-launch).
@@ -37,18 +48,85 @@ DEFAULT_INSTRUCTIONS = (
     "Return only a complete refined prompt, with no explanation or markdown fence."
 )
 LTX_INSTRUCTIONS = (
-    "You are the Hermes agent refining an LTX 2.5 video prompt. Preserve intent, dialogue and reference aliases. "
-    "Return only one production-ready prompt with visual action, camera, lighting and sound."
+    "You are the Hermes agent refining an LTX 2.5 video prompt. Follow the attached LTX 2.5 MODEL GUIDE for the "
+    "selected mode. Preserve the user's intent, exact dialogue, LoRA trigger words and reference tokens "
+    "(<Picture N>, <Audio N>, @First, @Last); never invent references. "
+    "Return only one production-ready prompt, with no explanation or markdown fence."
 )
 # Wan 2.2's own prompt guide: one shot in plain prose, subject + scene +
 # motion + camera + lighting/style, about 80-120 words. It renders no audio.
 WAN_INSTRUCTIONS = (
-    "You are the Hermes agent refining a Wan 2.2 video prompt. Preserve intent and any visible text. "
-    "Return one production-ready prompt in plain prose (about 80-120 words) for a single 5-10 second shot: "
-    "the subject and its appearance, the scene, the motion as it unfolds, camera movement and framing, "
-    "lighting, color and style. Wan renders no sound, so leave out dialogue, music and sound effects."
+    "You are the Hermes agent refining a Wan 2.2 video prompt. Follow the attached Wan 2.2 MODEL GUIDE for the "
+    "selected mode: one shot in plain prose, the cinematic settings first, then subject, scene and the motion as it "
+    "unfolds. Preserve intent, visible text and LoRA trigger words. Wan renders no sound, so leave out dialogue, "
+    "music and sound effects. Return only the prompt, with no explanation or markdown fence."
 )
 EXAMPLE_MODES = ("default", "text", "fl2v", "ref2v")
+BASE_ERROR = ServiceError
+
+# ── loop guard ───────────────────────────────────────────────────────────────
+# Enhance asks for an unlimited reply, so a model that goes in circles (the same passage over and over, or thinking
+# that never reaches an answer) used to run until someone stopped it. The guard stops it; the caller retries once
+# with thinking off, which is where these loops happen.
+class ThinkingLoop(BASE_ERROR):
+    def __init__(self, message: str, in_thinking: bool):
+        super().__init__(message)
+        self.in_thinking = in_thinking
+
+
+class LoopGuard:
+    def __init__(self, max_thinking: int = 30000, max_text: int = 30000, max_seconds: float = 420.0):
+        self.max_thinking, self.max_text, self.max_seconds = max_thinking, max_text, max_seconds
+        self.thinking: list[str] = []
+        self.text: list[str] = []
+        self.sizes = [0, 0]
+        self.checked = [0, 0]
+        self.started: float | None = None
+
+    def feed(self, reasoning: str, content: str) -> None:
+        if not (reasoning or content):
+            return
+        now = time.monotonic()
+        if self.started is None:      # from the first token: waiting for the GPU and loading the model don't count
+            self.started = now
+        for slot, (chunk, parts) in enumerate(((reasoning, self.thinking), (content, self.text))):
+            if chunk:
+                parts.append(chunk)
+                self.sizes[slot] += len(chunk)
+        if self.sizes[0] > self.max_thinking and not self.sizes[1]:
+            raise ThinkingLoop(f"thought for {self.sizes[0]:,} characters without starting the answer", True)
+        if self.sizes[1] > self.max_text:
+            raise ThinkingLoop(f"wrote over {self.max_text:,} characters", False)
+        if now - self.started > self.max_seconds:
+            raise ThinkingLoop(f"was still going after {round(self.max_seconds / 60)} minutes", self.sizes[1] == 0)
+        for slot, parts in enumerate((self.thinking, self.text)):
+            if self.sizes[slot] - self.checked[slot] >= 1500:
+                self.checked[slot] = self.sizes[slot]
+                joined = "".join(parts)
+                del parts[:]
+                parts.append(joined[-12000:])
+                # The answer may repeat on purpose (a chorus, a character described in every clip): only a stuck
+                # loop of the same passage counts there; thinking also counts a sentence it keeps coming back to.
+                if self.repeating(joined[-12000:], probe_times=3 if slot == 0 else 8, sentences=slot == 0):
+                    raise ThinkingLoop("kept repeating itself", slot == 0)
+
+    @staticmethod
+    def repeating(tail: str, probe_times: int = 3, sentences: bool = True) -> bool:
+        """The last stretch already written `probe_times` over, or (thinking) one long sentence/line four times."""
+        probe = tail[-200:]
+        if len(probe) == 200 and (len(set(probe)) < 6 or tail.count(probe) >= probe_times):
+            return True
+        if not sentences:
+            return False
+        seen: dict[str, int] = {}
+        for piece in re.split(r"(?<=[.!?])\s+|\n+", tail):
+            piece = " ".join(piece.lower().split())
+            if len(piece) >= 40:
+                seen[piece] = seen.get(piece, 0) + 1
+                if seen[piece] >= 4:
+                    return True
+        return False
+
 DEFAULT_REFINEMENT_PROMPT = (
     "Review the sampled frames against the clip prompt and the user's master prompt. "
     "Look only for glaring visual failures: broken anatomy, severe camera movement, "
@@ -66,6 +144,7 @@ DEFAULTS: dict[str, Any] = {
     "agentic_stage_enabled": False, "agentic_stage_preset": "",
     "agentic_full_preset": "", "agentic_stage_review": True,
     "agentic_stage_approval": False, "agentic_whisper_check": False,
+    "agentic_prompt_approval": False,      # wait for the user to approve the written clip prompts before any render
     "agentic_stage_series_review": False, "agentic_stage_best_of_two": False,
     "agentic_final_whisper_check": False, "agentic_final_series_review": False, "agentic_final_best_of_two": False,
     "agentic_final_review": False, "agentic_refinement_prompt": DEFAULT_REFINEMENT_PROMPT,
@@ -131,7 +210,7 @@ def update(store: Any, changes: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(extra, dict) or len(str(extra)) > 20000 or any(key in extra for key in ("model", "messages", "stream")):
             raise ValueError("Extra settings must be a JSON object and cannot replace model, messages or stream")
         settings["extra_body"] = extra
-    for key in ("agentic_stage_enabled", "agentic_stage_review", "agentic_stage_approval", "agentic_whisper_check", "agentic_final_review",
+    for key in ("agentic_stage_enabled", "agentic_stage_review", "agentic_stage_approval", "agentic_prompt_approval", "agentic_whisper_check", "agentic_final_review",
                 "agentic_stage_series_review", "agentic_stage_best_of_two", "agentic_final_whisper_check",
                 "agentic_final_series_review", "agentic_final_best_of_two",
                 "agentic_browser_enabled", "agentic_manage_references", "agentic_video_search",
@@ -186,7 +265,7 @@ def build_messages(settings: dict[str, Any], model: str, mode: str, prompt: str,
     documents = "\n\n".join(
         f"REFERENCE FILE: {name}\n<<<\n{(REFERENCE_DIR / name).read_text(encoding='utf-8')}\n>>>"
         for name in REFERENCE_FILES
-    ) if h3 else ""
+    ) if h3 else (f"MODEL GUIDE: {MODEL_LABELS.get(model, model)}\n<<<\n{guide}\n>>>" if (guide := model_guide(model)) else "")
     context = [f"Model: {MODEL_LABELS.get(model, model)}", f"Mode: {MODE_LABELS.get(mode, mode)}"]
     if duration:
         context.append(f"Duration: {duration:g} seconds")
@@ -265,7 +344,7 @@ async def apply_context_size(settings: dict[str, Any]) -> bool:
 
 async def chat(settings: dict[str, Any], messages: list[dict[str, Any]],
                progress: Callable[[int, int], None] | None = None,
-               on_delta: Callable[[str, str], None] | None = None) -> dict[str, Any]:
+               on_delta: Callable[[str, str], None] | None = None, guard: LoopGuard | None = None) -> dict[str, Any]:
     await apply_context_size(settings)
     payload: dict[str, Any] = {"model": settings["model"], "messages": messages, "stream": True}
     for key in ("temperature", "top_p", "top_k", "min_p", "repeat_penalty", "seed"):
@@ -292,8 +371,11 @@ async def chat(settings: dict[str, Any], messages: list[dict[str, Any]],
     completed = False
     last_progress = 0.0
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=15)) as client:
-            bridge = "clis" if model.startswith("cli:") else "providers" if model.startswith("hermes:") else ""
+        bridge = "clis" if model.startswith("cli:") else "providers" if model.startswith("hermes:") else ""
+        # A wedged llama server stops sending without closing the stream: no bytes for this long is an error the
+        # caller retries (Agentic: then it pauses and resumes itself) instead of a run that hangs forever.
+        read_limit = None if bridge else float(os.getenv("H3_LLM_READ_TIMEOUT", "900"))
+        async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=15, read=read_limit)) as client:
             url, headers = ((f"{HOSTCTL_URL}/{bridge}/chat", {"X-Hostctl-Secret": HOSTCTL_SECRET}) if bridge
                             else (LLAMA_URL + "/v1/chat/completions", _headers()))
             async with client.stream("POST", url, json=payload, headers=headers) as response:
@@ -329,6 +411,8 @@ async def chat(settings: dict[str, Any], messages: list[dict[str, Any]],
                             content_parts.append(content)
                             content_chars += len(content)
                         reasoning_chars += len(reasoning)
+                        if guard is not None:
+                            guard.feed(reasoning, content)   # raises ThinkingLoop; leaving the stream stops llama
                         if choice.get("finish_reason"):
                             finish_reason = choice["finish_reason"]
                     now = time.monotonic()
@@ -350,10 +434,21 @@ async def enhance(settings: dict[str, Any], model: str, mode: str, prompt: str, 
                   additional_prompt: str = "", progress: Callable[[int, int], None] | None = None,
                   plan_mode: str = "none", session_context: str = "",
                   research_context: str = "", on_delta: Callable[[str, str], None] | None = None,
-                  plan_note: str = "", extra_parts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    result = await chat(settings, build_messages(settings, model, mode, prompt, duration, references, frames,
-                                                 additional_prompt, plan_mode, session_context, research_context,
-                                                 plan_note, extra_parts), progress, on_delta)
+                  plan_note: str = "", extra_parts: list[dict[str, Any]] | None = None,
+                  loop_guard: bool = False, on_retry: Callable[[str], Any] | None = None) -> dict[str, Any]:
+    messages = build_messages(settings, model, mode, prompt, duration, references, frames, additional_prompt, plan_mode,
+                              session_context, research_context, plan_note, extra_parts)
+    try:
+        result = await chat(settings, messages, progress, on_delta, LoopGuard(max_text=60000) if loop_guard else None)
+    except ThinkingLoop as exc:
+        if not exc.in_thinking or settings.get("thinking_level") == "none":
+            raise ServiceError(f"Stopped Enhance: the model {exc}. Try again, or reword the prompt.") from exc
+        note = f"The model {exc}; stopped it and trying again without thinking"
+        on_delta = (on_retry(note) if on_retry else None) or on_delta
+        try:
+            result = await chat({**settings, "thinking_level": "none"}, messages, progress, on_delta, LoopGuard(max_text=60000))
+        except ThinkingLoop as again:
+            raise ServiceError(f"Stopped Enhance: the model {again}, even without thinking. Try again, or reword the prompt.") from again
     refined = clean_output(result["content"])
     if not refined:
         raise ServiceError("Hermes returned an empty prompt")

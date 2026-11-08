@@ -20,6 +20,7 @@ from pathlib import Path
 
 import comfyinstall
 import dockeraccess
+import rspmodels
 from paths import COMFY_ROOT, HERMES_HOME as ROCSY_HERMES_HOME, ROOT as ROCSY_ROOT
 
 COMFY = Path(os.getenv("CORE_COMFY_DIR", COMFY_ROOT))
@@ -38,7 +39,10 @@ HERMES_URL = "https://github.com/NousResearch/hermes-agent.git"
 HERMES_PATCH = Path(__file__).resolve().parent / "patches/hermes/rocsy-addons.patch"
 # The saved Rocsy patch was made against this commit. A fresh install must
 # start here; the older stable tag does not contain all of its patch context.
-HERMES_PATCH_BASE = "a12c3417c82d9495869962e320b4e73a907e849d"
+HERMES_PATCH_BASE = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"  # v0.23.0
+# Earlier Rocsy patches (<base commit>.patch). A checkout still carrying one is recognised, and an update
+# takes that one off before moving to the new release and putting the current patch on.
+HERMES_LEGACY_PATCHES = Path(__file__).resolve().parent / "patches/hermes/previous"
 STATE_DIR = Path(os.getenv("CORE_EXTRAS_STATE", ROCSY_ROOT / "core-backend-extras"))
 FLASH_STATE = STATE_DIR / "flash.json"
 HERMES_STATE = STATE_DIR / "hermes.json"
@@ -90,7 +94,7 @@ JOBS = {"comfy-download": "core-comfy-download", "comfy-update": "core-comfy-upd
         "rea-love2d-download": "core-rea-love2d-download",
         "rea-tic80-download": "core-rea-tic80-download",
         **{f"rea-{addon_id}-download": f"core-rea-{addon_id}-download" for addon_id in REA_ADDONS},
-        "ytdlp-install": "core-ytdlp-install"}
+        "ytdlp-install": "core-ytdlp-install", "rsp-install": "core-rsp-install"}
 LOCK = threading.Lock()
 ARCH_RE = re.compile(r"gfx[0-9a-z]+")
 UPDATE_CHECKS: dict[str, dict] = {}
@@ -407,6 +411,61 @@ REA_MANIFEST: dict = {}
 YTDLP_DIR = STATE_DIR / "yt-dlp"
 YTDLP_BIN = YTDLP_DIR / "yt-dlp"
 YTDLP_STATE = STATE_DIR / "ytdlp.json"
+
+
+# Music covers (RSP): the YuE2 pack, RSP from Music/comfy_nodes, RSP's Seed-VC environment
+# (its install.sh) and every model file a cover loads (rspmodels.py). Music asks ComfyUI with
+# downloads off, so this is where they come from.
+RSP_STATE = STATE_DIR / "rsp.json"
+
+
+def rsp_status() -> dict:
+    try:
+        meta = json.loads(RSP_STATE.read_text())
+    except (OSError, ValueError):
+        meta = {}
+    nodes = comfyinstall.studio_status(COMFY, ROCSY_ROOT)
+    models = rspmodels.status(COMFY)
+    return {**nodes, **models, "comfy_ready": comfyinstall.ready(COMFY),
+            "ready": models["ready"] and nodes["yue2_pack"] and nodes["seedvc_env"] and nodes["rsp"] in {"current", "linked"},
+            "running": running("rsp-install"), "phase": meta.get("phase", ""), "error": meta.get("error", ""),
+            "current": meta.get("current", ""), "done": meta.get("done", 0), "total": meta.get("total", 0)}
+
+
+def run_rsp(output) -> int:
+    meta = {"phase": "nodes", "started": time.time(), "error": ""}
+
+    def save(**changes):
+        meta.update(changes)
+        RSP_STATE.write_text(json.dumps(meta))
+    save()
+    try:
+        output.write("=== YuE2 pack and RSP ===\n")
+        problems = comfyinstall.studio_setup(COMFY, ROCSY_ROOT, comfy_step(output), sync=True)
+        script = COMFY / "custom_nodes" / "RSP" / "install.sh"
+        if script.is_file():
+            save(phase="seed-vc")
+            # Seed-VC's code at its pinned commit, RSP's own venv on top of ComfyUI's torch, and
+            # Seed-VC's weights (models/RSP/seed-vc).
+            try:
+                comfy_step(output)(["bash", str(script)], "Seed-VC environment and weights (RSP install.sh)…", True)
+            except RuntimeError as exc:
+                problems.append(f"RSP install.sh: {exc}")
+        save(phase="models")
+        problems += rspmodels.download_missing(
+            COMFY, output, lambda label, done, total: save(current=label, done=done, total=total))
+        if problems:
+            output.write("\n" + "".join(f"Not done: {p}\n" for p in problems))
+            save(phase="failed", error="; ".join(problems)[:300], finished=time.time(), current="")
+            return 1
+        output.write("\nAll in place. Restart ComfyUI once while it is idle so it loads RSP.\n")
+        save(phase="ready", finished=time.time(), current="")
+        return 0
+    except Exception as exc:
+        output.write(str(exc) + "\n")
+        save(phase="failed", error=str(exc)[:300], finished=time.time(), current="")
+        return 1
+
 
 
 def ytdlp_status() -> dict:
@@ -848,6 +907,15 @@ def _run_update_check(kind: str, path: Path, head: str) -> dict:
     return {"update_available": available, "update_error": error}
 
 
+def legacy_hermes_patch() -> Path | None:
+    """The earlier Rocsy patch this checkout carries, if it carries one instead of the current patch."""
+    for patch in sorted(HERMES_LEGACY_PATCHES.glob("*.patch")) if HERMES_LEGACY_PATCHES.is_dir() else []:
+        if subprocess.run(["git", "-C", str(HERMES), "apply", "--reverse", "--check", str(patch)],
+                          capture_output=True, text=True, timeout=15).returncode == 0:
+            return patch
+    return None
+
+
 def hermes_addons_status() -> dict:
     if not (HERMES / ".git").exists() or not HERMES_PATCH.is_file():
         return {"addons_applied": False, "addons_error": "Rocsy Addons patch is missing"}
@@ -856,6 +924,9 @@ def hermes_addons_status() -> dict:
                              capture_output=True, text=True, timeout=15)
     if reverse.returncode == 0:
         return {"addons_applied": True, "addons_error": ""}
+    if legacy_hermes_patch():
+        return {"addons_applied": False, "addons_legacy": True,
+                "addons_error": "This Hermes carries an earlier Rocsy patch; update Rocsy Hermes to move to the current one"}
     forward = subprocess.run([*command, "--check", str(HERMES_PATCH)],
                              capture_output=True, text=True, timeout=15)
     return {"addons_applied": False, "addons_error": "" if forward.returncode == 0 else
@@ -920,7 +991,7 @@ def view(wait: bool = False) -> dict:
                                 "version": git_version(PERSONAL_HERMES), "update_running": running("personal-hermes-update"),
                                 "phase": personal.get("phase", ""), "error": personal.get("error", ""),
                                 **personal_status},
-            "motion": motion_status(), "rea": rea_status(), "ytdlp": ytdlp_status(), "trainer": trainer_status()}
+            "motion": motion_status(), "rea": rea_status(), "ytdlp": ytdlp_status(), "trainer": trainer_status(), "rsp": rsp_status()}
 
 
 def start(job: str, *, auto: bool = False, version: str = "") -> dict:
@@ -967,6 +1038,11 @@ def start(job: str, *, auto: bool = False, version: str = "") -> dict:
                     raise Refused("No REA update found; check for updates first")
             STATE_DIR.mkdir(parents=True, exist_ok=True)
             REA_STATE.write_text(json.dumps({"phase": "queued", "started": time.time(), "error": "", "targets": targets}))
+        if job == "rsp-install":
+            if not comfyinstall.ready(COMFY):
+                raise Refused("Set up ComfyUI first (its Python environment is missing)")
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            RSP_STATE.write_text(json.dumps({"phase": "queued", "started": time.time(), "error": ""}))
         if job == "ytdlp-install":
             STATE_DIR.mkdir(parents=True, exist_ok=True)
             YTDLP_STATE.write_text(json.dumps({"phase": "queued", "started": time.time(), "error": "",
@@ -1038,6 +1114,7 @@ def start(job: str, *, auto: bool = False, version: str = "") -> dict:
                     "rea-love2d-download": "LÖVE engine download started",
                     "rea-tic80-download": "TIC-80 engine download started",
                     "ytdlp-install": "yt-dlp download started",
+                    "rsp-install": "Music covers (RSP) install and model downloads started",
                     **{f"rea-{addon_id}-download": f"{spec['label']} download started" for addon_id, spec in REA_ADDONS.items()}}
         return {"message": messages.get(job) or f"FlashAttention build started for {', '.join(archs)}"}
 
@@ -1140,11 +1217,17 @@ def pull_hermes(output) -> bool:
         finally:
             run_step(output, ["git", "-C", str(HERMES), "worktree", "remove", "--force", checkout])
 
-    if not hermes_addons_status()["addons_applied"]:
+    # The patch this checkout carries comes off: the current one, or an earlier Rocsy patch.
+    carried = HERMES_PATCH if hermes_addons_status()["addons_applied"] else legacy_hermes_patch()
+    if carried is None:
         raise RuntimeError("Current Rocsy patch must be applied before updating")
-    run_step(output, ["git", "-C", str(HERMES), "apply", "--reverse", str(HERMES_PATCH)])
+    if carried != HERMES_PATCH:
+        output.write(f"Taking off the earlier Rocsy patch ({carried.name}) before the update.\n")
+    run_step(output, ["git", "-C", str(HERMES), "apply", "--reverse", str(carried)])
     try:
-        dirty = subprocess.run(["git", "-C", str(HERMES), "status", "--porcelain"],
+        # Tracked edits only: untracked files (the .bak-* backups made before editing) don't block a
+        # switch; git itself refuses if one would be overwritten.
+        dirty = subprocess.run(["git", "-C", str(HERMES), "status", "--porcelain", "--untracked-files=no"],
                                capture_output=True, text=True, timeout=15, check=True).stdout.strip()
         if dirty:
             raise RuntimeError("Rocsy checkout has other local edits; update stopped before changing its version")
@@ -1153,8 +1236,8 @@ def pull_hermes(output) -> bool:
     except Exception:
         if rev("HEAD") != before:
             run_step(output, ["git", "-C", str(HERMES), "switch", "--detach", before])
-        if not hermes_addons_status()["addons_applied"]:
-            run_step(output, ["git", "-C", str(HERMES), "apply", str(HERMES_PATCH)])
+        if not hermes_addons_status()["addons_applied"] and legacy_hermes_patch() is None:
+            run_step(output, ["git", "-C", str(HERMES), "apply", str(carried)])  # back as it was
         raise
     return True
 
@@ -1256,6 +1339,9 @@ def run_h3_setup(output) -> None:
     """Video's H3 packs, PDD loader and patches; problems are logged, never fatal."""
     output.write("\n=== H3 optimizations (node packs, PDD loader, patches) ===\n")
     problems = comfyinstall.h3_setup(COMFY, ROCSY_ROOT, comfy_step(output))
+    output.write("".join(f"Not done: {p}\n" for p in problems) or "All in place.\n")
+    output.write("\n=== Studio node packs: YuE2, RSP, Krea's cache (RSP's models: Core Backend -> Music covers) ===\n")
+    problems = comfyinstall.studio_setup(COMFY, ROCSY_ROOT, comfy_step(output))
     output.write("".join(f"Not done: {p}\n" for p in problems) or "All in place.\n")
 
 
@@ -1717,6 +1803,8 @@ def run(job: str) -> int:
                 return run_trainer(output)
             if job == "ytdlp-install":
                 return run_ytdlp(output)
+            if job == "rsp-install":
+                return run_rsp(output)
             if job in {"rea-install", "rea-update"}:
                 return run_rea(job, output)
             if job == "rea-godotsteam-download":
@@ -1794,11 +1882,11 @@ def handle(method: str, path: str) -> tuple[int, dict]:
             UPDATE_CHECKS.clear()
             rea_check(force=True)
             return 200, view(wait=True)
-        match = re.fullmatch(r"/core/extras/log/(comfy-download|comfy-update|comfy-supervisor|trainer-install|flash-install|hermes-download|hermes-update|personal-hermes-update|motion-install|rea-install|rea-update|rea-godotsteam-download|rea-godot-download|rea-love2d-download|rea-tic80-download|rea-godotpcktool-download|ytdlp-install)", path)
+        match = re.fullmatch(r"/core/extras/log/(comfy-download|comfy-update|comfy-supervisor|trainer-install|flash-install|hermes-download|hermes-update|personal-hermes-update|motion-install|rea-install|rea-update|rea-godotsteam-download|rea-godot-download|rea-love2d-download|rea-tic80-download|rea-godotpcktool-download|ytdlp-install|rsp-install)", path)
         if method == "GET" and match:
             log = STATE_DIR / (match.group(1) + ".log")
             return 200, {"log": log.read_text(errors="replace")[-64000:] if log.exists() else ""}
-        match = re.fullmatch(r"/core/extras/(comfy-download|comfy-update|comfy-supervisor|trainer-install|flash-install|hermes-download|hermes-update|personal-hermes-update|motion-install|rea-install|rea-update|rea-godotsteam-download|rea-love2d-download|rea-tic80-download|rea-godotpcktool-download|ytdlp-install)", path)
+        match = re.fullmatch(r"/core/extras/(comfy-download|comfy-update|comfy-supervisor|trainer-install|flash-install|hermes-download|hermes-update|personal-hermes-update|motion-install|rea-install|rea-update|rea-godotsteam-download|rea-love2d-download|rea-tic80-download|rea-godotpcktool-download|ytdlp-install|rsp-install)", path)
         if method == "POST" and match:
             return 200, start(match.group(1))
         match = re.fullmatch(r"/core/extras/rea-(love2d|tic80|godotpcktool)-uninstall", path)

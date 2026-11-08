@@ -620,3 +620,59 @@ body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
 .epoch-prog i{display:block;height:100%;width:0;border-radius:inherit;background:linear-gradient(90deg,var(--blue),#7ee0b0);transition:width .6s ease}
 .epoch-prog.is-queued i{width:30%!important;opacity:.45;animation:epq 1.4s ease-in-out infinite}
 @keyframes epq{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
+/* Run form modes (Train | Uncensor) + the Uncensor form + refusal-test dialog/report */
+.run-mode{display:inline-flex;flex:none;border:1px solid var(--border);border-radius:8px;overflow:hidden;align-self:flex-start}
+.run-mode .seg-btn{padding:7px 13px;font-size:.84rem}
+.method-cards{border:0;padding:0;margin:0 0 13px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.method-cards legend{color:#c8d3d8;font-size:.83rem;font-weight:600;padding:0;margin-bottom:6px}
+.columns label.method-card{display:flex;gap:10px;align-items:flex-start;margin:0;padding:11px 12px;border:1px solid var(--border);border-radius:9px;background:var(--panel2);cursor:pointer;transition:border-color .15s,background .15s}
+.columns label.method-card:hover{border-color:#41525b}
+.columns label.method-card input{width:auto;margin:3px 0 0;flex:none;accent-color:var(--blue)}
+.method-card:has(input:checked){border-color:var(--blue);background:#1a2a33}
+.method-card span{display:flex;flex-direction:column;gap:2px;min-width:0}
+.method-card strong{font-size:.92rem;color:var(--text)}.method-card em{font-style:normal;font-size:.74rem;color:var(--blue);font-weight:600}
+.method-card small{font-weight:400;color:var(--muted);font-size:.78rem;line-height:1.4}
+#uncensor-form .hint{min-height:0}#uncensor-form .hint code{color:#c8d3d8;font-size:.8rem}
+#uncensor-env .setup-button{margin-top:6px}
+.job-card.tool-card{border-left:3px solid var(--purple)}
+.refusal-dialog{width:min(640px,calc(100vw - 24px))}
+.refusal-dialog textarea{width:100%;resize:vertical;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text);padding:8px 10px;font:inherit;font-size:.86rem;line-height:1.45}
+.refusal-dialog form>small{display:block;margin:4px 0 10px;font-size:.78rem}.refusal-dialog .bad{color:var(--red)}
+.refusal-item{border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin:8px 0 0;background:#0f171b}
+.refusal-item.refused{border-color:#6b3a3a}
+.refusal-top{display:flex;align-items:center;gap:8px;margin-bottom:4px}.refusal-n{font-size:.74rem;font-weight:700;color:var(--muted)}
+.refusal-prompt{margin:0 0 6px;font-size:.84rem;font-weight:600;color:#c8d3d8;white-space:pre-wrap}
+.refusal-answer{margin:0;font-size:.82rem;color:var(--muted);white-space:pre-wrap;max-height:12em;overflow:auto;user-select:text}
+@media(max-width:560px){.method-cards{grid-template-columns:1fr}.form-panel>.panel-heading{flex-wrap:wrap}}
+/* Phone topbar: brand + 3 tabs + alerts bell must fit 390px; narrower screens scroll the tabs, not the page */
+@media(max-width:560px){.topbar{gap:6px}.topbar .tabs{gap:4px;min-width:0;overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap;justify-content:flex-start}.topbar .tabs::-webkit-scrollbar{display:none}.topbar .tab{padding:4px 8px;font-size:.8rem;flex:none;white-space:nowrap}.topbar-right{margin-left:4px;flex:none}.brand{flex:none;font-size:.88rem}}
+/* Trainer environments: one compact bar of status chips; full cards behind "Details" */
+.panel.setup-panel{padding:10px 14px;margin-bottom:14px}
+.env-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.env-title{font-size:.88rem;white-space:nowrap}
+.env-chips{display:flex;flex-wrap:wrap;gap:6px;flex:1;min-width:0}
+.env-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border:1px solid var(--border);border-radius:999px;background:var(--panel2);color:#c8d3d8!important;font:inherit;font-size:.76rem;white-space:nowrap}
+.env-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none}
+.env-chip.state-ready .env-dot{background:var(--green)}
+.env-chip.state-not_installed .env-dot,.env-chip.state-installing .env-dot{background:var(--amber)}
+.env-chip.state-installing .env-dot{animation:env-pulse 1.2s ease-in-out infinite}
+.env-chip.state-rocm_unavailable .env-dot,.env-chip.state-gpu_unavailable .env-dot,.env-chip.state-environment_error .env-dot{background:var(--red)}
+button.env-chip{cursor:pointer;border-color:#6e552e}button.env-chip:hover{border-color:var(--amber)}button.env-chip:disabled{opacity:.6;cursor:wait}
+.env-btn{padding:4px 10px!important;font-size:.76rem!important}
+.env-details{margin-top:10px}.env-sub{font-size:.8rem;margin:0 0 8px}
+@keyframes env-pulse{50%{opacity:.3}}
+@media(max-width:560px){.env-chips{order:3;flex-basis:100%}#env-toggle{margin-left:auto}}
+/* music datasets: lyrics next to the song */
+.ds-media.audio{flex-direction:column;gap:6px}.ds-lyrics-tag{align-self:flex-start;font-size:.75rem;padding:1px 8px;border-radius:999px;background:#1d3341;color:#9cc8e6;cursor:pointer}.ds-lyrics-tag.empty{background:#2a2a2a;color:var(--muted,#9aa)}
+.ed-lyrics-box{display:flex;flex-direction:column;gap:4px;flex:1.4}.ed-lyrics-head{display:flex;gap:10px;align-items:baseline}.ed-lyrics{min-height:260px;font-family:ui-monospace,monospace;font-size:14px}
+
+/* Trainer settings + epoch cleanup dialogs */
+.settings-dialog{width:min(560px,calc(100vw - 24px))}
+.cleanup-modes{display:flex;flex-direction:column;gap:8px}
+.cleanup-mode{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--border);border-radius:10px;cursor:pointer}
+.cleanup-mode:has(input:checked){border-color:var(--blue)}
+.cleanup-mode input[type=radio]{margin-top:3px}
+.cleanup-mode>span{display:flex;flex-direction:column;gap:4px;min-width:0}
+.cleanup-every{display:flex;align-items:center;gap:6px;color:var(--muted)}
+.cleanup-n{width:80px}
+.outputs .button.small{padding:2px 8px;font-size:12px;margin-left:6px}

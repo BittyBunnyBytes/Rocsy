@@ -25,3 +25,19 @@ The service requires `/dev/kfd` and `/dev/dri` and refuses non-ROCm training.
 MiniMax H3 and LTX 2.5 are included for a future higher-VRAM AMD GPU; they may
 not fit the current card. Qwen may download model files into the persistent
 local Hugging Face cache the first time it runs.
+
+## Saved epochs
+
+Runs save their epochs so you can pick the best one (Test epochs renders one prompt per epoch). To
+keep the disk in check, open **Settings** (the gear in the top bar) → **Epoch cleanup**:
+
+- **On demand only** (default): nothing is deleted automatically. A finished run's **Run details**
+  has a **Delete** button on each epoch file and **Clean up epochs…** to delete by a rule, with a
+  preview of what goes and how much space it frees.
+- **Keep every Nth epoch**: when a run completes, epochs that aren't a multiple of N are deleted.
+- **Keep only the final LoRA**: when a run completes, every saved epoch is deleted.
+
+Always kept: the final LoRA (or the newest epoch when a trainer wrote no final file) and any epoch
+you starred in Test epochs. An epoch's resume state goes with it. Gallery copies (Video, Image,
+Music) are separate files and are never touched. Nothing is deleted while a run trains or while
+Test epochs is running on it.

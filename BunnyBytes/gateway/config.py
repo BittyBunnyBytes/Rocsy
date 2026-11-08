@@ -40,7 +40,7 @@ class Settings:
     krea_upstream: str = field(default_factory=lambda: os.getenv("KREA_UPSTREAM", "http://127.0.0.1:8300").rstrip("/"))
     trainer_upstream: str = field(default_factory=lambda: os.getenv("TRAINER_UPSTREAM", "http://127.0.0.1:8500").rstrip("/"))
     # The queue coordinator's browser-facing surface (/Queue/...). Its
-    # internal surface (/enqueue etc.) is called directly by each app, never
+    # internal surface (/v2/..., lock/PROTOCOL.md) is used directly by each app, never
     # through this gateway.
     queue_upstream: str = field(default_factory=lambda: os.getenv("QUEUE_UPSTREAM", "http://127.0.0.1:8600").rstrip("/"))
     llama_upstream: str = field(default_factory=lambda: os.getenv("LLAMA_UPSTREAM", "http://127.0.0.1:8400").rstrip("/"))
@@ -80,6 +80,8 @@ class Settings:
     storage_user_uploads_dir: Path = field(default_factory=lambda: Path(os.getenv("ROCSY_USER_UPLOADS_DIR", "/storage/user-uploads")))
 
     # Exposes developer-only maintenance tools in the UI and API. Keep off in deployments.
+    # Custom services (plugins.py): ROCSY_ROOT/core-backend-extras/plugins/ mounted read-only.
+    plugins_dir: Path = field(default_factory=lambda: Path(os.getenv("ROCSY_PLUGINS_DIR", "/app/plugins")))
     developer_build: bool = field(default_factory=lambda: os.getenv("ROCSY_DEVELOPER_BUILD", "").lower() in {"1", "true", "yes"})
 
     @property

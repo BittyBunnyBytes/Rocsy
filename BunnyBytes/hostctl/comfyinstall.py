@@ -197,16 +197,14 @@ def unpatch_core(comfy: Path, root: Path) -> list[str]:
     return removed
 
 
-def h3_setup(comfy: Path, root: Path, run) -> list[str]:
-    """Node packs, the PDD loader and the patches Video's H3 presets rely on. Every step is
-    skipped when already done and an existing pack folder is never replaced, so it is safe on a
-    ComfyUI the user brought along and after updates. Returns problems (empty = all in place);
-    run(command, message, network) as for setup()."""
+def _clone_packs(comfy: Path, packs, run) -> list[str]:
+    """Clone each (folder, repo, commit, requirements) pack that isn't there yet, through a staging
+    folder, with its requirements under the PINNED constraints. Existing folders are never touched."""
     problems = []
     nodes = comfy / "custom_nodes"
     nodes.mkdir(parents=True, exist_ok=True)
     constraints = None
-    for folder, url, commit, requirements in H3_PACKS:
+    for folder, url, commit, requirements in packs:
         final = nodes / folder
         if final.exists():
             continue
@@ -224,6 +222,80 @@ def h3_setup(comfy: Path, root: Path, run) -> list[str]:
         except Exception as exc:  # noqa: BLE001
             shutil.rmtree(stage, ignore_errors=True)
             problems.append(f"{folder}: {exc}")
+    return problems
+
+
+# Node packs the studios use besides Video's H3 set. Music's covers and custom voices: the YuE2
+# pack (pytraveler/YuE2-ComfyUI) at the commit RSP was tested on, and RSP itself (Music/comfy_nodes;
+# its models: rspmodels.py). Krea: bunny_cond_cache (cached text encodes, attention backend; Krea
+# uses it only while ComfyUI has it).
+STUDIO_PACKS = [
+    ("YuE2-ComfyUI", "https://github.com/pytraveler/YuE2-ComfyUI",
+     "408862db017878907c23e5b1a407ba89780dc2a1", "requirements.txt"),
+]
+STUDIO_LOCAL_PACKS = [("Music", "RSP"), ("Krea", "bunny_cond_cache")]  # (app folder, pack)
+# Made per machine inside a local pack (RSP's install.sh: .venv, vendor/seed-vc); never copied or compared.
+LOCAL_SKIP = {"__pycache__", ".venv", "vendor", ".gitignore"}
+
+
+def _local_files(source: Path) -> dict[str, Path]:
+    files = {}
+    for path in sorted(source.rglob("*")):
+        rel = path.relative_to(source)
+        if path.is_file() and not LOCAL_SKIP & set(rel.parts) and ".bak" not in path.name:
+            files[rel.as_posix()] = path
+    return files
+
+
+def local_pack_state(source: Path, installed: Path) -> str:
+    """missing (not in ComfyUI), linked (ComfyUI's folder is this one), current, or outdated
+    (a file differs from or is missing next to the one Rocsy ships)."""
+    if not installed.exists():
+        return "missing"
+    if installed.resolve() == source.resolve():
+        return "linked"
+    for rel, path in _local_files(source).items():
+        there = installed / rel
+        if not there.is_file() or there.read_bytes() != path.read_bytes():
+            return "outdated"
+    return "current"
+
+
+def studio_setup(comfy: Path, root: Path, run, sync: bool = False) -> list[str]:
+    """STUDIO_PACKS, and each shipped pack copied in when missing; with sync, an installed copy that
+    differs from <app>/comfy_nodes gets Rocsy's files written over it (nothing else in it is removed,
+    so RSP's .venv, vendor/ and any .bak files stay). Returns problems, like h3_setup."""
+    problems = _clone_packs(comfy, STUDIO_PACKS, run)
+    nodes = comfy / "custom_nodes"
+    for app, folder in STUDIO_LOCAL_PACKS:
+        source, target = root / app / "comfy_nodes" / folder, nodes / folder
+        state = local_pack_state(source, target) if source.is_dir() else "absent"
+        if state == "absent":
+            problems.append(f"{folder}: {app}/comfy_nodes/{folder} is missing from this Rocsy")
+        elif state == "missing" or (sync and state == "outdated"):
+            for rel, path in _local_files(source).items():
+                (target / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, target / rel)
+    return problems
+
+
+def studio_status(comfy: Path, root: Path) -> dict:
+    """Music covers' node state for Core Backend (RSP; Krea's pack has no setup of its own)."""
+    nodes = comfy / "custom_nodes"
+    source = root / "Music" / "comfy_nodes" / "RSP"
+    return {"yue2_pack": (nodes / "YuE2-ComfyUI").is_dir(),
+            "rsp": local_pack_state(source, nodes / "RSP") if source.is_dir() else "absent",
+            "seedvc_env": (nodes / "RSP" / ".venv" / "bin" / "python").exists()
+                          and (nodes / "RSP" / "vendor" / "seed-vc" / ".git").exists()}
+
+
+def h3_setup(comfy: Path, root: Path, run) -> list[str]:
+    """Node packs, the PDD loader and the patches Video's H3 presets rely on. Every step is
+    skipped when already done and an existing pack folder is never replaced, so it is safe on a
+    ComfyUI the user brought along and after updates. Returns problems (empty = all in place);
+    run(command, message, network) as for setup()."""
+    nodes = comfy / "custom_nodes"
+    problems = _clone_packs(comfy, H3_PACKS, run)
     for folder in H3_LOCAL_PACKS:
         source = root / "Video" / "comfy_nodes" / folder
         if source.is_dir() and not (nodes / folder).exists():
