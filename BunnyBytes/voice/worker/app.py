@@ -1,4 +1,4 @@
-"""Rocsy-owned host worker for the three local speech engines and Whisper.
+"""Rocsy-owned host worker for the local speech engines and Whisper.
 
 The Docker Voice service owns jobs, saved voices and the GPU queue. This
 loopback worker only runs the installed engine environments on the host.
@@ -91,6 +91,12 @@ def transcribe(audio: UploadFile = File(...)):
         raise HTTPException(500, "Transcription returned no result") from exc
 
 
+class Eject(BaseModel):
+    keep: list[str] = Field(default_factory=list)   # engines to keep loaded (Chatterbox keep window)
+    keep_seconds: float = 0
+
+
 @app.post("/eject", dependencies=[Depends(authorize)])
-def eject():
-    return unload_models()
+def eject(body: Eject | None = None):
+    body = body or Eject()
+    return unload_models(tuple(body.keep), body.keep_seconds)

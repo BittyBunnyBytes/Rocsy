@@ -1419,6 +1419,7 @@ function pluginCard(plugin, service) {
   if (plugin.gpu_queue) tags.append(el('span', 'tag plugin-tag-gpu', 'GPU queue'));
   if (plugin.themed === false) tags.append(el('span', 'tag', 'Own theme'));
   if (plugin.strip_prefix) tags.append(el('span', 'tag', 'Prefix stripped'));
+  if (plugin.root_app) tags.append(el('span', 'tag', 'Root app'));
   if (service?.boot) tags.append(el('span', 'tag', 'Starts at boot'));
 
   const actions = el('div', 'plugin-actions');
@@ -1584,6 +1585,7 @@ function pdFill(config) {
   $('pd-health').value = config.health || '';
   $('pd-container').value = config.container || '';
   $('pd-strip').checked = !!config.strip_prefix;
+  $('pd-rootapp').checked = !!config.root_app;
   $('pd-gpu').checked = !!config.gpu_queue;
   $('pd-themed').checked = config.themed !== false;
   const color = /^#[0-9a-f]{6}$/i.test(config.color || '') ? config.color.toLowerCase() : '#a3b0bd';
@@ -1604,6 +1606,7 @@ function pdFill(config) {
   $('pd-upd-github').value = updates.github || '';
   $('pd-upd-url').value = updates.url || '';
   $('pd-upd-current').value = updates.current_url || '';
+  $('pd-upd-key').value = updates.current_key || '';
   $('pd-upd-current').placeholder = `${config.path || (config.id ? `/${config.id}` : '/Name')}/api/version`;
   $('pd-upd-pre').checked = !!updates.prereleases;
   $('pd-upd-result').textContent = '';
@@ -1629,6 +1632,7 @@ function pdCollect() {
   set('color', $('pd-color-hex').value.trim().toLowerCase());
   set('icon', $('pd-icon-src').value.trim());
   if ($('pd-strip').checked) config.strip_prefix = true; else delete config.strip_prefix;
+  if ($('pd-rootapp').checked) config.root_app = true; else delete config.root_app;
   if ($('pd-gpu').checked) config.gpu_queue = true; else delete config.gpu_queue;
   if ($('pd-themed').checked) delete config.themed; else config.themed = false;
   if ($('pd-home').checked) {
@@ -1651,11 +1655,12 @@ function pdCollect() {
   set('version', $('pd-version').value.trim());
   const source = $('pd-upd-source').value;
   const before = pd.config.updates && typeof pd.config.updates === 'object' ? pd.config.updates : {};
-  const updates = Object.fromEntries(Object.entries(before).filter(([key]) => !['github', 'url', 'current_url', 'prereleases'].includes(key)));
+  const updates = Object.fromEntries(Object.entries(before).filter(([key]) => !['github', 'url', 'current_url', 'current_key', 'prereleases'].includes(key)));
   if (source === 'github' && $('pd-upd-github').value.trim()) updates.github = $('pd-upd-github').value.trim();
   if (source === 'github' && $('pd-upd-pre').checked) updates.prereleases = true;
   if (source === 'url' && $('pd-upd-url').value.trim()) updates.url = $('pd-upd-url').value.trim();
   if (source !== 'none' && $('pd-upd-current').value.trim()) updates.current_url = $('pd-upd-current').value.trim();
+  if (updates.current_url && $('pd-upd-key').value.trim()) updates.current_key = $('pd-upd-key').value.trim();
   if (Object.keys(updates).length) config.updates = updates; else delete config.updates;
   return config;
 }
@@ -1666,6 +1671,7 @@ function pdUpdateFields() {
   $('pd-upd-pre-row').hidden = source !== 'github';
   $('pd-upd-url-field').hidden = source !== 'url';
   $('pd-upd-current-field').hidden = source === 'none';
+  $('pd-upd-key-field').hidden = source === 'none';
   $('pd-upd-check-row').hidden = source === 'none';
 }
 
@@ -2580,7 +2586,7 @@ function renderVoiceEngines() {
       [engine.backend ? 'Backend ready' : 'Backend missing', engine.weights ? 'model ready' : 'model missing'].join(' · ');
     info.append(el('strong', '', engine.name),
       el('p', `hint${engine.phase === 'failed' ? ' error' : ''}`, detail),
-      el('p', 'hint', `${engine.repo} · ${engine.path.replace(HOME_RE, '~/')}`));
+      el('p', 'hint', `${engine.repo} · ${engine.path.replace(HOME_RE, '~/')}${engine.size ? ` · ${size(engine.size)} on disk` : ''}`));
     if (engine.creates_voices) info.append(el('p', 'hint', 'Voice creation: adds “Create a voice” to Voice → Add character'));
     const actions = el('div', 'dl-actions');
     if (!engine.installed) {
@@ -3979,6 +3985,55 @@ function pickKind(name) {
 }
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+// ---- Installed: drives (shown once a second drive holds models or is set to: Settings -> Storage) ----
+const HOLD_NAMES = {models: 'models', loras: 'LoRAs', llm: 'LLMs'};
+const holdCategory = path => path.startsWith('loras/') ? 'loras' : path.startsWith('llm/') ? 'llm' : 'models';
+const DRIVE_COLORS = ['var(--blue)', 'var(--green)', 'var(--amber)', 'var(--violet)', 'var(--pink)', 'var(--teal)'];
+try { state.instDrive = localStorage.getItem('models.instDrive') || ''; } catch { state.instDrive = ''; }
+const multiDrive = data => (data?.drives || []).length > 1;
+function pickDrive(id) {
+  state.instDrive = state.instDrive === id ? '' : id;
+  try { localStorage.setItem('models.instDrive', state.instDrive); } catch { /* private mode */ }
+  renderInstalled();
+}
+function driveFacts(drive) {
+  const parts = [];
+  if (drive.id !== 'elsewhere') parts.push(drive.handles.length ? `Holds ${drive.handles.map(h => HOLD_NAMES[h]).join(', ')}` : 'Holds no models (only files from before)');
+  if (drive.downloads.length) parts.push(`New ${drive.downloads.map(h => HOLD_NAMES[h]).join(', ')} downloads go here`);
+  if (drive.path) parts.push(drive.path.replace(HOME_RE, '~/'));
+  return parts.join(' · ');
+}
+function renderDrives(data, totalFiles) {
+  const box = $('inst-drives');
+  const multi = multiDrive(data);
+  box.hidden = !multi;
+  $('inst-sort-drive').hidden = !multi;
+  if (!multi) return;
+  const all = el('button', 'kind-chip', '');
+  all.type = 'button';
+  all.setAttribute('role', 'radio');
+  all.setAttribute('aria-checked', String(!state.instDrive));
+  all.append(el('span', '', 'All drives'), el('span', 'kind-count', String(totalFiles)));
+  all.addEventListener('click', () => pickDrive(''));
+  box.replaceChildren(all, ...data.drives.map((drive, n) => {
+    const chip = el('button', 'kind-chip drive-chip' + (drive.online ? '' : ' is-offline'));
+    chip.type = 'button';
+    chip.setAttribute('role', 'radio');
+    chip.setAttribute('aria-checked', String(state.instDrive === drive.id));
+    chip.style.setProperty('--kind', DRIVE_COLORS[n % DRIVE_COLORS.length]);
+    chip.title = `${plural(drive.count, 'file')} · ${size(drive.size)}${drive.free ? ` · ${size(drive.free)} free` : ''}\n${driveFacts(drive)}`;
+    const text = drive.online ? `${drive.count ? size(drive.size) : 'empty'}${drive.free ? ` · ${size(drive.free)} free` : ''}` : 'offline';
+    chip.append(el('span', 'kind-dot'), el('span', '', drive.label), el('span', 'kind-count', text));
+    if (drive.downloads.length) {
+      const dl = el('span', 'drive-dl', '⬇');
+      dl.title = `New ${drive.downloads.map(h => HOLD_NAMES[h]).join(', ')} downloads go here`;
+      chip.append(dl);
+    }
+    chip.addEventListener('click', () => pickDrive(drive.id));
+    return chip;
+  }));
+}
+
 function renderStorage(data, total) {
   const box = $('inst-storage');
   const whole = total + (data.free || 0);
@@ -4115,6 +4170,9 @@ function renderInstalled() {
   [...state.instSelected].forEach(path => { if (!known.has(path)) state.instSelected.delete(path); });
   state.instVisible = [];
   if (state.instKind && !data.groups.some(g => g.name === state.instKind)) state.instKind = '';
+  const multi = multiDrive(data);
+  if (state.instDrive && (!multi || !data.drives.some(d => d.id === state.instDrive))) state.instDrive = '';
+  if (state.instSort === 'drive' && !multi) $('inst-sort').value = 'kind';
   const query = $('inst-q').value.trim().toLowerCase();
   const total = data.groups.reduce((n, g) => n + g.size, 0);
   const stale = data.groups.flatMap(g => g.items).filter(i => i.unused);
@@ -4129,11 +4187,39 @@ function renderInstalled() {
   $('inst-summary').textContent = `${plural(fileCount, 'file')} in ${plural(data.groups.length, 'kind')} · click a kind or a bar segment to show only that kind`;
   renderStorage(data, total);
   renderKinds(data, {all: fileCount});
+  renderDrives(data, fileCount);
   const keep = item => (!query || `${item.name} ${item.sub} ${item.path} ${item.uses.map(u => u.label).join(' ')}`.toLowerCase().includes(query))
-    && (!onlyStale || item.unused);
+    && (!onlyStale || item.unused) && (!state.instDrive || item.drive === state.instDrive);
   const groups = data.groups.filter(g => !state.instKind || g.name === state.instKind);
   // Size bars are relative to the biggest file in view, so the heavy ones stand out at a glance.
   const biggest = Math.max(1, ...groups.flatMap(g => g.items.filter(keep).map(i => i.size)));
+  if (state.instSort === 'drive' && multi) {
+    const items = groups.flatMap(g => g.items.map(item => ({...item, group: item.group || g.name}))).filter(keep);
+    const open = state.openDrives || (state.openDrives = new Set(data.drives.map(d => d.id)));
+    const sections = data.drives.map((drive, n) => {
+      const mine = items.filter(i => i.drive === drive.id)
+        .sort((a, b) => a.group.localeCompare(b.group) || a.name.localeCompare(b.name, undefined, {numeric: true, sensitivity: 'base'}));
+      if (!mine.length && (query || state.instKind || onlyStale)) return null;
+      const section = el('details', 'inst-group');
+      section.style.setProperty('--kind', DRIVE_COLORS[n % DRIVE_COLORS.length]);
+      section.open = open.has(drive.id) || !!query;
+      section.addEventListener('toggle', () => section.open ? open.add(drive.id) : open.delete(drive.id));
+      const head = el('summary');
+      const title = el('div', 'inst-group-title');
+      title.append(el('span', 'kind-dot'), el('strong', '', drive.label), el('span', 'hint', drive.online ? plural(mine.length, 'file') : 'offline'));
+      const share = el('div', 'inst-group-size');
+      share.append(el('span', 'hint', driveFacts(drive)), el('strong', '', size(mine.reduce((s, i) => s + i.size, 0))));
+      head.append(title, share);
+      const body = el('div', 'inst-group-body');
+      body.append(...(mine.length ? mine.map(item => installedRow(item, biggest, true))
+        : [el('p', 'empty', drive.handles.length ? `Nothing here yet. Move files here with Move, or send downloads here in Settings → Storage.` : 'Nothing here.')]));
+      section.append(head, body);
+      return section;
+    }).filter(Boolean);
+    $('installed').replaceChildren(...(sections.length ? sections : [el('p', 'empty', 'Nothing matches.')]));
+    syncSelection();
+    return;
+  }
   const sorter = INST_SORTS[state.instSort];
   if (sorter) {
     const items = groups.flatMap(g => g.items.map(item => ({...item, group: item.group || g.name}))).filter(keep).sort(sorter);
@@ -4369,7 +4455,9 @@ async function openMove(items) {
     radio.name = 'move-to';
     radio.value = target.id;
     const free = target.disk?.free || 0;
+    const notHeld = [...new Set(items.map(i => holdCategory(i.path)))].filter(c => !(target.handles || Object.keys(HOLD_NAMES)).includes(c));
     const reason = !target.online ? 'Not reachable (drive unplugged?)'
+      : notHeld.length ? `Not set to hold ${notHeld.map(c => HOLD_NAMES[c]).join(', ')} (Settings → Storage → Edit)`
       : !target.writable ? "Can't write there"
       : !target.ready ? 'Still being connected to the apps (they refresh once idle)'
       : here.size === 1 && here.has(target.id) ? (items.length === 1 ? 'It is already here' : 'They are all here already')

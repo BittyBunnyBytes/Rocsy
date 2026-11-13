@@ -1394,7 +1394,7 @@ body.is-keyboard-open .field-row-prompt.is-fullscreen .alias-menu { max-height: 
 .job-card.stitch-ineligible { opacity: 0.4; }
 /* While selecting, a card's own <video> would otherwise eat every click as
    play/pause before it reaches the card's click-to-select handler. */
-.job-card.stitch-selectable .job-video { pointer-events: none; }
+.job-card.stitch-selectable .job-player { pointer-events: none; }
 .compare-toggle-button { border-color: rgba(124, 179, 220, 0.6); color: var(--blue); flex: none; }
 .compare-toggle-button:hover:not(:disabled) { border-color: var(--blue); }
 .compare-toggle-button.is-active { background: var(--blue); color: var(--bg); border-color: var(--blue); font-weight: 700; }
@@ -1406,7 +1406,7 @@ body.is-keyboard-open .field-row-prompt.is-fullscreen .alias-menu { max-height: 
 .compare-bar[hidden] { display: none; }
 .job-card.compare-selectable { cursor: pointer; }
 .job-card.compare-selectable:hover { border-color: var(--blue); }
-.job-card.compare-selectable .job-video { pointer-events: none; }
+.job-card.compare-selectable .job-player { pointer-events: none; }
 .job-card.compare-ineligible { opacity: 0.4; }
 .job-card.is-compare-picked { border-color: var(--blue); background: rgba(124, 179, 220, 0.1); box-shadow: 0 0 0 1px var(--blue); }
 
@@ -1548,7 +1548,7 @@ body.is-comparing { overflow: hidden; }
 .shelf-alert { display: inline-block; width: 7px; height: 7px; margin-left: 5px; border-radius: 50%; background: var(--amber, #f5b942); box-shadow: 0 0 8px var(--amber, #f5b942); vertical-align: middle; }
 .shelf-alert[hidden] { display: none; }
 /* Unfocused session tile: its cover (latest stitch, else latest final clip). */
-.agentic-session-cover { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: var(--field); cursor: pointer; }
+.agentic-session-cover { display: block; width: 100%; min-width: 0; border-radius: 8px; overflow: hidden; background: var(--field); }
 .agentic-session-cover[hidden], .is-focused .agentic-session-cover { display: none; }
 .agentic-session-group.is-flash > .agentic-session-head { outline: 2px solid hsl(var(--session-hue) 85% 64%); outline-offset: 2px; }
 /* A stitch made from one session's clips links back to it. */
@@ -2744,3 +2744,67 @@ body.is-comparing { overflow: hidden; }
 /* Slider rows: name + number on the first line, the range control full width underneath. */
 .lora-row.is-slider { flex-wrap: wrap; row-gap: 2px; }
 .lora-row.is-slider .lora-slider-track { order: 10; flex: 1 1 100%; max-width: none; padding: 0 4px 2px 34px; }
+
+/* ===== BunnyPlayer (copied from Trainer/static/trainer.css; player.js is the Trainer's player) ===== */
+.bp{position:relative;display:flex;flex-direction:column;width:100%;background:#05080a;border-radius:10px;overflow:hidden;user-select:none}
+.bp-stage{position:relative;display:flex;align-items:center;justify-content:center;background:#000;min-height:180px}
+.bp-stage video{width:100%;max-height:68vh;display:block;object-fit:contain;cursor:pointer}
+.bp-big{position:absolute;inset:auto;width:64px;height:64px;border-radius:50%;border:1px solid #ffffff40;background:#0b1114b0;backdrop-filter:blur(6px);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .15s,background .15s}
+.bp-big:hover{transform:scale(1.06);background:#26435acc}.bp-big svg{width:30px;height:30px;fill:currentColor;margin-left:3px}
+.bp-bar{display:flex;flex-direction:column;gap:6px;padding:8px 10px 8px;background:linear-gradient(180deg,#0f171b,#0b1114);border-top:1px solid #1f2b31}
+.bp-track{position:relative;height:30px;border-radius:6px;background:#141e23;cursor:pointer;touch-action:none}
+.bp.has-scout .bp-track{height:42px;margin-top:16px}
+.bp-buffered{position:absolute;top:0;bottom:0;left:0;background:#1d2a31;border-radius:6px;pointer-events:none}
+.bp-played{position:absolute;left:0;bottom:0;height:3px;background:linear-gradient(90deg,#3d79a1,#79add3);border-radius:2px;pointer-events:none;z-index:3}
+.bp-head{position:absolute;top:-3px;bottom:-3px;width:2px;margin-left:-1px;background:#fff;box-shadow:0 0 6px #fff9;pointer-events:none;z-index:5}
+.bp-head::before{content:"";position:absolute;top:-4px;left:-4px;width:10px;height:10px;border-radius:50%;background:#fff}
+.bp-tip{position:absolute;bottom:calc(100% + 6px);transform:translateX(-50%);background:#0b1114;border:1px solid #33444c;color:#e0e8ec;font:11px/1 ui-monospace,monospace;padding:4px 6px;border-radius:5px;pointer-events:none;white-space:nowrap;z-index:6}
+.bp.has-scout .bp-tip{bottom:calc(100% + 22px)}
+.bp-segs{position:absolute;inset:0;z-index:2}
+.bp-seg{position:absolute;top:4px;bottom:4px;--c:#79add3;background:color-mix(in srgb,var(--c) 38%,transparent);border:1px solid var(--c);border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:top .15s,bottom .15s,box-shadow .15s}
+.bp-seg span{font:800 10px/1 ui-monospace,monospace;color:#fff;text-shadow:0 1px 2px #000}
+.bp-seg.active{top:1px;bottom:1px;background:color-mix(in srgb,var(--c) 55%,transparent);box-shadow:0 0 0 1px var(--c),0 0 12px color-mix(in srgb,var(--c) 60%,transparent);z-index:2}
+.bp.has-scout .bp-seg{top:auto;bottom:2px;height:12px}.bp.has-scout .bp-seg.active{height:15px}
+.bp-controls{display:flex;align-items:center;gap:4px}.bp-spacer{flex:1}
+.bp-btn{height:30px;min-width:30px;border:0;border-radius:6px;background:transparent;color:#c8d3d8;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font:600 12px system-ui}
+.bp-btn svg{width:18px;height:18px;fill:currentColor}.bp-btn:hover{background:#1f2b31;color:#fff}.bp-btn.on{color:#79add3}
+.bp-time{font:12px/1 ui-monospace,monospace;color:#97a6ae;margin-left:6px;white-space:nowrap}
+.bp-speed{padding:0 8px;font-variant-numeric:tabular-nums}
+.bp-vol{width:70px;accent-color:#79add3}
+.bp:fullscreen{border-radius:0}.bp:fullscreen .bp-stage{flex:1}.bp:fullscreen .bp-stage video{max-height:none;height:100%}
+@media(max-width:560px){.bp-vol{display:none}.bp-time{font-size:11px}}
+/* scout layer (auto-cut) */
+.bp-scout{position:absolute;inset:0;z-index:1;pointer-events:none}
+.bp-shot{position:absolute;top:0;bottom:0;width:1px;background:#ffffff26}
+.bp-win{position:absolute;top:3px;height:22px;border-radius:3px;transition:background .3s,height .3s,top .3s}
+.bp-win.pending{background:#ffffff12;border:1px dashed #ffffff26}
+.bp-win.skip{background:#dd85852b;border:1px solid #dd858566;height:8px;top:17px}
+.bp-win.keep{background:linear-gradient(0deg,#4b8a47 0%,#91ca7c 100%);border:1px solid #91ca7c;top:auto;bottom:calc(100% - 25px);height:var(--h,60%);max-height:22px;opacity:.85}
+.bp-win.scanning{background:color-mix(in srgb,var(--ac) 35%,transparent);border:1px solid var(--ac);animation:bp-pulse 1s ease-in-out infinite;box-shadow:0 0 10px color-mix(in srgb,var(--ac) 70%,transparent)}
+.bp-win.pick{outline:2px solid #FFD700;outline-offset:1px;box-shadow:0 0 10px #ffd70080}
+@keyframes bp-pulse{0%,100%{opacity:.55}50%{opacity:1}}
+.bp-agents{position:absolute;left:0;right:0;top:-17px;height:14px;z-index:6;pointer-events:none}
+.bp-agent{position:absolute;transform:translateX(-50%);background:var(--ac);color:#111;font:800 9.5px/14px ui-monospace,monospace;padding:0 5px;border-radius:4px;box-shadow:0 1px 6px #000a;transition:left .4s ease-out;white-space:nowrap}
+.bp-agent::after{content:"";position:absolute;left:50%;bottom:-4px;margin-left:-3px;border:3px solid transparent;border-top-color:var(--ac)}
+/* Video: the player inside job cards and session tiles (a 16:9 frame, a slimmer bar). */
+.job-player { margin-top: 2px; min-width: 0; }
+.job-player .bp-stage, .agentic-session-cover .bp-stage { min-height: 0; aspect-ratio: 16 / 9; }
+.job-player .bp-stage video.job-video, .agentic-session-cover .bp-stage video { width: 100%; height: 100%; max-height: none; aspect-ratio: auto; margin: 0; border-radius: 0; object-fit: contain; background: #000; }
+:is(.job-player, .agentic-session-cover) .bp-bar { gap: 4px; padding: 6px 8px; }
+:is(.job-player, .agentic-session-cover) .bp-track { height: 16px; }
+:is(.job-player, .agentic-session-cover) .bp-btn { height: 26px; min-width: 26px; }
+:is(.job-player, .agentic-session-cover) .bp-btn svg { width: 16px; height: 16px; }
+:is(.job-player, .agentic-session-cover) .bp-big { width: 52px; height: 52px; }
+:is(.job-player, .agentic-session-cover) .bp-big svg { width: 24px; height: 24px; }
+.bp:fullscreen .bp-stage { aspect-ratio: auto; }
+.bp-btn:disabled { opacity: .35; cursor: default; background: transparent; }
+.bp-list { display: none; }
+.bp.has-list .bp-list { display: inline-flex; }
+.bp-clip { position: absolute; top: 8px; left: 8px; padding: 3px 8px; border-radius: 999px; background: #0b1114c0; border: 1px solid #ffffff26; color: #e0e8ec; font: 600 11px/1.2 system-ui; pointer-events: none; backdrop-filter: blur(4px); }
+.bp-clip[hidden] { display: none; }
+/* Tiles are narrow: no volume slider (the mute button stays), the time readout may shrink,
+   and the session cover trades frame-step for previous/next clip. */
+:is(.job-player, .agentic-session-cover) .bp-vol { display: none; }
+:is(.job-player, .agentic-session-cover) .bp-controls { min-width: 0; }
+:is(.job-player, .agentic-session-cover) .bp-time { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; margin-left: 2px; }
+.agentic-session-cover .bp-step { display: none; }

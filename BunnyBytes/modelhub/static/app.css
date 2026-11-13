@@ -808,3 +808,7 @@ a.primary-button:hover { filter: brightness(1.08); }
 #pd-upd-result[data-kind=new] { color: var(--blue); }
 #pd-upd-result[data-kind=good] { color: var(--green); }
 #pd-upd-result[data-kind=bad] { color: var(--red); }
+
+.inst-drives { margin-top: 2px; }
+.drive-chip.is-offline { border-style: dashed; }
+.drive-chip .drive-dl { color: var(--kind); font-size: 11px; }

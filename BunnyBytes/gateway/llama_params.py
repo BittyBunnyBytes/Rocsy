@@ -62,6 +62,7 @@ PARAMS = [
     ("--cache-type-k", "KV cache K", "Load", "choice", CACHE_TYPES, "K cache precision."),
     ("--cache-type-v", "KV cache V", "Load", "choice", CACHE_TYPES, "V cache precision."),
     ("--n-cpu-moe", "MoE layers on CPU", "Load", "int", (0, 256), "Keep the experts of the first N layers in system RAM."),
+    ("--experts-used", "MoE experts per token", "Load", "int", (1, 512), "Mixture-of-experts models only: how many experts answer each token. More = better recall, logic and variety but slower (Gemma 4 26B-A4B at 16 instead of 8: about half the speed). Going far past double the default tends to get erratic. Stored as --override-kv <arch>.expert_used_count=int:N."),
     ("--fit-target", "Fit margin (MiB)", "Load", "int", (0, 16384), "VRAM left free when auto-fitting layers."),
     ("--spec-type", "Draft type", "Draft", "choice", SPEC_TYPES, "Speculative decoding: a fast drafter guesses the next tokens and this model checks them in one pass. ★ = this model has its own MTP head. n-gram types need no draft model."),
     ("--spec-draft-model", "Draft model", "Draft", "choice", [], "A small model with the same tokenizer (draft-simple), or an MTP/EAGLE3/DFlash drafter made for this model. ★ = recommended for this model."),
@@ -85,6 +86,9 @@ PARAMS = [
     ("--lora-scale", "LoRA strength", "LoRA", "float", (0.0, 2.0), "How strongly the LoRA applies (1 = as trained)."),
 ]
 _BY_FLAG = {param[0]: param for param in PARAMS}
+MOE_ONLY = {"--experts-used"}
+# How the expert count is written to <id>.args (llama-launch accepts exactly this override, nothing broader).
+_EXPERTS_KV = re.compile(r"^--override-kv ([a-z0-9_]+)\.expert_used_count=int:(\d{1,3})$")
 
 # Models served by Strata (cmd = strata-swap-bridge) have their own engine, so the
 # llama.cpp flags above don't apply. Their choices go to the same <id>.args file;
@@ -287,6 +291,19 @@ def _model_file(cmd: str) -> Path | None:
     return LLM_DIR / match.group(1).split("/models/llm/", 1)[1]
 
 
+def moe_info(cmd: str) -> dict:
+    """{"arch", "experts", "used"} for a mixture-of-experts GGUF ({} for dense models / unknown files)."""
+    path = _model_file(cmd)
+    if path is None or not path.is_file():
+        return {}
+    meta = gguf_meta(path)
+    arch = str(meta.get("general.architecture") or "")
+    used, total = meta.get(f"{arch}.expert_used_count"), meta.get(f"{arch}.expert_count")
+    if not re.fullmatch(r"[a-z0-9_]+", arch) or not isinstance(used, int) or not isinstance(total, int) or total < 2:
+        return {}
+    return {"arch": arch, "experts": total, "used": used}
+
+
 def draft_advice(cmd: str, files: list[str], display: str = "") -> tuple[int, dict, dict]:
     """(MTP head layers in this model, {draft file: {star, why, type}}, what to search drafters by) for one model."""
     target = _model_file(cmd)
@@ -355,7 +372,7 @@ def spec() -> list[dict]:
         item = {"flag": flag, "label": label, "group": group, "kind": kind,
                 "limits": list(limits) if kind in ("int", "float") else None,
                 "choices": limits if kind == "choice" else None, "help": help_text,
-                "choice_labels": CHOICE_LABELS.get(flag)}
+                "choice_labels": CHOICE_LABELS.get(flag), "moe_only": flag in MOE_ONLY}
         if flag == "--build":
             builds = info.get("builds") or []
             item["choices"] = ["active"] + [b["id"] for b in builds]
@@ -471,8 +488,12 @@ def _read_overrides(model_id: str) -> dict[str, str]:
     args_file = OVERRIDE_DIR / f"{model_id}.args"
     if args_file.is_file():
         for line in args_file.read_text().splitlines():
+            experts = _EXPERTS_KV.match(line.strip())
+            if experts:
+                values["--experts-used"] = experts.group(2)
+                continue
             flag, _, value = line.strip().partition(" ")
-            if flag in _BY_FLAG and value:
+            if flag in _BY_FLAG and flag not in MOE_ONLY and value:
                 values[flag] = value.strip()
     return values
 
@@ -497,6 +518,10 @@ def models(running: set[str]) -> list[dict]:
                 "params": strata_spec(),
             })
             continue
+        moe = moe_info(str(entry.get("cmd", "")))
+        defaults = _defaults(str(entry.get("cmd", "")))
+        if moe:
+            defaults["--experts-used"] = str(moe["used"])
         mtp_head, drafts, draft_search = (draft_advice(str(entry.get("cmd", "")), files, str(entry.get("name") or model_id))
                                           if files is not None else (0, {}, {}))
         result.append({
@@ -507,7 +532,8 @@ def models(running: set[str]) -> list[dict]:
             "drafts": drafts,
             "draft_search": draft_search,
             "visions": vision_advice(str(entry.get("cmd", "")), heads) if heads else {},
-            "defaults": _defaults(str(entry.get("cmd", ""))),
+            "defaults": defaults,
+            "moe": moe,
             "fixed": _fixed(str(entry.get("cmd", ""))),
             "overrides": _read_overrides(model_id),
             "engine": "llama.cpp" if str(entry.get("cmd", "")).lstrip().startswith("${llama_launch}") else "external",
@@ -590,6 +616,16 @@ def save(model_id: str, params: dict) -> dict[str, str]:
         del cleaned["--multi-gpu"]
     if cleaned.get("--backend") == "rocm":  # ROCm is the default backend
         del cleaned["--backend"]
+    experts_kv = ""
+    if "--experts-used" in cleaned:
+        moe = moe_info(str(config["models"][model_id].get("cmd", "")))
+        wanted = int(cleaned.pop("--experts-used"))
+        if not moe:
+            raise ParamError("MoE experts per token: this model isn't a mixture-of-experts model.")
+        if wanted > moe["experts"]:
+            raise ParamError(f"MoE experts per token: this model has {moe['experts']} experts.")
+        if wanted != moe["used"]:
+            experts_kv = f"--override-kv {moe['arch']}.expert_used_count=int:{wanted}"
     _check_draft(cleaned, str(config["models"][model_id].get("cmd", "")))
     _check_vision(cleaned, str(config["models"][model_id].get("cmd", "")))
     if cleaned.get("--lora", "none") == "none":  # no LoRA: its strength means nothing either
@@ -613,7 +649,7 @@ def save(model_id: str, params: dict) -> dict[str, str]:
                              f"options ({', '.join(used)}).")
     ctx = cleaned.pop("--ctx-size", None)
     _write(OVERRIDE_DIR / f"{model_id}.ctx", f"{ctx}\n" if ctx else None)
-    lines = [f"{flag} {cleaned[flag]}" for flag, *_ in PARAMS if flag in cleaned]
+    lines = [f"{flag} {cleaned[flag]}" for flag, *_ in PARAMS if flag in cleaned] + ([experts_kv] if experts_kv else [])
     _write(OVERRIDE_DIR / f"{model_id}.args", "".join(f"{line}\n" for line in lines) or None)
     return _read_overrides(model_id)
 

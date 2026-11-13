@@ -49,6 +49,10 @@ OWN_MARK = "  # rocsy-storage"
 LLAMA = env_setting("LLAMA_UPSTREAM") or "http://127.0.0.1:8400"
 BUILTIN = "comfy"
 CATEGORIES = ("models", "loras", "llm")
+# What a location can be used for (Settings -> Storage -> Edit). Model categories = what it may hold and be a
+# download default for; "outputs" = it may hold the service outputs.
+HANDLES = CATEGORIES + ("outputs",)
+HANDLE_NAMES = {"models": "models", "loras": "LoRAs", "llm": "LLMs", "outputs": "service outputs"}
 MAX_LOCATIONS = 12
 CHUNK = 16 * 1024 * 1024
 # Compose service -> (container, hostctl busy kind, writable). Everything that reads model files.
@@ -59,8 +63,34 @@ CONSUMERS: dict[str, tuple[str, str, bool]] = {
     "music": ("music", "mus", False),
     "trainer": ("bunny-trainer", "trainer", False),
     "llama": ("llama", "llama", False),
+    "voice": ("bunny-voice", "voice", False),       # only gets mounts for service outputs (OUTPUT_WRITERS)
 }
-NAMES = {"modelhub": "Models", "video": "Video", "krea": "Image", "music": "Music", "trainer": "Trainer", "llama": "Llama"}
+MODEL_READERS = ("modelhub", "video", "krea", "music", "trainer", "llama")
+NAMES = {"modelhub": "Models", "video": "Video", "krea": "Image", "music": "Music", "trainer": "Trainer", "llama": "Llama",
+         "voice": "Voice", "gateway": "Gateway", "connections": "Connections"}
+
+# Service outputs (Settings -> Storage -> Service outputs). Each folder can live in one storage location
+# (<location's drive folder>/Rocsy outputs/<key>); its old path becomes a symlink, so ComfyUI, compose files and
+# the apps keep using the same path. "binds": compose services that bind-mount the folder itself (docker resolves
+# the link when the container is created, so they're force-recreated at the switch). OUTPUT_WRITERS see the folder
+# through a link inside a folder they mount, so the location is bind-mounted into them read-write at the same path.
+OUTPUT_DIR = "Rocsy outputs"
+OUTPUT_WRITERS = ("video", "trainer", "voice")
+OUTPUT_BUSY = ("comfy", "queue", "vid", "krea", "mus", "trainer", "voice")
+OUTPUT_BUSY_CONTAINER = {"vid": "video", "krea": "krea", "mus": "music", "trainer": "bunny-trainer", "voice": "bunny-voice"}
+SERVICE_CONTAINERS = {**{s: c[0] for s, c in CONSUMERS.items()}, "gateway": "bunny-gateway", "connections": "bunny-connections"}
+
+
+def output_folders() -> list[dict]:
+    comfy = Path(os.getenv("CORE_COMFY_DIR", COMFY_ROOT)) / "output"
+    return [
+        {"key": "comfyui", "label": "Renders (Video, Image, Music)", "path": comfy,
+         "note": "ComfyUI's output folder", "binds": ["video", "music", "krea", "connections", "modelhub", "gateway", "voice"]},
+        {"key": "video-stitched", "label": "Stitched films", "path": ROOT / "Video" / "data" / "stitched", "note": "Video", "binds": []},
+        {"key": "video-postedit", "label": "Post-Edits", "path": ROOT / "Video" / "data" / "postedit", "note": "Video", "binds": []},
+        {"key": "trainer", "label": "Trained LoRAs", "path": ROOT / "Trainer" / "data" / "output", "note": "Trainer", "binds": ["video"]},
+        {"key": "voice", "label": "Voice clips", "path": COMPOSE_DIR / "voice" / "data" / "outputs", "note": "Voice", "binds": []},
+    ]
 SHARD = re.compile(r"-00001-of-(\d{5})\.(gguf|safetensors)$")
 WEIGHT = re.compile(r"\.(safetensors|sft|gguf|ckpt|pt|pth|bin|pkl|onnx)$", re.I)
 
@@ -85,12 +115,21 @@ def load() -> dict:
     except (OSError, ValueError):
         data = {}
     locations = [l for l in data.get("locations") or [] if isinstance(l, dict) and l.get("id") and l.get("path")]
+    for loc in locations:
+        handles = loc.get("handles")
+        loc["handles"] = [h for h in HANDLES if h in handles] if isinstance(handles, list) else list(HANDLES)
     defaults = {c: str((data.get("defaults") or {}).get(c) or BUILTIN) for c in CATEGORIES}
     ids = {l["id"] for l in locations}
-    defaults = {c: v if v == BUILTIN or v in ids else BUILTIN for c, v in defaults.items()}
+    holds = {c: {l["id"] for l in locations if c in l["handles"]} for c in CATEGORIES}
+    defaults = {c: v if v == BUILTIN or v in holds[c] else BUILTIN for c, v in defaults.items()}
     # Same-path mounts this module wrote at some point: the ones that may still need removing.
     known = [str(k) for k in data.get("known") or [] if isinstance(k, str)]
-    return {"locations": locations, "defaults": defaults, "known": known}
+    # Service outputs: "at" = where they live, "to" = where a running move takes them ("" = none).
+    outputs = data.get("outputs") if isinstance(data.get("outputs"), dict) else {}
+    outputs = {k: str(outputs.get(k) or "") for k in ("at", "to")}
+    outputs = {k: v if v in ids or (k == "at" and v == BUILTIN) else "" for k, v in outputs.items()}
+    outputs["at"] = outputs["at"] or BUILTIN
+    return {"locations": locations, "defaults": defaults, "known": known, "outputs": outputs}
 
 
 def save(state: dict) -> None:
@@ -105,6 +144,12 @@ def _inside(child: Path, parent: Path) -> bool:
 
 def _real(path: Path) -> Path:
     return Path(os.path.realpath(path))
+
+
+def category_of(rel: str) -> str:
+    """Which download/holding category a path under models/ belongs to."""
+    top = str(rel).split("/", 1)[0]
+    return "loras" if top == "loras" else "llm" if top == "llm" else "models"
 
 
 def location_of(real: Path, state: dict) -> str | None:
@@ -190,11 +235,56 @@ def mount_source(path: Path) -> Path:
 def wanted_mounts(state: dict) -> list[Path]:
     sources: list[Path] = []
     for loc in state["locations"]:
+        if not set(loc["handles"]) & set(CATEGORIES):
+            continue        # outputs only: the model readers don't need it
         src = mount_source(Path(loc["path"]))
         if src not in sources:
             sources.append(src)
     # A folder already inside another mounted folder needs no mount of its own.
     return [s for s in sources if not any(o != s and _inside(s, o) for o in sources)]
+
+
+def output_base(loc: dict) -> Path:
+    """<the location's folder>/Rocsy outputs; for a "Rocsy models" folder, next to it on the same drive."""
+    path = Path(loc["path"])
+    return (path.parent if path.name == "Rocsy models" else path) / OUTPUT_DIR
+
+
+def output_mounts(state: dict) -> list[Path]:
+    """What OUTPUT_WRITERS need mounted (read-write) to follow links into the outputs location(s)."""
+    out: list[Path] = []
+    ids = {state["outputs"]["at"], state["outputs"]["to"]} | {_output_where(f, state)[0] for f in output_folders()}
+    for loc_id in sorted(ids - {BUILTIN, "", "missing"}):
+        loc = next((l for l in state["locations"] if l["id"] == loc_id), None)
+        if not loc:
+            continue
+        base = output_base(loc)
+        src = mount_source(Path(loc["path"]))
+        if not _inside(base, src):
+            src = base      # a plain folder location: mount just its outputs folder
+        if src not in out:
+            out.append(src)
+    return out
+
+
+def wanted_by_service(state: dict) -> dict[str, dict[str, bool]]:
+    """service -> {same-path mount: writable} it should have."""
+    out: dict[str, dict[str, bool]] = {s: {} for s in CONSUMERS}
+    for m in wanted_mounts(state):
+        for s in MODEL_READERS:
+            out[s][str(m)] = out[s].get(str(m), False) or CONSUMERS[s][2]
+    for m in output_mounts(state):
+        for s in OUTPUT_WRITERS:
+            out[s][str(m)] = True
+    for s, mounts in out.items():
+        # Inside another mount of this service that is at least as writable: not needed.
+        out[s] = {m: w for m, w in mounts.items()
+                  if not any(o != m and _inside(Path(m), Path(o)) and (mounts[o] or not w) for o in mounts)}
+    return out
+
+
+def _all_wanted(state: dict) -> list[str]:
+    return sorted({m for mounts in wanted_by_service(state).values() for m in mounts})
 
 
 def _service_span(lines: list[str], name: str) -> tuple[int, int] | None:
@@ -216,8 +306,11 @@ def _covered(mount: str, targets: set[str]) -> bool:
     return any(_inside(Path(mount), Path(t)) for t in targets)
 
 
-def render_override(text: str, mounts: list[Path], existing: dict[str, set[str]]) -> str:
-    """docker-compose.override.yml with our blocks for these mounts (and none when the list is empty)."""
+def render_override(text: str, mounts: list[Path] | dict[str, dict[str, bool]], existing: dict[str, set[str]]) -> str:
+    """docker-compose.override.yml with our blocks for these mounts (and none when there are none).
+    mounts: service -> {path: writable}, or a plain list = model locations for every model reader."""
+    if not isinstance(mounts, dict):
+        mounts = {s: {str(m): CONSUMERS[s][2] for m in mounts} for s in MODEL_READERS}
     # Drop the old blocks (and volumes: keys we added that are now empty).
     while BEGIN in text:
         start, end = text.find(BEGIN), text.find(END)
@@ -240,15 +333,16 @@ def render_override(text: str, mounts: list[Path], existing: dict[str, set[str]]
         lines = out
     if not lines or not any(l.rstrip() == "services:" for l in lines):
         lines += ["services:\n"]
-    for service, (_container, _busy, writable) in CONSUMERS.items():
+    for service in CONSUMERS:
         have = existing.get(service, {"same": set(), "all": set()})
-        entries = [m for m in mounts if not _covered(str(m), have["same"]) and str(m) not in have["all"]]
+        wanted = mounts.get(service) or {}
+        entries = [m for m in wanted if not _covered(str(m), have["same"]) and str(m) not in have["all"]]
         if not entries:
             continue
         block = [BEGIN]
         for m in entries:
             block += ["      - type: bind\n", f'        source: "{m}"\n', f'        target: "{m}"\n']
-            if not writable:
+            if not wanted[m]:
                 block.append("        read_only: true\n")
             block += ["        bind:\n", "          create_host_path: true\n", "          propagation: rslave\n"]
         block.append(END)
@@ -300,7 +394,7 @@ def write_compose(state: dict) -> None:
     try:
         check.write_text(base)
         existing = _targets(_compose_config(["docker-compose.yml", str(check)]))
-        new = render_override(text, wanted_mounts(state), existing)
+        new = render_override(text, wanted_by_service(state), existing)
         check.write_text(new)
         _compose_config(["docker-compose.yml", str(check)])     # must stay valid
     finally:
@@ -321,9 +415,14 @@ def live_mounts(container: str) -> dict[str, str] | None:
     if result.returncode:
         return None
     try:
-        return {m.get("Destination", ""): m.get("Source", "") for m in json.loads(result.stdout) or []}
+        mounts = json.loads(result.stdout) or []
     except ValueError:
         return None
+    _live_rw[container] = {m.get("Destination", ""): bool(m.get("RW")) for m in mounts}
+    return {m.get("Destination", ""): m.get("Source", "") for m in mounts}
+
+
+_live_rw: dict[str, dict[str, bool]] = {}   # container -> target -> writable (filled by live_mounts)
 
 
 def _running(container: str) -> bool:
@@ -334,14 +433,17 @@ def _running(container: str) -> bool:
 
 def pending_services(state: dict) -> list[dict]:
     """Consumers whose container doesn't (yet) have exactly the mounts it should."""
-    wanted = {str(m) for m in wanted_mounts(state)}
+    by_service = wanted_by_service(state)
     out = []
     for service, (container, _busy, _w) in CONSUMERS.items():
+        wanted = by_service.get(service) or {}
         live = live_mounts(container)
         if live is None:
             continue    # not installed here (e.g. no Trainer): nothing to refresh
         same = {t for t, s in live.items() if t == s}
-        missing = sorted(m for m in wanted if not _covered(m, same))
+        rw = _live_rw.get(container, {})
+        writable = {t for t in same if rw.get(t)}
+        missing = sorted(m for m, w in wanted.items() if not _covered(m, writable if w else same))
         stale = sorted(t for t in same if t in state["known"] and t not in wanted)
         if missing or stale:
             out.append({"service": service, "name": NAMES[service], "missing": missing, "stale": stale})
@@ -406,7 +508,7 @@ def apply_once() -> None:
     _apply["pending"] = [p for p in pending if not p.get("done")]
     if not _apply["pending"]:
         _apply["force_llama"] = False
-        wanted = [str(m) for m in wanted_mounts(state)]
+        wanted = _all_wanted(state)
         if sorted(state["known"]) != sorted(wanted):
             save({**state, "known": wanted})       # removed mounts are gone from every container
 
@@ -514,9 +616,19 @@ def _slug(text: str, taken: set[str]) -> str:
     return slug
 
 
-def add_location(path: str, label: str = "", subfolder: bool = True) -> dict:
+def _clean_handles(handles: Any) -> list[str]:
+    if not isinstance(handles, list) or not all(isinstance(h, str) for h in handles):
+        raise Refused("Pick what this location is for")
+    picked = [h for h in HANDLES if h in handles]
+    if not picked:
+        raise Refused("Pick at least one thing this location is for")
+    return picked
+
+
+def add_location(path: str, label: str = "", subfolder: bool = True, handles: Any = None, downloads: Any = None) -> dict:
     with LOCK:
         state = load()
+        handles = list(HANDLES) if handles is None else _clean_handles(handles)
         real = _check_path(path)
         if not os.access(real, os.W_OK):
             raise Refused("You can't write to that folder")
@@ -537,9 +649,13 @@ def add_location(path: str, label: str = "", subfolder: bool = True) -> dict:
             raise Refused(f"Up to {MAX_LOCATIONS} locations; remove one first")
         info = disk(real)
         label = (label or "").strip()[:60] or info.get("label") or info.get("model") or real.parent.name or real.name
-        loc = {"id": _slug(label, {l["id"] for l in state["locations"]}), "label": label, "path": str(real), "added": time.time()}
+        loc = {"id": _slug(label, {l["id"] for l in state["locations"]}), "label": label, "path": str(real), "added": time.time(),
+               "handles": handles}
         previous = json.loads(json.dumps(state))
         state["locations"].append(loc)
+        for category in downloads if isinstance(downloads, list) else []:
+            if category in CATEGORIES and category in handles:
+                state["defaults"][category] = loc["id"]
         save(state)
         try:
             write_compose(state)
@@ -562,6 +678,9 @@ def remove_location(loc_id: str) -> dict:
             raise Refused(f"{len(stored)} model file(s) still live there: move them first (Models -> Manager -> Installed)")
         if any(j["state"] in ("queued", "copying", "verifying") and loc_id in (j["to"], j.get("from")) for j in _jobs.values()):
             raise Refused("A move into or out of it is running")
+        if loc_id in (state["outputs"]["at"], state["outputs"]["to"]) or any(
+                f["where"] == loc_id for f in _output_state(state)):
+            raise Refused("Service outputs are stored there: move them back first (Service outputs below)")
         previous = json.loads(json.dumps(state))
         state["locations"] = [l for l in state["locations"] if l["id"] != loc_id]
         state["defaults"] = {c: BUILTIN if v == loc_id else v for c, v in state["defaults"].items()}
@@ -578,12 +697,14 @@ def remove_location(loc_id: str) -> dict:
 def set_defaults(body: dict) -> dict:
     with LOCK:
         state = load()
-        ids = {l["id"] for l in state["locations"]} | {BUILTIN}
+        by_id = {l["id"]: l for l in state["locations"]}
         for category in CATEGORIES:
             if category in body:
                 value = str(body[category] or BUILTIN)
-                if value not in ids:
+                if value != BUILTIN and value not in by_id:
                     raise Refused("Unknown location")
+                if value != BUILTIN and category not in by_id[value]["handles"]:
+                    raise Refused(f"“{by_id[value]['label']}” isn't set to hold {HANDLE_NAMES[category]}: turn that on with Edit first")
                 state["defaults"][category] = value
         save(state)
         return view()
@@ -600,8 +721,59 @@ def rename_location(loc_id: str, label: str) -> dict:
         return view()
 
 
+def edit_location(loc_id: str, body: dict) -> dict:
+    """Name, what it handles, and which new downloads go to it."""
+    with LOCK:
+        state = load()
+        loc = next((l for l in state["locations"] if l["id"] == loc_id), None)
+        if not loc:
+            raise Refused("Unknown location")
+        previous = json.loads(json.dumps(state))
+        if "label" in body:
+            label = str(body.get("label") or "").strip()
+            if not label:
+                raise Refused("Give a name")
+            loc["label"] = label[:60]
+        if "handles" in body:
+            handles = _clean_handles(body["handles"])
+            dropped = [h for h in loc["handles"] if h not in handles]
+            if dropped:
+                stored = [rel for rel, where in links(state).items() if where["location"] == loc_id and category_of(rel) in dropped]
+                if stored:
+                    names = sorted({HANDLE_NAMES[category_of(r)] for r in stored})
+                    raise Refused(f"{len(stored)} file(s) ({', '.join(names)}) still live there: move them first "
+                                  "(Models -> Manager -> Installed)")
+                if "outputs" in dropped and (loc_id in (state["outputs"]["at"], state["outputs"]["to"])
+                                             or any(_output_where(f, state)[0] == loc_id for f in output_folders())):
+                    raise Refused("Service outputs are stored there: move them elsewhere first")
+            loc["handles"] = handles
+        downloads = body.get("downloads")
+        if downloads is not None:
+            if not isinstance(downloads, list):
+                raise Refused("Bad downloads list")
+            for category in CATEGORIES:
+                if category in downloads:
+                    if category not in loc["handles"]:
+                        raise Refused(f"Turn on “{HANDLE_NAMES[category]}” to send those downloads here")
+                    state["defaults"][category] = loc_id
+                elif state["defaults"][category] == loc_id:
+                    state["defaults"][category] = BUILTIN
+        for category in CATEGORIES:
+            if state["defaults"][category] == loc_id and category not in loc["handles"]:
+                state["defaults"][category] = BUILTIN
+        save(state)
+        try:
+            write_compose(state)
+        except Exception:
+            save(previous)
+            raise
+        _remember_known(load())
+        WAKE.set()
+        return view()
+
+
 def _remember_known(state: dict) -> None:
-    known = sorted(set(state["known"]) | {str(m) for m in wanted_mounts(state)})
+    known = sorted(set(state["known"]) | set(_all_wanted(state)))
     if known != sorted(state["known"]):
         save({**state, "known": known})
 
@@ -647,11 +819,12 @@ def view() -> dict:
                           "ready": online and ready(loc, pending), "stored": stored.get(loc["id"], {"count": 0, "bytes": 0, "offline": 0})})
     other = [("Rocsy", ROOT), ("ComfyUI", COMFY_ROOT), ("ComfyUI outputs", COMFY_ROOT / "output"), ("Hermes agent", HERMES_HOME)]
     return {"builtin": {"id": BUILTIN, "label": "ComfyUI models folder", "path": str(MODELS), "disk": disk(MODELS),
-                        "online": True, "writable": True, "ready": True},
+                        "online": True, "writable": True, "ready": True, "handles": list(HANDLES)},
             "locations": locations, "defaults": state["defaults"],
             "apply": {"pending": pending, "running": _apply["running"], "error": _apply["error"]},
             "jobs": sorted(_jobs.values(), key=lambda j: j["created"], reverse=True)[:30],
-            "other": [{"label": label, "path": str(p), "disk": disk(p)} for label, p in other if p.exists()]}
+            "outputs": outputs_view(state),
+            "other":[{"label": label, "path": str(p), "disk": disk(p)} for label, p in other if p.exists()]}
 
 
 # ------------------------------------------------------------------ moves --
@@ -681,6 +854,9 @@ def plan_move(rel: str, to: str) -> dict:
         loc = next((l for l in state["locations"] if l["id"] == to), None)
         if not loc:
             raise Refused("Unknown location")
+        if category_of(rel) not in loc["handles"]:
+            raise Refused(f"“{loc['label']}” isn't set to hold {HANDLE_NAMES[category_of(rel)]}: "
+                          "change that with Edit in Settings -> Storage")
         if not Path(loc["path"]).is_dir():
             raise Refused(f"“{loc['label']}” isn't reachable (drive unplugged?)")
         pending = _apply["pending"] if _apply["checked"] else pending_services(state)
@@ -871,11 +1047,364 @@ def _prune_empty(folder: Path, loc_id: str) -> None:
 def default_for(dest: str) -> dict:
     """Where a new download into models/<dest> should go: {"id", "path"} ("" path = models folder)."""
     state = load()
-    top = dest.split("/", 1)[0]
-    category = "loras" if top == "loras" else "llm" if top == "llm" else "models"
+    category = category_of(dest)
     loc_id = state["defaults"][category]
     loc = next((l for l in state["locations"] if l["id"] == loc_id), None)
     return {"id": loc_id, "path": loc["path"] if loc else ""}
+
+
+# -------------------------------------------------------- service outputs --
+# One move at a time takes every output folder to one place: copy (read back + SHA-256, like model moves) while
+# Rocsy keeps working, then wait until nothing renders, copy what changed meanwhile, swap each folder for a link
+# (or the link back for the folder), recreate the containers that bind them, and only then free the old copies.
+
+OUT_RUNNING = ("queued", "connecting", "copying", "verifying", "waiting", "switching")
+PART = ".rocsy-part"
+_out_job: dict = {}
+
+
+def _output_where(folder: dict, state: dict) -> tuple[str, Path | None]:
+    """(location id | BUILTIN | "" = a link Rocsy doesn't manage | "missing", the real folder)."""
+    path = folder["path"]
+    if path.is_symlink():
+        real = _real(path)
+        for loc in state["locations"]:
+            if _inside(real, output_base(loc)):
+                return loc["id"], real
+        return "", real
+    if path.is_dir():
+        return BUILTIN, path
+    return "missing", None
+
+
+def _du(path: Path) -> int | None:
+    def make() -> int | None:
+        result = subprocess.run(["du", "-sb", "--", str(path)], capture_output=True, text=True, timeout=300)
+        try:
+            return int(result.stdout.split()[0])
+        except (ValueError, IndexError):
+            return None
+    return _cached(f"du:{path}", 120, make)
+
+
+def _output_state(state: dict, sizes: bool = False) -> list[dict]:
+    out = []
+    for folder in output_folders():
+        where, real = _output_where(folder, state)
+        online = bool(real and real.is_dir())
+        item = {**folder, "where": where, "real": real, "online": online}
+        if sizes:
+            item["bytes"] = _du(real) if online else None
+        out.append(item)
+    return out
+
+
+def outputs_view(state: dict) -> dict:
+    folders = [{"key": f["key"], "label": f["label"], "note": f["note"], "path": str(f["path"]), "where": f["where"],
+                "real": str(f["real"] or ""), "online": f["online"], "bytes": f.get("bytes")}
+               for f in _output_state(state, sizes=True)]
+    job = {k: v for k, v in _out_job.items() if k not in ("cancel", "items")} if _out_job else None
+    return {"at": state["outputs"]["at"], "to": state["outputs"]["to"], "folders": folders, "job": job,
+            "writers": [NAMES[s] for s in OUTPUT_WRITERS]}
+
+
+def _sleep(job: dict, seconds: float) -> None:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if job["cancel"]:
+            raise _Cancelled
+        time.sleep(0.5)
+
+
+def _sync_tree(job: dict, src: Path, dst: Path, tolerant: bool) -> None:
+    """Make dst a copy of src (files verified by SHA-256; unchanged ones skipped by size + mtime).
+    tolerant: a file being written or deleted while Rocsy works is skipped (the final pass gets it)."""
+    dst.mkdir(parents=True, exist_ok=True)
+    seen: set[Path] = set()
+    for dirpath, dirnames, filenames in os.walk(src):
+        here = Path(dirpath)
+        rel = here.relative_to(src)
+        (dst / rel).mkdir(exist_ok=True)
+        links = [d for d in dirnames if (here / d).is_symlink()]
+        dirnames[:] = [d for d in dirnames if d not in links]
+        seen.update(rel / d for d in dirnames)
+        for name in filenames + links:
+            s, d = here / name, dst / rel / name
+            seen.add(rel / name)
+            if job["cancel"]:
+                raise _Cancelled
+            if name.endswith(PART):
+                continue
+            if s.is_symlink():
+                target = os.readlink(s)
+                if d.is_symlink() and os.readlink(d) == target:
+                    continue
+                if d.is_dir() and not d.is_symlink():
+                    shutil.rmtree(d)
+                else:
+                    d.unlink(missing_ok=True)
+                os.symlink(target, d)
+                continue
+            try:
+                st = s.stat()
+            except FileNotFoundError:
+                continue
+            if not s.is_file():
+                continue
+            try:
+                dt = d.lstat()
+                if not d.is_symlink() and d.is_file() and dt.st_size == st.st_size and dt.st_mtime_ns == st.st_mtime_ns:
+                    continue
+            except FileNotFoundError:
+                pass
+            part = d.with_name(d.name + PART)
+            try:
+                _copy(job, str(s), part)
+                if d.is_dir() and not d.is_symlink():
+                    shutil.rmtree(d)
+                os.replace(part, d)
+            except _Cancelled:
+                part.unlink(missing_ok=True)
+                raise
+            except (RuntimeError, FileNotFoundError):
+                part.unlink(missing_ok=True)
+                if not tolerant:
+                    raise
+    for dirpath, dirnames, filenames in os.walk(dst, topdown=False):
+        here = Path(dirpath)
+        rel = here.relative_to(dst)
+        for name in filenames + dirnames:
+            if rel / name in seen:
+                continue
+            gone = here / name
+            if gone.is_dir() and not gone.is_symlink():
+                shutil.rmtree(gone, ignore_errors=True)
+            else:
+                gone.unlink(missing_ok=True)
+
+
+def _port_open(port: int) -> bool:
+    import socket
+    try:
+        socket.create_connection(("127.0.0.1", port), 2).close()
+        return True
+    except OSError:
+        return False
+
+
+def _outputs_busy() -> str:
+    """Why outputs can't be switched right now ("" = everything that writes them is idle)."""
+    if busy_check is None:
+        return "busy checks aren't ready"
+    for kind in OUTPUT_BUSY:
+        container = {**OUTPUT_BUSY_CONTAINER, "queue": "bunny-lock"}.get(kind)
+        if container and not _running(container):
+            continue
+        try:
+            busy, detail = busy_check(kind)
+        except Exception as exc:  # noqa: BLE001 - unreadable = busy (fail closed), unless it isn't running at all
+            if kind == "comfy" and not _port_open(8188):
+                continue
+            return f"couldn't check {kind} ({type(exc).__name__})"
+        if busy:
+            return detail
+    return ""
+
+
+def _recreate(services: list[str]) -> str:
+    """Force-recreate these compose services so their binds follow the new links. Returns errors ("" = ok)."""
+    errors = []
+    present = [s for s in services if live_mounts(SERVICE_CONTAINERS[s]) is not None]
+    running = [s for s in present if _running(SERVICE_CONTAINERS[s])]
+    stopped = [s for s in present if s not in running]
+    for group, mode in ((running, "-d"), (stopped, "--no-start")):
+        if not group:
+            continue
+        result = subprocess.run(["docker", "compose", "up", "--no-deps", "--force-recreate", mode, *group],
+                                cwd=COMPOSE_DIR, capture_output=True, text=True, timeout=600)
+        if result.returncode:
+            errors.append((result.stderr or result.stdout).strip()[-300:])
+    return "; ".join(errors)
+
+
+def start_outputs_move(to: str) -> dict:
+    with LOCK:
+        if _out_job.get("state") in OUT_RUNNING:
+            raise Refused("Service outputs are already being moved")
+        state = load()
+        label = "Rocsy's own folders"
+        if to != BUILTIN:
+            loc = next((l for l in state["locations"] if l["id"] == to), None)
+            if not loc:
+                raise Refused("Unknown location")
+            if "outputs" not in loc["handles"]:
+                raise Refused(f"“{loc['label']}” isn't set to hold service outputs: turn that on with Edit first")
+            if not Path(loc["path"]).is_dir():
+                raise Refused(f"“{loc['label']}” isn't reachable (drive unplugged?)")
+            label = loc["label"]
+        folders = _output_state(state)
+        if any(f["where"] == "" for f in folders):
+            bad = next(f for f in folders if f["where"] == "")
+            raise Refused(f"{bad['path']} is a link to {bad['real']}, which Rocsy doesn't manage; move it back by hand first")
+        offline = [f for f in folders if f["where"] not in (BUILTIN, "missing", to) and not f["online"]]
+        if offline:
+            raise Refused(f"{offline[0]['label']} is on a drive that isn't reachable (unplugged?)")
+        todo = [f for f in folders if f["where"] not in (to, "missing")]
+        if not todo:
+            if state["outputs"]["at"] != to:
+                save({**state, "outputs": {"at": to, "to": ""}})
+            raise Refused("They're already there")
+        if to != BUILTIN:
+            state["outputs"]["to"] = to
+            save(state)
+            write_compose(state)
+            WAKE.set()
+        _out_job.clear()
+        _out_job.update(id=uuid.uuid4().hex[:12], to=to, label=label, state="queued", total=0, bytes=0, waiting="",
+                        error="", note="", created=time.time(), finished=0, cancel=False,
+                        folders=[f["label"] for f in todo])
+        threading.Thread(target=_outputs_thread, args=(_out_job,), daemon=True).start()
+        return view()
+
+
+def cancel_outputs_move() -> dict:
+    if _out_job.get("state") not in OUT_RUNNING:
+        raise Refused("No move is running")
+    if _out_job["state"] == "switching":
+        raise Refused("It's switching over right now; that takes a few seconds and can't be stopped")
+    _out_job["cancel"] = True
+    return view()
+
+
+def _outputs_thread(job: dict) -> None:
+    items: list[dict] = []
+    try:
+        _outputs_run(job, items)
+        job.update(state="done", finished=time.time())
+    except _Cancelled:
+        job.update(state="cancelled", finished=time.time())
+    except Exception as exc:  # noqa: BLE001 - shown on the job
+        job.update(state="failed", error=str(exc)[:400] or type(exc).__name__, finished=time.time())
+    finally:
+        if job["state"] != "done":
+            for item in items:
+                if item.get("stage") and not item.get("switched"):
+                    shutil.rmtree(item["stage"], ignore_errors=True)
+        with LOCK:
+            state = load()
+            folders = _output_state(state)
+            wheres = {f["where"] for f in folders if f["where"] != "missing"}
+            at = job["to"] if job["state"] == "done" else (wheres.pop() if len(wheres) == 1 else state["outputs"]["at"])
+            state["outputs"] = {"at": at if at in {l["id"] for l in state["locations"]} | {BUILTIN} else BUILTIN, "to": ""}
+            save(state)
+            try:
+                write_compose(state)
+            except Exception as exc:  # noqa: BLE001
+                job["note"] = (job["note"] + " · " if job["note"] else "") + f"compose: {str(exc)[:200]}"
+            WAKE.set()
+
+
+def _outputs_run(job: dict, items: list[dict]) -> None:
+    to = job["to"]
+    state = load()
+    base = None
+    if to != BUILTIN:
+        loc = next(l for l in state["locations"] if l["id"] == to)
+        base = output_base(loc)
+        base.mkdir(parents=True, exist_ok=True)
+        # 1. The apps that write outputs must see the drive before anything points there.
+        job["state"] = "connecting"
+        while True:
+            need = [p["name"] for p in pending_services(load())
+                    if p["service"] in OUTPUT_WRITERS and any(_inside(base, Path(m)) for m in p["missing"])]
+            if not need:
+                break
+            job["waiting"] = f"Connecting the drive to {', '.join(need)} (each refreshes once idle)"
+            WAKE.set()
+            _sleep(job, 5)
+        job["waiting"] = ""
+    # 2. Plan + copy while Rocsy keeps working.
+    for folder in _output_state(load()):
+        if folder["where"] in (to, "missing"):
+            continue
+        src = folder["real"]
+        if base is not None:
+            dest = base / folder["key"]
+            if dest.is_symlink() or (dest.exists() and any(dest.iterdir())):
+                dest = base / f"{folder['key']}-{time.strftime('%Y%m%d-%H%M%S')}"
+            elif dest.exists():
+                dest.rmdir()
+        else:
+            dest = folder["path"]
+        stage = dest.with_name(f".{dest.name}.rocsy-move")
+        same = os.stat(src).st_dev == os.stat(dest.parent).st_dev
+        items.append({**folder, "src": src, "dest": dest, "stage": None if same else stage, "same": same})
+    copy = [i for i in items if not i["same"]]
+    job["total"] = sum(_du(i["src"]) or 0 for i in copy)
+    if copy:
+        info = disk(copy[0]["dest"].parent)
+        if info.get("free", 0) < job["total"] + 2 * 1024 ** 3:
+            raise RuntimeError(f"Not enough space there ({info.get('free', 0) / 1024 ** 3:.1f} GB free, "
+                               f"needs {job['total'] / 1024 ** 3:.1f} GB + 2 GB)")
+        if info.get("fstype") == "vfat":
+            raise RuntimeError("That drive is FAT32 (no links, 4 GB file limit); reformat it as ext4, btrfs, exFAT or NTFS")
+    for item in copy:
+        job["waiting"] = f"Copying {item['label']}"
+        _sync_tree(job, item["src"], item["stage"], tolerant=True)
+    # 3. Wait until nothing renders, trains or speaks.
+    job["state"] = "waiting"
+    while reason := _outputs_busy():
+        job["waiting"] = f"Waiting until Rocsy is idle: {reason}"
+        _sleep(job, 10)
+    # 4. Switch: last changes, swap every folder, recreate the containers that bind them, free the old copies.
+    job.update(state="switching", waiting="Switching over")
+    with LOCK:
+        for item in copy:
+            _sync_tree(job, item["src"], item["stage"], tolerant=False)
+        job["state"] = "switching"         # _copy marks copying/verifying; from here on nothing can cancel
+        for item in items:
+            path, src, dest = item["path"], item["src"], item["dest"]
+            moved = src if item["same"] else item["stage"]
+            if base is not None:
+                os.rename(moved, dest)
+                tmp = path.with_name(f".{path.name}.rocsy-link")
+                tmp.unlink(missing_ok=True)
+                os.symlink(dest, tmp)
+                if path.is_symlink() or not path.exists():
+                    os.replace(tmp, path)                 # atomic: old link (or nothing) -> new link
+                else:
+                    old = path.with_name(f".{path.name}.rocsy-old")
+                    os.rename(path, old)
+                    os.replace(tmp, path)
+                    item["old"] = old
+            else:
+                link = path.with_name(f".{path.name}.rocsy-oldlink")
+                link.unlink(missing_ok=True)
+                os.rename(path, link)
+                os.rename(moved, path)
+                link.unlink()
+            if not item["same"] and item["where"] != BUILTIN:
+                item["old"] = src                          # the copy on the location it left
+            item["switched"] = True
+        _cache.clear()
+    services = sorted({s for item in items for s in item["binds"]})
+    job["waiting"] = f"Refreshing {', '.join(NAMES.get(s, s) for s in services)}" if services else ""
+    errors = _recreate(services) if services else ""
+    if errors:
+        job["note"] = f"Couldn't refresh every app ({errors}); the old copies were kept. Restart Rocsy, then delete them."
+        return
+    for item in items:
+        old = item.get("old")
+        if old:
+            shutil.rmtree(old, ignore_errors=True)
+            if item["where"] not in (BUILTIN, ""):
+                prev = next((l for l in load()["locations"] if l["id"] == item["where"]), None)
+                if prev:
+                    try:
+                        output_base(prev).rmdir()
+                    except OSError:
+                        pass
+    job["waiting"] = ""
 
 
 # ---------------------------------------------------------------- routes --
@@ -891,12 +1420,16 @@ def handle(method: str, path: str, body: dict) -> tuple[int, dict]:
         if method == "GET" and route == "/storage/links":
             state = load()
             return 200, {"links": links(state), "defaults": state["defaults"],
-                         "locations": [{"id": l["id"], "label": l["label"], "path": l["path"]} for l in state["locations"]],
+                         "locations": [{"id": l["id"], "label": l["label"], "path": l["path"], "handles": l["handles"]}
+                                       for l in state["locations"]],
                          "jobs": [_public(j) for j in sorted(_jobs.values(), key=lambda j: j["created"], reverse=True)[:30]]}
         if method == "GET" and route == "/storage/browse":
             return 200, browse((query.get("path") or [None])[0], (query.get("hidden") or ["0"])[0] == "1")
         if method == "POST" and route == "/storage/locations/add":
-            return 200, add_location(str(body.get("path") or ""), str(body.get("label") or ""), body.get("subfolder", True) is not False)
+            return 200, add_location(str(body.get("path") or ""), str(body.get("label") or ""), body.get("subfolder", True) is not False,
+                                     body.get("handles"), body.get("downloads"))
+        if method == "POST" and route == "/storage/locations/edit":
+            return 200, edit_location(str(body.get("id") or ""), body)
         if method == "POST" and route == "/storage/locations/remove":
             return 200, remove_location(str(body.get("id") or ""))
         if method == "POST" and route == "/storage/locations/rename":
@@ -909,6 +1442,10 @@ def handle(method: str, path: str, body: dict) -> tuple[int, dict]:
             return 200, {"ok": True}
         if method == "POST" and route == "/storage/move":
             return 200, start_move(str(body.get("path") or ""), str(body.get("to") or ""))
+        if method == "POST" and route == "/storage/outputs/move":
+            return 200, start_outputs_move(str(body.get("to") or ""))
+        if method == "POST" and route == "/storage/outputs/cancel":
+            return 200, cancel_outputs_move()
         if method == "POST" and route == "/storage/move/cancel":
             return 200, cancel_move(str(body.get("id") or ""))
         return 404, {"error": "not found"}

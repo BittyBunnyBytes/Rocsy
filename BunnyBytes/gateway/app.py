@@ -40,9 +40,11 @@ from auth import (
 )
 from config import settings
 from proxy import close_shared_client, proxy_request, shared_client
+import security_headers
 from security_headers import SecurityHeadersMiddleware
 import home as home_data
 import llama_params
+import llama_keys
 import restyle
 import themes
 import favicons
@@ -76,6 +78,7 @@ async def lifespan(_: FastAPI):
     finally:
         watcher.cancel()
         connection_tracker.flush()
+        llama_keys.flush()
         with contextlib.suppress(asyncio.CancelledError):
             await watcher
         await close_shared_client()
@@ -1556,7 +1559,8 @@ async def storage_locations_browse(request: Request, path: str = "", hidden: int
 
 
 _STORAGE_ACTIONS = {"add": "/storage/locations/add", "remove": "/storage/locations/remove",
-                    "rename": "/storage/locations/rename", "defaults": "/storage/defaults", "apply": "/storage/apply"}
+                    "rename": "/storage/locations/rename", "edit": "/storage/locations/edit", "defaults": "/storage/defaults", "apply": "/storage/apply",
+                    "outputs": "/storage/outputs/move", "outputs-cancel": "/storage/outputs/cancel"}
 
 
 @app.post("/api/storage-locations/{action}")
@@ -1568,7 +1572,7 @@ async def storage_locations_action(request: Request, action: str):
     body = await _json_body(request)
     if body is None:
         return JSONResponse({"error": "json_required"}, status_code=415)
-    allowed = {"path", "label", "subfolder", "id", "models", "loras", "llm", "force_llama"}
+    allowed = {"path", "label", "subfolder", "id", "models", "loras", "llm", "force_llama", "to", "handles", "downloads"}
     return await _hostctl("POST", _STORAGE_ACTIONS[action], {k: v for k, v in body.items() if k in allowed})
 
 
@@ -1951,11 +1955,77 @@ def _has_valid_llama_bearer(request: Request) -> bool:
     return scheme.lower() == "bearer" and bool(token) and check_llama_api_key(token)
 
 
+ROOT_APPS: dict[str, str] = {}   # root_app plugin id -> its path (see _root_app_shim)
+
+
+def _root_app_shim(prefix: str) -> str:
+    """For a root_app plugin page: an import map sending root-absolute module imports
+    (import ... from '/scripts/x.js') under `prefix`, and fetch / XHR / EventSource / WebSocket /
+    sendBeacon wrappers doing the same for root-absolute URLs. Pictures and stylesheet assets the
+    page asks for at the root are served by the root fallback (_root_app_fallback) instead."""
+    p = json.dumps(prefix)
+    imports = json.dumps({"imports": {"/": prefix + "/", prefix + "/": prefix + "/"}})
+    return (
+        f'<script type="importmap">{imports}</script>'
+        "<script>(function(){"
+        f"var P={p},O=location.origin;"
+        "function fix(u){"
+        "if(typeof u==='string'){if(u.charAt(0)==='/'&&u.charAt(1)!=='/'&&u!==P&&u.indexOf(P+'/')!==0)return P+u;"
+        "if(u.indexOf(O+'/')===0){var r=u.slice(O.length);var f=fix(r);return f===r?u:O+f}return u}"
+        "if(u instanceof URL){var s=fix(u.href);return s===u.href?u:new URL(s)}return u}"
+        "var F=window.fetch;window.fetch=function(i,o){"
+        "if(i instanceof Request){var n=fix(i.url);if(n!==i.url)i=new Request(n,i)}else i=fix(i);"
+        "return F.call(this,i,o)};"
+        "var X=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){"
+        "var a=Array.prototype.slice.call(arguments);a[1]=fix(u);return X.apply(this,a)};"
+        "['EventSource','WebSocket'].forEach(function(k){var C=window[k];if(!C)return;"
+        "var W=function(u,x){u=fix(u);if(k==='WebSocket'&&typeof u==='string'&&u.charAt(0)==='/')"
+        "u=(location.protocol==='https:'?'wss://':'ws://')+location.host+u;"
+        "return x===undefined?new C(u):new C(u,x)};W.prototype=C.prototype;"
+        "Object.keys(C).forEach(function(c){W[c]=C[c]});window[k]=W});"
+        "if(navigator.sendBeacon){var B=navigator.sendBeacon.bind(navigator);"
+        "navigator.sendBeacon=function(u,d){return B(fix(u),d)}}"
+        # Scripts/stylesheets added from JS (e.g. script.src = '/scripts/extensions/x/index.js'):
+        # one URL per module, or the same module would run twice next to its import() copy.
+        "[[HTMLScriptElement,'src'],[HTMLLinkElement,'href']].forEach(function(e){"
+        "var d=Object.getOwnPropertyDescriptor(e[0].prototype,e[1]);if(!d||!d.set)return;"
+        "Object.defineProperty(e[0].prototype,e[1],{configurable:true,enumerable:d.enumerable,get:d.get,"
+        "set:function(v){d.set.call(this,fix(String(v)))}})});"
+        "var SA=Element.prototype.setAttribute;Element.prototype.setAttribute=function(n,v){"
+        "var k=String(n).toLowerCase();if((this instanceof HTMLScriptElement&&k==='src')||"
+        "(this instanceof HTMLLinkElement&&k==='href'))v=fix(String(v));return SA.call(this,n,v)};"
+        "})();</script>"
+    )
+
+
+_ROOT_ATTR = re.compile(rb'''(\s(?:src|href|action)\s*=\s*["'])/(?!/)''', re.I)
+
+
+def _root_app_html(prefix: str):
+    """Root-absolute src/href/action attributes in a root_app page, moved under its prefix
+    (links to the prefix itself are left alone)."""
+    marker = prefix.encode()
+
+    def rewrite(html: bytes) -> bytes:
+        def one(match: re.Match) -> bytes:
+            after = html[match.end():match.end() + len(marker)]   # what follows the leading /
+            if after[:len(marker) - 1] == marker[1:] and after[len(marker) - 1:len(marker)] in (b"/", b"\"", b"'", b"?", b"#"):
+                return match.group(0)
+            return match.group(1) + marker + b"/"
+        return _ROOT_ATTR.sub(one, html)
+    return rewrite
+
+
 async def _handle_app_proxy(request: Request, app_name: str, path: str, *, strip_prefix: bool = False) -> Response:
     upstream_base = UPSTREAMS[app_name]
     full_path = request.url.path  # e.g. /Video/api/generate -- includes prefix, not stripped
 
     authorized = _has_valid_session(request) or (app_name == "Llama" and _has_valid_llama_bearer(request))
+    if not authorized and app_name == "Llama":
+        scheme, _, token = request.headers.get("authorization", "").partition(" ")
+        scoped = llama_keys.lookup(token.strip()) if scheme.lower() == "bearer" and token else None
+        if scoped:
+            return await _scoped_llama_proxy(request, scoped, strip_prefix=strip_prefix)
     if not authorized:
         return _unauthorized_response(request, full_path)
 
@@ -1973,14 +2043,73 @@ async def _handle_app_proxy(request: Request, app_name: str, path: str, *, strip
         # (if any) the caller sent, since a bearer caller already proved they
         # know this same value to get past _has_valid_llama_bearer.
         extra_headers = {"authorization": f"Bearer {settings.llama_api_key}"}
+    root_prefix = ROOT_APPS.get(app_name, "")
     return await proxy_request(
         request, upstream_base, APP_PATHS.get(app_name, f"/{app_name}"), extra_headers=extra_headers, strip_prefix=strip_prefix,
         head_inject=theme_link(app_name) + rocsy_bar_link() + data_saver_script() if app_name in THEMED_APPS else "",
         restyle_css=app_name in THEMED_APPS,
+        # A root app keeps its own page chrome: Rocsy's top bar needs the themed head links.
         html_transform=lambda html: favicons.apply(
-            topbar.decorate(html, app_name) if app_name in topbar.APPS else html, app_name),
+            topbar.decorate(html, app_name) if app_name in topbar.APPS and app_name in THEMED_APPS
+            else _root_app_html(root_prefix)(html) if root_prefix else html, app_name),
+        head_start_inject=_root_app_shim(root_prefix) if root_prefix else "",
+        location_prefix=root_prefix,
         adapt_reasoning=app_name == "Llama",
         lite_images=app_name != "Llama" and datasaver.wants_lite(request.headers, request.cookies),
+    )
+
+
+def _llama_refusal(error: "llama_keys.Refused") -> JSONResponse:
+    headers = {"Retry-After": str(error.retry_after)} if error.retry_after else None
+    return JSONResponse({"error": {"code": error.code, "message": error.message, "type": error.code}},
+                        status_code=error.status, headers=headers)
+
+
+async def _llama_model_loaded(model: str) -> bool:
+    """Is `model` running in llama-swap right now? (GET /running; no model load.)"""
+    try:
+        response = await shared_client().get(f"{settings.llama_upstream}/running",
+                                             headers={"authorization": f"Bearer {settings.llama_api_key}"}, timeout=5.0)
+        response.raise_for_status()
+        running = response.json().get("running", [])
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return False
+    return any(item.get("model") == model and item.get("state") in ("ready", "running", None) for item in running)
+
+
+async def _scoped_llama_proxy(request: Request, key: "llama_keys.LlamaKey", *, strip_prefix: bool) -> Response:
+    """A request carrying a scoped key (llama_keys.py): only model listing and chat/completions,
+    within the key's models, context, output and rate limits."""
+    path = request.url.path
+    if path.startswith("/Llama/"):
+        path = path[len("/Llama"):]
+    if request.method in ("GET", "HEAD") and path.rstrip("/") in llama_keys.MODEL_PATHS:
+        if key.models:
+            return JSONResponse(llama_keys.models_response(key))
+    elif request.method == "POST" and path.rstrip("/") in llama_keys.CHAT_PATHS:
+        pass
+    else:
+        return _llama_refusal(llama_keys.Refused(403, "not_allowed", "This key can only list models and chat."))
+
+    body = None
+    if request.method == "POST":
+        raw = await request.body()
+        if len(raw) > settings.max_body_bytes:
+            return JSONResponse({"error": "payload_too_large"}, status_code=413)
+        try:
+            body = llama_keys.check_body(key, path, raw)
+            model = json.loads(body).get("model", "")
+            if key.require_loaded and not await _llama_model_loaded(model):
+                raise llama_keys.Refused(503, "model_not_loaded",
+                                         f"{model} isn't loaded right now and this key may not load models. Try again later.",
+                                         retry_after=60)
+            llama_keys.take(key)
+        except llama_keys.Refused as error:
+            return _llama_refusal(error)
+    return await proxy_request(
+        request, UPSTREAMS["Llama"], APP_PATHS.get("Llama", "/Llama"),
+        extra_headers={"authorization": f"Bearer {settings.llama_api_key}"},
+        strip_prefix=strip_prefix, adapt_reasoning=True, body_override=body,
     )
 
 
@@ -2127,6 +2256,77 @@ async def llama_api_config(request: Request):
         "api_key": settings.llama_api_key,
         "models": models,
     })
+
+
+# Llama API page -> Keys: scoped keys for other apps (llama_keys.py).
+@app.get("/llama-api/keys")
+async def llama_api_keys(request: Request):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return JSONResponse({"keys": llama_keys.list_keys(), "characters": llama_keys.characters()})
+
+
+@app.post("/llama-api/keys")
+async def llama_api_key_create(request: Request):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1":
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    try:
+        record, token = llama_keys.create(await _json_body(request) or {})
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"key": record, "token": token})
+
+
+@app.patch("/llama-api/keys/{key_id}")
+async def llama_api_key_update(request: Request, key_id: str):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1":
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    try:
+        record = llama_keys.update(key_id, await _json_body(request) or {})
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if record is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse({"key": record})
+
+
+@app.post("/llama-api/keys/{key_id}/rotate")
+async def llama_api_key_rotate(request: Request, key_id: str):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1":
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    result = llama_keys.rotate(key_id)
+    if result is None:
+        return JSONResponse({"error": "not found or revoked"}, status_code=404)
+    record, token = result
+    return JSONResponse({"key": record, "token": token})
+
+
+@app.post("/llama-api/keys/{key_id}/revoke")
+async def llama_api_key_revoke(request: Request, key_id: str):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1":
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    if not llama_keys.revoke(key_id):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse({"ok": True})
+
+
+@app.delete("/llama-api/keys/{key_id}")
+async def llama_api_key_delete(request: Request, key_id: str):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1":
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    if not llama_keys.delete(key_id):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse({"ok": True})
 
 
 @app.get("/llama-benchmark/status/{model_id}")
@@ -2439,6 +2639,34 @@ def _register_plugin(plugin: plugins.Plugin) -> None:
     app.add_api_route(plugin.path, plugin_root, methods=["GET"], include_in_schema=False)
     app.add_api_route(f"{plugin.path}/{{path:path}}", plugin_proxy, include_in_schema=False,
                       methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+    if plugin.root_app:
+        ROOT_APPS[plugin.id] = plugin.path
+        security_headers.ROOT_APP_PATHS.add(plugin.path)
+
+
+def _root_app_for(request: Request) -> str | None:
+    """The root_app plugin whose page made this request (same-origin Referer under its path)."""
+    referer = urlsplit(request.headers.get("referer", ""))
+    if referer.netloc and referer.netloc != request.headers.get("host", ""):
+        return None
+    for plugin_id, path in ROOT_APPS.items():
+        if referer.path == path or referer.path.startswith(path + "/"):
+            return plugin_id
+    return None
+
+
+async def _root_app_fallback(request: Request, path: str):
+    """Last route: a root-path request no Rocsy route took (e.g. <img src="/thumbnail?...">,
+    CSS url(/img/...)) coming from a root_app plugin's page goes to that plugin unchanged."""
+    plugin_id = _root_app_for(request)
+    if plugin_id is None:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    if request.method in ("GET", "HEAD"):
+        # Redirect rather than proxy, so whatever it loads next (fonts in a stylesheet, a module's
+        # own imports) resolves under the plugin's path instead of at the root again.
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(url=f"{ROOT_APPS[plugin_id]}/{path}{query}", status_code=307)
+    return await _handle_app_proxy(request, plugin_id, path, strip_prefix=False)
 
 
 PLUGIN_CARDS: dict[str, dict] = {}
@@ -2453,6 +2681,9 @@ PLUGIN_SNAPSHOT = plugins.snapshot(settings.plugins_dir)
 PLUGINS, PLUGIN_ERRORS = plugins.load(settings.plugins_dir, *PLUGIN_RESERVED)
 for _plugin in PLUGINS:
     _register_plugin(_plugin)
+if ROOT_APPS:   # registered after every other route, so it only sees paths nothing else matched
+    app.add_api_route("/{path:path}", _root_app_fallback, include_in_schema=False,
+                      methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
 
 
 if __name__ == "__main__":

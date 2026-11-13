@@ -41,6 +41,9 @@ class Settings:
     moss_fast_workflow_path: Path = field(default_factory=lambda: _path("KREA_MOSS_FAST_WORKFLOW_PATH", BASE_DIR / "workflows" / "MOSS-Image-Few-Step-API.json"))
     moss_clip_name: str = field(default_factory=lambda: os.getenv("KREA_MOSS_CLIP_NAME", "qwen3.5_9b_int8_convrot.safetensors"))
     moss_vae_name: str = field(default_factory=lambda: os.getenv("KREA_MOSS_VAE_NAME", "flux2-vae.safetensors"))
+    # MiniMax H3 Image: the Qwen3-VL-32B text encoder it shares with H3 video, and its own image VAE.
+    h3_image_clip_name: str = field(default_factory=lambda: os.getenv("KREA_H3_IMAGE_CLIP_NAME", "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"))
+    h3_image_vae_name: str = field(default_factory=lambda: os.getenv("KREA_H3_IMAGE_VAE_NAME", "minimax_h3_image_vae_fp16.safetensors"))
     output_dir: Path = field(default_factory=lambda: _path("KREA_OUTPUT_DIR", BASE_DIR / "Output"))
     data_dir: Path = field(default_factory=lambda: _path("KREA_DATA_DIR", BASE_DIR / "data"))
     log_dir: Path = field(default_factory=lambda: _path("KREA_LOG_DIR", BASE_DIR / "logs"))

@@ -37,7 +37,7 @@ def _slots(model: str) -> list[str]:
     try:
         return models.lora_slots_for(model)
     except KeyError as exc:
-        raise ValueError("Choose Krea 2, Qwen-Image 2.1, MOSS-Image, or Anima") from exc
+        raise ValueError("Choose Krea 2, Qwen-Image 2.1, MOSS-Image, Anima, or MiniMax H3 Image") from exc
 
 
 def _base_group(filename: str) -> str:
@@ -152,7 +152,7 @@ def index(model: str) -> dict[str, dict[str, Any]]:
 
 
 def _sync() -> None:
-    for model in ("krea", "qwen", "moss", "anima"):
+    for model in ("krea", "qwen", "moss", "anima", "h3image"):
         view = _view(model)
         for filename in _active(model):
             override = dict(view["metadata"].get(filename, {}))

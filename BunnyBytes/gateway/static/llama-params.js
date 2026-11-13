@@ -72,7 +72,7 @@
 
   function field(param, model) {
     const value = model.overrides[param.flag] ?? '';
-    const fallback = model.defaults[param.flag] ?? 'llama.cpp default';
+    const fallback = (model.defaults[param.flag] ?? 'llama.cpp default') + (param.flag === '--experts-used' && model.moe?.experts ? ` (of ${model.moe.experts})` : '');
     let input;
     if (param.kind === 'toggle') {
       const wrap = node('label', `bp-param bp-toggle${value === 'on' ? ' bp-changed' : ''}`);
@@ -273,7 +273,7 @@
     form.append(card(skin, 'Flags', strata ? [flagsText, flagsError, flagsHelp] : [flagsText, flagsError, flagsHelp, fixedLine]));
     for (const group of [...new Set(params.map(p => p.group))]) {
       const grid = node('div', 'bp-grid');
-      for (const param of params.filter(p => p.group === group)) grid.append(field(param, model));
+      for (const param of params.filter(p => p.group === group && !(p.moe_only && !model.moe?.experts))) grid.append(field(param, model));
       form.append(card(skin, group, grid));
     }
     const status = node('p', 'bp-status');

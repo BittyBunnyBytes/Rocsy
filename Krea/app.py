@@ -38,6 +38,7 @@ from backend.bunnylock import BunnyLock, PendingStore
 from backend.models import (
     ANIMA_VERSIONS, ANIMA_LORA_SLOTS, MOSS_LORA_SLOTS, MOSS_FAST_CHECKPOINT, MOSS_FAST_MODES, DEFAULT_QWEN_LORA_ENABLED, DEFAULT_REFERENCE_STRENGTHS, LORA_INFO, MAX_SIZE, QWEN_LORA_SLOTS, MODEL_ANIMA, MODEL_MOSS, MODEL_LUSTIFY, MODEL_QWEN_IMAGE_21, QWEN_DEFAULT_CFG, QWEN_DEFAULT_STEPS,
     QWEN_MAX_PIXELS, QWEN_MAX_SIDE, QWEN_REFERENCE_SLOT_COUNT, MOSS_REFERENCE_SLOT_COUNT, REFERENCE_SLOT_COUNT, GenerationRequest,
+    MODEL_H3_IMAGE, H3_IMAGE_LORA_SLOTS, H3_IMAGE_MAX_PIXELS, H3_IMAGE_MAX_SIDE, H3_IMAGE_REFERENCE_SLOT_COUNT, H3_IMAGE_STEPS,
     PresetRenameRequest, PresetRequest, lora_family, lora_slots_for,
 )
 from backend.qwen import enhancer_text_from_history
@@ -86,6 +87,9 @@ def _workflow_model_seeds() -> dict[str, dict[str, Any]]:
         MODEL_MOSS: {"label": "MOSS-Image", "slots": [
             Slot("MOSSImageCLIPLoader", "clip_name", settings.moss_clip_name, "MOSS text encoder"),
             Slot("VAELoader", "vae_name", settings.moss_vae_name, "MOSS VAE")]},
+        MODEL_H3_IMAGE: {"label": "MiniMax H3 Image", "slots": [
+            Slot("CLIPLoader", "clip_name", settings.h3_image_clip_name, "Qwen3-VL text encoder (shared with H3 video)"),
+            Slot("VAELoader", "vae_name", settings.h3_image_vae_name, "H3 Image VAE")]},
     }
 
 
@@ -100,7 +104,8 @@ pending_submissions = PendingStore(settings.data_dir / "pending-submissions")
 
 PREFIX = settings.mount_prefix  # e.g. "" standalone, "/Image" behind the BunnyBytes gateway
 
-MODEL_LABELS = {"krea2": "Krea 2", MODEL_LUSTIFY: "Lustify (Krea 2)", MODEL_QWEN_IMAGE_21: "Qwen Image 2.1", MODEL_ANIMA: "Anima", MODEL_MOSS: "MOSS-Image"}
+MODEL_LABELS = {"krea2": "Krea 2", MODEL_LUSTIFY: "Lustify (Krea 2)", MODEL_QWEN_IMAGE_21: "Qwen Image 2.1", MODEL_ANIMA: "Anima", MODEL_MOSS: "MOSS-Image",
+                MODEL_H3_IMAGE: "MiniMax H3 Image"}
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 ALLOWED_UPLOAD_TYPES = {"image/png", "image/jpeg", "image/webp"}
@@ -664,18 +669,21 @@ async def index(request: Request):
         {
             "app_version": ASSET_VERSION,
             "app_prefix": PREFIX,
-            "lora_slots": {family: lora_slots_for(family) for family in ("krea", "qwen", "moss", "anima")},
+            "lora_slots": {family: lora_slots_for(family) for family in ("krea", "qwen", "moss", "anima", "h3image")},
             "lora_defaults": {"krea": [*DEFAULT_LORA_ENABLED, *([False] * (len(LORA_SLOTS) - len(DEFAULT_LORA_ENABLED)))],
                               "qwen": [*DEFAULT_QWEN_LORA_ENABLED, *([False] * (len(QWEN_LORA_SLOTS) - len(DEFAULT_QWEN_LORA_ENABLED)))],
-                              "moss": [False] * len(MOSS_LORA_SLOTS), "anima": [False] * len(ANIMA_LORA_SLOTS)},
+                              "moss": [False] * len(MOSS_LORA_SLOTS), "anima": [False] * len(ANIMA_LORA_SLOTS),
+                              "h3image": [False] * len(H3_IMAGE_LORA_SLOTS)},
             "lora_info": {family: [LORA_INFO.get(name, {}) for name in lora_slots_for(family)]
-                          for family in ("krea", "qwen", "moss", "anima")},
+                          for family in ("krea", "qwen", "moss", "anima", "h3image")},
             "reference_slot_count": REFERENCE_SLOT_COUNT,
             "reference_defaults": DEFAULT_REFERENCE_STRENGTHS,
             "model_config": {
                 "krea2": {"label": "Krea 2", "max_side": MAX_SIZE, "reference_slots": REFERENCE_SLOT_COUNT},
                 MODEL_ANIMA: {"label": "Anima", "max_side": MAX_SIZE, "reference_slots": 0, "versions": {key: label for key, (_, label) in ANIMA_VERSIONS.items()}},
                 MODEL_MOSS: {"label": "MOSS-Image", "max_side": MAX_SIZE, "reference_slots": MOSS_REFERENCE_SLOT_COUNT, "steps": 50, "cfg": 3.0},
+                MODEL_H3_IMAGE: {"label": "MiniMax H3 Image", "max_side": H3_IMAGE_MAX_SIDE, "max_pixels": H3_IMAGE_MAX_PIXELS,
+                                 "reference_slots": H3_IMAGE_REFERENCE_SLOT_COUNT, "steps": H3_IMAGE_STEPS, "cfg": 1.0},
                 MODEL_QWEN_IMAGE_21: {
                     "label": "Qwen Image 2.1", "max_side": QWEN_MAX_SIDE, "max_pixels": QWEN_MAX_PIXELS,
                     "reference_slots": QWEN_REFERENCE_SLOT_COUNT, "steps": QWEN_DEFAULT_STEPS, "cfg": QWEN_DEFAULT_CFG,
@@ -694,7 +702,8 @@ async def list_checkpoints() -> dict[str, list[str]]:
 
 
 # Rocsy Models base-model names -> checkpoint family.
-CHECKPOINT_BASES = {"qwen 2.1": "qwen_image_21", "krea 2": "krea2", "moss image": MODEL_MOSS}
+CHECKPOINT_BASES = {"qwen 2.1": "qwen_image_21", "krea 2": "krea2", "moss image": MODEL_MOSS,
+                    "minimax h3 image": MODEL_H3_IMAGE, "h3 image": MODEL_H3_IMAGE}
 
 
 @app.post(p("/api/internal/trainer/lora"))
@@ -769,7 +778,7 @@ async def shared_lora_gallery() -> dict[str, Any]:
             data = response.json()
     except (httpx.HTTPError, ValueError):
         data = json.loads((BASE_DIR / "static" / "lora-gallery" / "index.json").read_text())
-    for overlay in (custom_loras.gallery_index(), *(lora_catalog.index(family) for family in ("krea", "qwen", "moss", "anima"))):
+    for overlay in (custom_loras.gallery_index(), *(lora_catalog.index(family) for family in ("krea", "qwen", "moss", "anima", "h3image"))):
         for filename, info in overlay.items():
             data[filename] = {**data.get(filename, {}), **info}
     return data
@@ -807,8 +816,8 @@ async def edit_lora_catalog_item(model: str, request: Request) -> dict[str, Any]
 
 @app.post(p("/api/lora-gallery/upload"))
 async def upload_custom_lora(model: str = Form(...), name: str = Form(...), file: UploadFile = File(...)) -> dict[str, Any]:
-    if model not in {"krea", "qwen", "moss", "anima"} or not (file.filename or "").lower().endswith(".safetensors"):
-        raise APIError(422, "invalid_lora", "Choose a Krea 2, Qwen-Image 2.1, MOSS-Image, or Anima .safetensors LoRA file")
+    if model not in {"krea", "qwen", "moss", "anima", "h3image"} or not (file.filename or "").lower().endswith(".safetensors"):
+        raise APIError(422, "invalid_lora", "Choose a Krea 2, Qwen-Image 2.1, MOSS-Image, Anima, or MiniMax H3 Image .safetensors LoRA file")
     temporary = settings.data_dir / f"lora-upload-{uuid.uuid4().hex}.part"
     size = 0
     try:
@@ -859,8 +868,8 @@ async def finish_custom_lora_upload(request: Request) -> dict[str, Any]:
     upload_id, total = str(data.get("upload_id", "")), data.get("total")
     if not re.fullmatch(r"[0-9a-f]{32}", upload_id) or not isinstance(total, int) or not 1 <= total <= 768:
         raise APIError(422, "invalid_upload", "Invalid LoRA upload")
-    if data.get("model") not in {"krea", "qwen", "moss", "anima"} or not str(data.get("name", "")).strip():
-        raise APIError(422, "invalid_lora", "Choose a Krea 2, Qwen-Image 2.1, MOSS-Image, or Anima LoRA name")
+    if data.get("model") not in {"krea", "qwen", "moss", "anima", "h3image"} or not str(data.get("name", "")).strip():
+        raise APIError(422, "invalid_lora", "Choose a Krea 2, Qwen-Image 2.1, MOSS-Image, Anima, or MiniMax H3 Image LoRA name")
     folder = settings.data_dir / "custom-lora-chunks" / upload_id
     lock = _lora_chunk_locks.setdefault(upload_id, asyncio.Lock())
     async with lock:
@@ -988,8 +997,8 @@ async def register_downloaded_lora(request: Request) -> dict[str, Any]:
 async def inspect_lora_link(request: Request) -> dict[str, Any]:
     body = await request.json()
     model, url, token = (str(body.get(key, "")).strip() for key in ("model", "url", "token"))
-    if model not in {"krea", "qwen", "moss", "anima"}:
-        raise APIError(422, "invalid_model", "Choose Krea 2, Qwen-Image 2.1, MOSS-Image, or Anima")
+    if model not in {"krea", "qwen", "moss", "anima", "h3image"}:
+        raise APIError(422, "invalid_model", "Choose Krea 2, Qwen-Image 2.1, MOSS-Image, Anima, or MiniMax H3 Image")
     try:
         result = await lora_links.inspect(url, model, token)
     except (ValueError, ServiceError, httpx.HTTPError) as exc:
@@ -1680,7 +1689,7 @@ async def agentic_lora_options(model: str) -> dict[str, Any]:
     """Installed LoRAs for Hermes' "Look for relevant LoRAs", built here like H3's LoRA gallery note:
     one compact row per slot (180-char description, up to 4 plain triggers, gallery strength).
     The framework fetches this at session start; the page no longer sends the list."""
-    if model not in ("krea", "qwen", "moss", "anima"):
+    if model not in ("krea", "qwen", "moss", "anima", "h3image"):
         raise APIError(422, "invalid_model", "model must be krea, qwen, moss, or anima")
     try:
         gallery = json.loads((BASE_DIR / "static" / "lora-gallery" / "index.json").read_text())

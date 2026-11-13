@@ -5355,8 +5355,80 @@ async def _wait_agentic_render(job: dict[str, Any], clip_id: int, render_id: str
         if not item or item["state"] in {"failed", "cancelled"}:
             raise ServiceError(f"{what} {clip_id} {item['state'] if item else 'disappeared'}: {(item or {}).get('error') or 'no error message was recorded'}")
         if item["state"] == "complete":
-            _enhancement_log(job, "ok", f"{what} {clip_id} finished: {render_id[:8]}")
+            timing = _render_timing(render_id)
+            took = ""
+            if timing:
+                took = f" in {_span(timing['total'])}"
+                if timing["total"] - timing["render"] >= 5:
+                    took += f" ({_span(timing['render'])} rendering + {_span(timing['total'] - timing['render'])} waiting for the GPU)"
+            _enhancement_log(job, "ok", f"{what} {clip_id} finished: {render_id[:8]}{took}")
             return
+
+
+def _span(seconds: float | None) -> str:
+    """4m 12s / 1h 03m / 38s."""
+    total = int(round(seconds or 0))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}h {minutes:02d}m" if hours else f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
+
+
+def _render_timing(render_id: str) -> dict[str, Any] | None:
+    """How long a finished (or failed) render took: total = queued to done, render = started to done."""
+    item = store.job(render_id)
+    if not item or not item.get("completed_at"):
+        return None
+    try:
+        done = datetime.fromisoformat(item["completed_at"]).timestamp()
+        created = datetime.fromisoformat(item["created_at"]).timestamp()
+        started = datetime.fromisoformat(item["started_at"]).timestamp() if item.get("started_at") else created
+    except (TypeError, ValueError, KeyError):
+        return None
+    total = max(0.0, done - created)
+    return {"total": total, "render": max(0.0, min(total, done - started)), "state": item.get("state")}
+
+
+def _agentic_timing_report(job: dict[str, Any]) -> str:
+    """Log every render this run made with its time, plus totals (once per run). Returns a short total for pushes."""
+    if job.get("timing_reported"):
+        return ""
+    session = agentic_sessions.get(job.get("session_id") or "")
+    if not session or not session.get("runs"):
+        return ""
+    run = next((item for item in reversed(session["runs"]) if item.get("job_id") == job.get("session_run_id")), session["runs"][-1])
+    meta = session.get("generation_meta") or {}
+    lines, total, count = [], 0.0, 0
+    for render_id in run.get("generation_ids") or []:
+        timing = _render_timing(render_id)
+        if not timing:
+            continue
+        info = meta.get(render_id) or {}
+        phase = str(info.get("phase") or "render")
+        if phase in {"staging", "full", "preview"}:
+            label = f"{phase.title()} clip {info.get('clip')}"
+        else:
+            label = f"{AGENTIC_FINISH_LABELS.get(phase, phase.title())} step {info.get('clip')}"
+        if int(info.get("attempt") or 1) > 1:
+            label += f" (try {info['attempt']})"
+        state = "" if timing["state"] == "complete" else f" [{timing['state']}]"
+        wait = timing["total"] - timing["render"]
+        lines.append(f"• {label}: {_span(timing['total'])}" + (f" ({_span(timing['render'])} rendering)" if wait >= 5 else "")
+                     + state + f"  {render_id[:8]}")
+        total += timing["total"]
+        count += 1
+    job["timing_reported"] = True
+    if not count:
+        return ""
+    created = job.get("created_at")
+    wall = f"; whole run {_span(time.time() - created)} start to finish" if isinstance(created, (int, float)) else ""
+    session_total = sum((t or {}).get("total", 0) for t in map(_render_timing, session.get("generation_ids") or []))
+    head = f"Generation times: {count} render(s), {_span(total)} in total{wall}"
+    if len(session.get("runs") or []) > 1 and session_total > total + 1:
+        head += f"; {_span(session_total)} across the whole session"
+    if len(lines) > 60:
+        lines = lines[:30] + [f"… {len(lines) - 60} more …"] + lines[-30:]
+    _enhancement_log(job, "ok", head + "\n" + "\n".join(lines))
+    return f"{_span(total)} of generation across {count} render(s)"
 
 
 AGENTIC_VIDEO_MODELS = {"minimax_h3", "wan_2_2"}
@@ -6076,7 +6148,7 @@ async def _agentic_render_clip(job: dict[str, Any], run: dict[str, Any], session
             _save_agentic_sessions()
             await publish_jobs()
             _enhancement_log(job, "tool", f"{phase.title()} clip {clip['id']}, attempt {attempt}: queued {render_id[:8]}")
-            await _wait_agentic_render(job, clip["id"], render_id)
+            await _wait_agentic_render(job, clip["id"], render_id, f"{phase.title()} clip")
             await _agentic_check_not_black(render_id, request)
             if phase == "full":
                 session.setdefault("final_generation_ids", []).append(render_id)
@@ -7921,8 +7993,9 @@ async def _queue_agentic(job: dict[str, Any], request: AgenticRequest) -> None:
         if tools:
             await _agentic_finish(job, request, clips, tools)
         job["state"] = "complete"
+        timing = _agentic_timing_report(job)
         notify_agentic(session, "final", f"{len(clips)} full clip(s) done" + "".join(
-            f" + {AGENTIC_FINISH_LABELS[tool]}" for tool in tools))
+            f" + {AGENTIC_FINISH_LABELS[tool]}" for tool in tools) + (f" · {timing}" if timing else ""))
         _agentic_maybe_continue(job, session)
     except asyncio.CancelledError:
         if job.pop("preserve_approval_on_shutdown", False):
@@ -7939,6 +8012,9 @@ async def _queue_agentic(job: dict[str, Any], request: AgenticRequest) -> None:
             if failed_session := agentic_sessions.get(job["session_id"]):
                 notify_agentic(failed_session, "failed", job["error"][:160])
     finally:
+        if job.get("state") in {"complete", "failed", "cancelled"}:   # not on a pause: the resumed run reports at its end
+            with contextlib.suppress(Exception):
+                _agentic_timing_report(job)
         await _hermes_hold_end(job)
         session = agentic_sessions.get(job["session_id"])
         if session:
@@ -8390,7 +8466,8 @@ async def _agentic_rewrite(job: dict[str, Any], request: AgenticRequest, clips: 
         job["state"] = "complete"
         _agentic_verify_run(session, run, clips)
         _enhancement_log(job, "ok", f"Rewrite finished {len(selected)} clip(s)")
-        notify_agentic(session, "final", f"Rewrite finished {len(selected)} clip(s)")
+        timing = _agentic_timing_report(job)
+        notify_agentic(session, "final", f"Rewrite finished {len(selected)} clip(s)" + (f" · {timing}" if timing else ""))
     except asyncio.CancelledError:
         await _agentic_stopped(job, "Rewrite")
     except Exception as exc:
@@ -8402,6 +8479,9 @@ async def _agentic_rewrite(job: dict[str, Any], request: AgenticRequest, clips: 
             if failed_session := agentic_sessions.get(job["session_id"]):
                 notify_agentic(failed_session, "failed", job["error"][:160])
     finally:
+        if job.get("state") in {"complete", "failed", "cancelled"}:   # not on a pause: the resumed run reports at its end
+            with contextlib.suppress(Exception):
+                _agentic_timing_report(job)
         await _hermes_hold_end(job)
         session = agentic_sessions.get(job["session_id"])
         if session:
@@ -8617,7 +8697,8 @@ async def _agentic_edit(job: dict[str, Any], request: AgenticRequest, clips: lis
         job["state"] = "complete"
         _agentic_verify_run(session, run, clips)
         _enhancement_log(job, "ok", f"Edit finished: re-rendered clip(s) {', '.join(map(str, selected))}")
-        notify_agentic(session, "final", f"Edit finished {len(selected)} clip(s)")
+        timing = _agentic_timing_report(job)
+        notify_agentic(session, "final", f"Edit finished {len(selected)} clip(s)" + (f" · {timing}" if timing else ""))
         if session.get("long_haul") and ledger.verified_count(session) < ledger.outline_total(session):
             session["long_haul"].pop("stopped", None)
             job["continue_long_haul"] = True     # back to the unfinished long video
@@ -8632,6 +8713,9 @@ async def _agentic_edit(job: dict[str, Any], request: AgenticRequest, clips: lis
             if failed_session := agentic_sessions.get(job["session_id"]):
                 notify_agentic(failed_session, "failed", job["error"][:160])
     finally:
+        if job.get("state") in {"complete", "failed", "cancelled"}:   # not on a pause: the resumed run reports at its end
+            with contextlib.suppress(Exception):
+                _agentic_timing_report(job)
         await _hermes_hold_end(job)
         session = agentic_sessions.get(job["session_id"])
         if session:

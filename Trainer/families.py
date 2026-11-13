@@ -154,7 +154,14 @@ def _distilled(name: str) -> str:
 
 # --- detectors (header -> variant/verdict) ---
 
+def _is_h3_image(h: Header) -> bool:
+    """MiniMax H3 Image (2026-11): the H3 DiT without the audio branch (every H3 video file has audio_patch_proj)."""
+    return h.has("video_patch_proj.") and h.has("token_refiner.") and not h.has("audio_patch_proj.")
+
+
 def _detect_h3(h: Header, name: str):
+    if _is_h3_image(h):
+        return None   # _detect_h3_image: a different model, not trainable here yet
     if not (h.has("audio_patch_proj.") and h.has("video_patch_proj.") or h.has("token_refiner.") and h.has("adaln_t_table")):
         return None
     official = "minimax_h3_fl2va_pruned_int8_convrot_official" in name
@@ -293,6 +300,15 @@ def _detect_ltx(h: Header, name: str):
 
 
 # Recognised, but nothing here can train them.
+def _detect_h3_image(h: Header, name: str):
+    if not _is_h3_image(h):
+        return None
+    return ("MiniMax H3 Image", UNSUPPORTED,
+            "MiniMax H3 Image (released 2026-11-10): no trainer supports it yet (Fizgig, AI Toolkit, musubi-tuner and "
+            "diffusion-pipe train the H3 video model only; Fizgig's author has published an H3 Image training adapter, so "
+            "update Fizgig when its release adds the model). It renders in Image; H3 Image LoRAs from Models load there")
+
+
 def _detect_other(h: Header, name: str):
     if h.has("vid_out_ada") or "seedvr" in name.lower():
         return ("SeedVR2 upscaler", UNSUPPORTED, "video upscaler: there is no LoRA trainer for it")
@@ -555,7 +571,7 @@ FAMILIES: list[Family] = [
 ]
 
 # Families detected only so the Trainer can say "recognised, but not trainable here".
-_OTHER_DETECTORS = [_detect_other]
+_OTHER_DETECTORS = [_detect_h3_image, _detect_other]
 
 _BY_ID = {f.id: f for f in FAMILIES}
 

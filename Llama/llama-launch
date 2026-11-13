@@ -235,6 +235,23 @@ if [ -n "$model_id" ] && [ -r "$args_file" ]; then
           *) lora_scale=$value ;;
         esac
         continue ;;
+      --override-kv)
+        # Only the MoE expert count (Parameters -> "MoE experts per token"); any other key is refused.
+        case "$line" in
+          '--override-kv '*.expert_used_count=int:*)
+            kv=${line#--override-kv }
+            case "$kv" in
+              *[!a-z0-9_.=:]*|.*) echo "Ignoring invalid --override-kv in $args_file" >&2 ;;
+              *) count=${kv##*=int:}
+                 case "$count" in
+                   ''|*[!0-9]*) echo "Ignoring invalid --override-kv in $args_file" >&2 ;;
+                   *) set -- "$@" --override-kv "$kv"
+                      echo "MoE experts per token: $count (--override-kv $kv) from $args_file" >&2 ;;
+                 esac ;;
+            esac ;;
+          *) echo "Ignoring unsupported --override-kv in $args_file (only <arch>.expert_used_count)" >&2 ;;
+        esac
+        continue ;;
       --flash-attn)
         case "$line" in
           '--flash-attn on'|'--flash-attn off'|'--flash-attn auto')

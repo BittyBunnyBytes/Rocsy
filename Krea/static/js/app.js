@@ -14,6 +14,9 @@ const MODEL_CONFIG = JSON.parse(document.body.dataset.modelConfig || "{}");
 const QWEN = "qwen_image_21";
 const ANIMA = "anima";
 const MOSS = "moss";
+const H3 = "h3_image";
+// Prompt tag for reference N: Qwen <imageN>, MiniMax H3 Image <Picture N> (null = no tag).
+const refTag = (model, index) => model === QWEN ? `<image${index + 1}>` : model === H3 ? `<Picture ${index + 1}>` : null;
 const MAX_REFERENCE_SLOTS = Math.max(REFERENCE_SLOT_COUNT, ...Object.values(MODEL_CONFIG).map((config) => config.reference_slots || 0));
 const MODEL_STORAGE_KEY = "krea.model";
 
@@ -95,7 +98,7 @@ const ACTIVE_STATES = new Set(["waiting_for_gpu", "preparing", "queued", "enhanc
 
 let LORA_INFO = LORA_SETS.info.krea || [];
 let loraSet = "krea";
-const loraSetFor = (model) => model === QWEN ? "qwen" : model === MOSS ? "moss" : model === ANIMA ? "anima" : "krea";
+const loraSetFor = (model) => model === QWEN ? "qwen" : model === MOSS ? "moss" : model === ANIMA ? "anima" : model === H3 ? "h3image" : "krea";
 const loraStateBySet = {}; // each family's switches/strengths, kept while the other is shown
 
 // Swap the LoRA list to `model`'s family, keeping what was set on the list being left.
@@ -299,15 +302,16 @@ function saveReferences() {
 // (strength, Replace) and the on/off switch. Only attached slots are listed,
 // in slot order; removing one moves the later ones up, like H3.
 function referenceItem(ref, index) {
-  const token = isQwen() ? `<image${index + 1}>` : state.model === MOSS ? "Img2img source" : `Reference ${index + 1}`;
+  const tag = refTag(state.model, index);
+  const token = tag || (state.model === MOSS ? "Img2img source" : `Reference ${index + 1}`);
   const meta = ref.uploading ? "Uploading…" : ref.width && ref.height ? `${ref.width}×${ref.height}` : "Uploaded";
   const extras = `<span class="reference-tools">
-      ${isQwen() || state.model === MOSS ? "" : `<label class="reference-strength-field" title="Krea 2 style-reference LoRA weight — the strongest enabled reference sets it for all references">Strength <input type="number" class="reference-strength" min="0" max="2" step="0.05" value="${ref.strength}" aria-label="Reference ${index + 1} strength"></label>`}
+      ${isQwen() || state.model === MOSS || state.model === H3 ? "" : `<label class="reference-strength-field" title="Krea 2 style-reference LoRA weight — the strongest enabled reference sets it for all references">Strength <input type="number" class="reference-strength" min="0" max="2" step="0.05" value="${ref.strength}" aria-label="Reference ${index + 1} strength"></label>`}
       <button type="button" class="button-link" data-ref-pick="${index}">Replace</button>
     </span>`;
   return {
     key: String(index), thumb: ref.localUrl || (ref.image ? referencePreviewUrl(ref.image) : ""), token,
-    insertToken: isQwen() ? token : null, meta, metaTitle: ref.image || "", extras, busy: ref.uploading, off: !ref.enabled,
+    insertToken: tag, meta, metaTitle: ref.image || "", extras, busy: ref.uploading, off: !ref.enabled,
     after: `<label class="switch" title="Use this reference"><input type="checkbox" class="reference-enabled" ${ref.enabled ? "checked" : ""} aria-label="Use Reference ${index + 1}"><span></span></label>`,
     removeLabel: `Remove Reference ${index + 1}`,
   };
@@ -719,6 +723,7 @@ function renderCheckpointOptions() {
   select.innerHTML = options.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(label(name))}</option>`).join("");
   const preferred = state.model === QWEN ? "qwen_image_2.1_int8_convrot.safetensors"
     : state.model === MOSS ? ($("#speed").value === "standard" ? "moss_image_sft_int8_convrot.safetensors" : "moss_image_sft_bf16.safetensors")
+    : state.model === H3 ? "minimax_h3_image_pruned_w4a8.safetensors"
     : "krea2_turbo_int8_convrot.safetensors";
   select.value = [previous, saved, preferred, options[0]].find((name) => options.includes(name)) || "";
   select.disabled = !options.length;
@@ -742,11 +747,12 @@ function applyModel(model) {
   document.querySelectorAll(".qwen-only").forEach((node) => { node.hidden = !isQwen(); });
   document.querySelectorAll(".anima-only").forEach((node) => { node.hidden = state.model !== ANIMA; });
   document.querySelectorAll(".moss-only").forEach((node) => { node.hidden = state.model !== MOSS; });
+  document.querySelectorAll(".h3-only").forEach((node) => { node.hidden = state.model !== H3; });
   $("#lora-panel").hidden = false;
   $("#reference-panel").hidden = state.model === ANIMA;
-  // Qwen: reference resolution + aspect follow; MOSS: img2img denoise + aspect follow.
-  $("#reference-options").hidden = !isQwen() && state.model !== MOSS;
-  $("#enhance-row").hidden = state.model === MOSS;
+  // Qwen: reference resolution + aspect follow; MOSS: img2img denoise + aspect follow; H3: aspect follow.
+  $("#reference-options").hidden = !isQwen() && state.model !== MOSS && state.model !== H3;
+  $("#enhance-row").hidden = state.model === MOSS || state.model === H3;
   if (state.model === ANIMA) {
     const versions = MODEL_CONFIG[ANIMA].versions || {};
     const selected = $("#anima-version").value || "aesthetic";
@@ -758,7 +764,7 @@ function applyModel(model) {
   useLoraSet(state.model); // Qwen has its own LoRA list
   $("#sampling-model-label").textContent = MODEL_CONFIG[state.model]?.label || "";
   renderSpeedups();
-  $(".brand-mark").textContent = isQwen() ? "Qw" : state.model === ANIMA ? "An" : state.model === MOSS ? "Ms" : "Kr2";
+  $(".brand-mark").textContent = isQwen() ? "Qw" : state.model === ANIMA ? "An" : state.model === MOSS ? "Ms" : state.model === H3 ? "H3" : "Kr2";
   renderCheckpointOptions();
   const maxSide = MODEL_CONFIG[state.model]?.max_side ?? 1536;
   for (const id of ["#width", "#height"]) {
@@ -786,6 +792,15 @@ const SIZE_PRESETS = {
   lustify: KREA_SIZE_PRESETS,
   [ANIMA]: KREA_SIZE_PRESETS,
   [MOSS]: KREA_SIZE_PRESETS,
+  // MiniMax H3 Image is tuned for ~4 MP (2048×2048, its default); native sizes go up to ~16.9 MP.
+  [H3]: [
+    ["1024x1024", "1:1 · 1024×1024 (1 MP, quick look)"], ["2048x2048", "1:1 · 2048×2048 (4 MP, default)"],
+    ["2368x1760", "4:3 · 2368×1760"], ["1760x2368", "3:4 · 1760×2368"],
+    ["2496x1664", "3:2 · 2496×1664"], ["1664x2496", "2:3 · 1664×2496"],
+    ["2720x1536", "16:9 · 2720×1536"], ["1536x2720", "9:16 · 1536×2720"],
+    ["3136x1344", "21:9 · 3136×1344"],
+    ["4096x4096", "1:1 · 4096×4096 (native 16 MP, slow)"], ["5472x3072", "16:9 · 5472×3072 (native 16 MP, slow)"],
+  ],
   [QWEN]: [
     ["1024x1024", "1:1 · 1024×1024 (1 MP)"], ["1536x1536", "1:1 · 1536×1536"], ["2048x2048", "1:1 · 2048×2048 (native 2K)"],
     // Exact ratios that stay within QWEN_MAX_PIXELS (2752×1536 = 4.23 MP); the
@@ -823,7 +838,7 @@ function syncSizePreset() {
 function updateSizeNote() {
   const note = $("#size-note");
   if (!note) return;
-  const followsReference = (isQwen() || state.model === MOSS) && $("#use-references").checked && $("#match-reference-size").checked
+  const followsReference = (isQwen() || state.model === MOSS || state.model === H3) && $("#use-references").checked && $("#match-reference-size").checked
     && state.references.slice(0, referenceSlotCount()).some((ref) => ref.image && ref.enabled);
   note.hidden = !followsReference;
 }
@@ -841,6 +856,7 @@ const SPEED_OPTIONS = {
   lustify: KREA_SPEEDS,
   [ANIMA]: [["standard", "Version default"]],
   [MOSS]: [["standard", "Standard · 50 steps"], ["dmd8", "DMD · 8 steps"], ["dmad4", "DMAD · 4 steps"]],
+  [H3]: [["standard", "Distilled · 6 steps"]],
   [QWEN]: [["standard", "Standard"], ["viggle", "Viggle · 6 steps"]],
 };
 const SPEED_STEPS = { standard: 8, turbo4: 4, turbo2: 2 };
@@ -886,11 +902,14 @@ function updateSpeedFields() {
     if (mossFast && [...checkpoint.options].some((option) => option.value === "moss_image_sft_bf16.safetensors")) checkpoint.value = "moss_image_sft_bf16.safetensors";
     checkpoint.disabled = mossFast || !checkpoint.options.length;
   }
-  $("#speed-description").textContent = isQwen() && speed === "standard"
+  $("#speed-description").textContent = state.model === H3
+    ? "The model is distilled: always 6 steps at CFG 1, no negative prompt."
+    : isQwen() && speed === "standard"
     ? "Adjust steps and guidance below for more control."
     : SPEED_DESCRIPTIONS[speed] || "";
-  document.querySelectorAll(".krea-only").forEach((node) => { node.hidden = isQwen() || state.model === ANIMA || state.model === MOSS; });
-  document.querySelectorAll(".turbo-only").forEach((node) => { node.hidden = isQwen() || state.model === ANIMA || state.model === MOSS || speed === "standard"; });
+  const notKrea = isQwen() || state.model === ANIMA || state.model === MOSS || state.model === H3;
+  document.querySelectorAll(".krea-only").forEach((node) => { node.hidden = notKrea; });
+  document.querySelectorAll(".turbo-only").forEach((node) => { node.hidden = notKrea || speed === "standard"; });
   $("#turbo-hint").textContent = TURBO_HINTS[speed] || "";
   // Krea Steps: empty follows the speed (8 / 4 / 2).
   $("#krea-steps").placeholder = `auto (${SPEED_STEPS[speed] || 8})`;
@@ -905,7 +924,11 @@ function updateSpeedFields() {
 }
 
 function updateReferenceHint() {
-  $("#reference-hint").hidden = !(isQwen() && $("#use-references").checked);
+  const hint = $("#reference-hint");
+  hint.hidden = !((isQwen() || state.model === H3) && $("#use-references").checked);
+  hint.textContent = state.model === H3
+    ? "With references on, refer to them as <Picture 1>, <Picture 2>… in slot order. Picture 1 is the image being edited."
+    : "With references on, refer to them as <image1>, <image2>… in slot order.";
 }
 
 /* ---------------------------------------------------- speedup & saves -- */
@@ -1009,6 +1032,9 @@ function collectSettings() {
     settings.moss_denoise = Number($("#moss-denoise").value) || 0.6;
     settings.match_reference_size = $("#match-reference-size").checked;
     settings.enhance = false;
+  } else if (state.model === H3) {
+    settings.match_reference_size = $("#match-reference-size").checked;
+    settings.enhance = false;
   } else {
     settings.turbo_strength = Number($("#turbo-strength").value) || 1;
     const steps = Number($("#krea-steps").value);
@@ -1090,9 +1116,9 @@ function buildPayload() {
   if (payload.use_references && payload.references.some((ref) => ref.enabled && !ref.image)) {
     throw new Error("An enabled reference slot needs an uploaded image.");
   }
-  const maxPixels = MODEL_CONFIG[QWEN]?.max_pixels;
-  if (isQwen() && maxPixels && payload.width * payload.height > maxPixels) {
-    throw new Error(`Qwen Image 2.1 supports up to ${(maxPixels / 1e6).toFixed(1)} MP (e.g. 2048×2048 or 2752×1536).`);
+  const maxPixels = MODEL_CONFIG[state.model]?.max_pixels;
+  if ((isQwen() || state.model === H3) && maxPixels && payload.width * payload.height > maxPixels) {
+    throw new Error(`${MODEL_CONFIG[state.model].label} supports up to ${(maxPixels / 1e6).toFixed(1)} MP (e.g. ${isQwen() ? "2048×2048 or 2752×1536" : "4096×4096 or 5472×3072"}).`);
   }
   return payload;
 }
@@ -1439,6 +1465,7 @@ function jobCard(job) {
         ${multi ? `<span class="job-count">${(job.images || []).length}/${job.batch_count} images</span>` : ""}
         ${job.model === QWEN && isQwenTurboCheckpoint(job.request?.checkpoint) ? `<span>Turbo 8 steps</span>`
           : job.request?.speed === "viggle" ? `<span>Viggle 6 steps</span>`
+          : job.model === H3 ? `<span>6 steps</span>`
           : job.model === MOSS && job.request?.speed === "dmd8" ? `<span>DMD 8 steps</span>`
           : job.model === MOSS && job.request?.speed === "dmad4" ? `<span>DMAD 4 steps</span>`
           : job.request?.speed && job.request.speed !== "standard" && job.model !== QWEN ? `<span>Turbo ${job.request.krea_steps || SPEED_STEPS[job.request.speed]} steps</span>` : ""}
@@ -1579,7 +1606,7 @@ function openJobInfo(job) {
   const jobSet = loraSetFor(job.model);
   const loras = (request.loras || []).map((slot, index) => slot.enabled ? `${escapeHtml(LORA_SETS.info[jobSet]?.[index]?.label || (LORA_SETS.slots[jobSet]?.[index] || `LoRA ${index + 1}`).replace(/\.safetensors$/, ""))} <span class="field-hint">${slot.strength}</span>` : "").filter(Boolean);
   const refs = request.use_references ? (request.references || []).map((ref, index) => ref.enabled && ref.image
-    ? `<figure class="job-info-ref"><img src="${referencePreviewUrl(ref.image)}" alt="" loading="lazy"><figcaption>${job.model === MOSS ? `Img2img source · denoise ${request.moss_denoise ?? 0.6}` : `Reference ${index + 1}${job.model === QWEN ? "" : ` · ${ref.strength}`}`}</figcaption></figure>` : "").filter(Boolean) : [];
+    ? `<figure class="job-info-ref"><img src="${referencePreviewUrl(ref.image)}" alt="" loading="lazy"><figcaption>${job.model === MOSS ? `Img2img source · denoise ${request.moss_denoise ?? 0.6}` : `Reference ${index + 1}${job.model === QWEN || job.model === H3 ? "" : ` · ${ref.strength}`}`}</figcaption></figure>` : "").filter(Boolean) : [];
   const duration = job.started_at && job.completed_at ? formatSeconds((new Date(job.completed_at) - new Date(job.started_at)) / 1000) : "";
   let tab = "details";
   try { tab = localStorage.getItem(JOB_INFO_TAB_KEY) === "stats" ? "stats" : "details"; } catch { /* storage blocked */ }
@@ -1613,6 +1640,7 @@ function openJobInfo(job) {
           : request.speed === "viggle" ? "Viggle turbo LoRA, 6 steps"
           : job.model === MOSS ? (request.speed === "dmd8" ? "DMD, 8 steps" : request.speed === "dmad4" ? "DMAD, 4 steps" : `Standard, ${request.moss_steps ?? 50} steps`)
           : job.model === QWEN ? `Standard, ${request.steps ?? 25} steps`
+          : job.model === H3 ? "Distilled, 6 steps, CFG 1"
           : `${!request.speed || request.speed === "standard" ? "Standard" : `Turbo LoRA (strength ${request.turbo_strength ?? 1})`}, ${request.krea_steps || SPEED_STEPS[request.speed || "standard"]} steps`)}
         ${row("4× upscale", job.enhance ? "on" : "off")}
         ${job.model === QWEN ? row("Transparent", request.transparent ? "on" : "off") : ""}
@@ -1820,9 +1848,9 @@ function hotbarGroups() {
       title: `${loraLabel(index)} - ${trigger}`,
     }));
   });
-  const references = !isQwen() || !$("#use-references").checked ? [] : state.references.slice(0, referenceSlotCount())
+  const references = !refTag(state.model, 0) || !$("#use-references").checked ? [] : state.references.slice(0, referenceSlotCount())
     .map((ref, index) => (ref.image && ref.enabled ? {
-      label: `<image${index + 1}>`, text: `<image${index + 1}>`, kind: "ref",
+      label: refTag(state.model, index), text: refTag(state.model, index), kind: "ref",
       title: `Reference ${index + 1}${ref.width ? ` (${ref.width}×${ref.height})` : ""}`,
     } : null)).filter(Boolean);
   return [{ name: "LoRA triggers", items: triggers }, { name: "References", items: references }].filter((group) => group.items.length);
@@ -2020,7 +2048,7 @@ async function openLoraGallery() {
   } catch (error) { toast(error.message, "error"); return; }
   gallery.detail = null;
   gallery.editing = false;
-  $("#lora-gallery-model").textContent = {krea: "Krea 2", qwen: "Qwen-Image 2.1", moss: "MOSS-Image", anima: "Anima"}[galleryModel()];
+  $("#lora-gallery-model").textContent = {krea: "Krea 2", qwen: "Qwen-Image 2.1", moss: "MOSS-Image", anima: "Anima", h3image: "MiniMax H3 Image"}[galleryModel()];
   $("#lora-gallery-config").hidden = true;
   $("#lora-gallery-nsfw").checked = galleryShowsNsfw();
   const groups = gallery.catalog.categories || [];

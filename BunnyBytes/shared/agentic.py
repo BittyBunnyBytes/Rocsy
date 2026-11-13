@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from datetime import datetime
 import uuid
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
@@ -990,6 +991,11 @@ async def wait_job(row: dict[str, Any], job_id: str) -> dict:
         job = await studio_call(row["studio"], "GET", f"/api/jobs/{job_id}")
         state = job.get("state", "")
         if state in {"complete", "completed"}:
+            timing = render_timing(row, job_id, job)
+            took = f" in {span(timing['total'])}" if timing else ""
+            if timing and timing.get("render") is not None and timing["total"] - timing["render"] >= 5:
+                took += f" ({span(timing['render'])} rendering + {span(timing['total'] - timing['render'])} waiting for the GPU)"
+            log(row, "ok", f"Render {job_id[:8]} finished{took}")
             return job
         if state in {"failed", "cancelled", "canceled", "error"}:
             raise ValueError(str(job.get("error") or f"Render {state}")[:500])
@@ -1001,6 +1007,54 @@ async def wait_job(row: dict[str, Any], job_id: str) -> dict:
         save_soon()
         await asyncio.sleep(3)
     raise ValueError("Render timed out after two hours")
+
+
+def span(seconds: float | None) -> str:
+    """4m 12s / 1h 03m / 38s."""
+    total = int(round(seconds or 0))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}h {minutes:02d}m" if hours else f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
+
+
+def _stamp(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    try:
+        return datetime.fromisoformat(str(value)).timestamp() if value else None
+    except ValueError:
+        return None
+
+
+def render_timing(row: dict[str, Any], job_id: str, job: dict[str, Any]) -> dict[str, Any] | None:
+    """Store and return how long a studio render took. The studio's own timestamps when it has them (Image, Music),
+    else the wall clock from when Hermes submitted it (Voice)."""
+    times = row.setdefault("render_times", {})
+    entry = times.setdefault(job_id, {})
+    done = _stamp(job.get("completed_at")) or time.time()
+    created = _stamp(job.get("created_at")) or entry.get("submitted")
+    if not created:
+        return None
+    started = _stamp(job.get("started_at"))
+    entry.update(total=max(0.0, done - created), render=max(0.0, min(done - created, done - started)) if started else None,
+                 attempt=row.get("attempt"))
+    save_soon()
+    return entry
+
+
+def timing_report(row: dict[str, Any]) -> None:
+    """Every render this session made with its time, plus the total, in the session log."""
+    times = {k: v for k, v in (row.get("render_times") or {}).items() if v.get("total") is not None}
+    if not times or row.get("timing_reported") == len(times):
+        return
+    row["timing_reported"] = len(times)
+    lines = [f"• Render {job_id[:8]}" + (f" (attempt {v['attempt']})" if v.get("attempt") else "") + f": {span(v['total'])}"
+             + (f" ({span(v['render'])} rendering)" if v.get("render") is not None and v["total"] - v["render"] >= 5 else "")
+             for job_id, v in times.items()]
+    total = sum(v["total"] for v in times.values())
+    created = row.get("created") or row.get("created_at")
+    wall = f"; whole session {span(time.time() - created)} start to finish" if isinstance(created, (int, float)) else ""
+    log(row, "ok", f"Generation times: {len(times)} render(s), {span(total)} in total{wall}\n" + "\n".join(lines[-60:]))
 
 
 def output(row: dict, job: dict) -> list[str]:
@@ -1187,6 +1241,7 @@ async def run(row: dict) -> None:
                     if not re.fullmatch(r"[a-zA-Z0-9_-]{8,100}", job_id):
                         raise ValueError("Studio did not return a valid job ID")
                     row.setdefault("job_ids", []).append(job_id)
+                    row.setdefault("render_times", {})[job_id] = {"submitted": time.time()}
                     event(row, "rendering", "Waiting for the studio render", job_id=job_id)
                 try:
                     job = await wait_job(row, job_id)
@@ -1227,6 +1282,12 @@ async def run(row: dict) -> None:
         except (ValueError, httpx.HTTPError, KeyError, TypeError) as exc:
             event(row, "failed", "Agentic session failed", error=str(exc)[:600])
         finally:
+            if row.get("state") in {"complete", "awaiting_feedback", "failed", "cancelled"}:
+                try:
+                    timing_report(row)
+                    save()
+                except Exception:  # noqa: BLE001 - timings are a nicety; never break the session over them
+                    pass
             if TASKS.get(row["id"]) is asyncio.current_task():
                 TASKS.pop(row["id"], None)
 

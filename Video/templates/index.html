@@ -19,6 +19,8 @@
   <!-- Before the app scripts: it wraps fetch to catch "missing model files" answers. -->
   <script defer src="{{ mount_prefix }}/static/js/missing-files.js?v={{ app_version }}"></script>
   <script defer src="{{ mount_prefix }}/static/js/h3-studio.js?v={{ app_version }}"></script>
+  <!-- BunnyPlayer (the Trainer's player) before app.js: the job cards and session tiles use it. -->
+  <script defer src="{{ mount_prefix }}/static/js/player.js?v={{ app_version }}"></script>
   <script type="module" src="{{ mount_prefix }}/static/js/app.js?v={{ app_version }}"></script>
   <link rel="stylesheet" href="{{ mount_prefix }}/static/css/workflow-models.css?v={{ app_version }}">
   <script defer src="{{ mount_prefix }}/static/js/workflow-models.js?v={{ app_version }}"></script>

@@ -107,11 +107,13 @@
         </div>
         <div class="inst-overview">
           <div class="inst-storage" id="inst-storage" aria-label="Disk use by kind"></div>
+          <div class="inst-kinds inst-drives" id="inst-drives" role="radiogroup" aria-label="Show drive" hidden></div>
           <div class="inst-kinds" id="inst-kinds" role="radiogroup" aria-label="Show kind"></div>
           <div class="inst-toolbar">
             <input id="inst-q" type="search" placeholder="Filter by name, folder or studio…" aria-label="Filter installed models">
             <select id="inst-sort" aria-label="Sort installed models" title="Sort installed models">
               <option value="kind">Group by kind</option>
+              <option value="drive" id="inst-sort-drive" hidden>Group by drive</option>
               <option value="size-desc">Largest first</option>
               <option value="size-asc">Smallest first</option>
               <option value="name">Name A–Z</option>
@@ -499,6 +501,7 @@ docker compose up -d --no-deps --force-recreate gateway</pre></li>
             <div class="field"><label for="pd-container">Container</label><input id="pd-container" maxlength="63" placeholder="my-container (adds Start / Stop)"></div>
           </div>
           <label class="check"><input type="checkbox" id="pd-strip"> Remove the path before forwarding (the app doesn't serve under its own path)</label>
+          <label class="check"><input type="checkbox" id="pd-rootapp"> Root-only app: add the path to its own links, API calls and redirects (needs the option above)</label>
           <label class="check"><input type="checkbox" id="pd-gpu"> Uses the shared GPU queue</label>
         </fieldset>
         <fieldset><legend>Look</legend>
@@ -534,6 +537,8 @@ docker compose up -d --no-deps --force-recreate gateway</pre></li>
             <small class="hint">Any JSON with <code>version</code> (or <code>tag_name</code>), plus optional <code>url</code> and <code>notes</code>. A path is asked of the plugin itself.</small></div>
           <div class="field" id="pd-upd-current-field" hidden><label for="pd-upd-current">Version endpoint <small class="hint">optional</small></label><input id="pd-upd-current" placeholder="/Name/api/version">
             <small class="hint">A path on the plugin answering <code>{"version": "…"}</code>. When it answers, it beats the version typed above.</small></div>
+          <div class="field" id="pd-upd-key-field" hidden><label for="pd-upd-key">Version field <small class="hint">optional</small></label><input id="pd-upd-key" maxlength="40" placeholder="version">
+            <small class="hint">The field of that reply holding the version, when it isn't <code>version</code> (SillyTavern: <code>pkgVersion</code>).</small></div>
           <div class="pd-upd-check" id="pd-upd-check-row" hidden><button type="button" class="secondary-button" id="pd-upd-check">Check now</button><span class="hint" id="pd-upd-result"></span></div>
         </fieldset>
         <fieldset><legend>Home page</legend>

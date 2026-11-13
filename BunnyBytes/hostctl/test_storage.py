@@ -48,6 +48,11 @@ class Storage(unittest.TestCase):
         os.environ["CORE_COMFY_DIR"] = str(root / "ComfyUI")
         import storage
         self.s = importlib.reload(storage)
+        # Never touch the real docker-compose.override.yml or containers.
+        self.s.COMPOSE = root / "docker-compose.override.yml"
+        guard = patch.object(self.s, "write_compose", lambda state: None)
+        guard.start()
+        self.addCleanup(guard.stop)
         self.s._jobs.clear()
         self.s._queue.clear()
         self.s._apply.update(pending=[], checked=time.time())
@@ -144,6 +149,125 @@ class Storage(unittest.TestCase):
         vol = doc["services"]["krea"]["volumes"][0]
         self.assertEqual((vol["source"], vol["target"], vol["read_only"], vol["bind"]["propagation"]),
                          ("/run/media/u", "/run/media/u", True, "rslave"))
+
+    # ---- service outputs ----
+    def outputs_setup(self):
+        root = Path(self.temp.name)
+        renders = root / "ComfyUI/output"
+        (renders / "sub").mkdir(parents=True)
+        (renders / "a.mp4").write_bytes(os.urandom(2_000_000))
+        (renders / "sub/b.png").write_bytes(b"png" * 1000)
+        os.symlink("a.mp4", renders / "latest.mp4")
+        voice = root / "voice/data/outputs"
+        voice.mkdir(parents=True)
+        (voice / "c.wav").write_bytes(b"wav" * 100)
+        folders = [{"key": "comfyui", "label": "Renders", "path": renders, "note": "", "binds": ["video", "gateway"]},
+                   {"key": "voice", "label": "Voice", "path": voice, "note": "", "binds": []},
+                   {"key": "never", "label": "Never made", "path": root / "nope", "note": "", "binds": []}]
+        recreated = []
+        for name, value in (("output_folders", lambda: folders), ("write_compose", lambda state: None),
+                            ("pending_services", lambda state: []), ("_running", lambda c: False),
+                            ("_recreate", lambda services: recreated.append(services) or ""),
+                            ("busy_check", lambda kind: (False, ""))):
+            patcher = patch.object(self.s, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return renders, voice, recreated
+
+    def outputs_move(self, to):
+        self.s.start_outputs_move(to)
+        for _ in range(500):
+            if self.s._out_job["state"] in ("done", "failed", "cancelled"):
+                break
+            time.sleep(0.02)
+        time.sleep(0.1)     # the thread's finally (state save) runs after the state flips
+        return self.s._out_job
+
+    def test_outputs_round_trip(self):
+        renders, voice, recreated = self.outputs_setup()
+        before = (renders / "a.mp4").read_bytes()
+        job = self.outputs_move("shm")                                     # other filesystem: copy + verify
+        self.assertEqual(job["state"], "done", job["error"])
+        base = self.other / self.s.OUTPUT_DIR
+        self.assertTrue(renders.is_symlink())
+        self.assertEqual(Path(os.readlink(renders)), base / "comfyui")
+        self.assertEqual((renders / "a.mp4").read_bytes(), before)
+        self.assertEqual((renders / "sub/b.png").read_bytes(), b"png" * 1000)
+        self.assertEqual(os.readlink(renders / "latest.mp4"), "a.mp4")     # links inside stay links
+        self.assertEqual((voice / "c.wav").read_bytes(), b"wav" * 100)
+        self.assertEqual(recreated, [["gateway", "video"]])
+        self.assertFalse(list(renders.parent.glob(".output.rocsy-*")))      # old copy freed
+        self.assertFalse((Path(self.temp.name) / "nope").exists())
+        self.assertEqual(self.s.load()["outputs"], {"at": "shm", "to": ""})
+        with self.assertRaisesRegex(self.s.Refused, "Service outputs are stored there"):
+            self.s.remove_location("shm")
+        mounts = self.s.wanted_by_service(self.s.load())
+        for service in ("video", "trainer", "voice"):
+            self.assertTrue(any(w and self.s._inside(base, Path(m)) for m, w in mounts[service].items()))   # read-write
+        self.assertFalse(any(mounts["llama"].values()))                    # model readers stay read-only
+        job = self.outputs_move("drive")                                    # location -> location
+        self.assertEqual(job["state"], "done", job["error"])
+        self.assertTrue(str(os.readlink(renders)).startswith(str(self.loc.parent / self.s.OUTPUT_DIR)))
+        self.assertFalse(base.exists())                                     # left location tidied
+        job = self.outputs_move("comfy")                                    # and home again
+        self.assertEqual(job["state"], "done", job["error"])
+        self.assertFalse(renders.is_symlink())
+        self.assertEqual((renders / "a.mp4").read_bytes(), before)
+        self.assertEqual(self.s.load()["outputs"]["at"], "comfy")
+        with self.assertRaisesRegex(self.s.Refused, "already there"):
+            self.s.start_outputs_move("comfy")
+
+    def test_outputs_wait_for_idle_and_cancel(self):
+        renders, _voice, recreated = self.outputs_setup()
+        busy = patch.object(self.s, "busy_check", lambda kind: (kind == "comfy", "1 ComfyUI job(s) running or queued"))
+        busy.start()
+        self.addCleanup(busy.stop)
+        self.s.start_outputs_move("shm")
+        for _ in range(500):
+            if self.s._out_job["state"] == "waiting":
+                break
+            time.sleep(0.02)
+        self.assertIn("ComfyUI job", self.s._out_job["waiting"])
+        self.assertFalse(renders.is_symlink())                             # nothing switched while busy
+        self.s.cancel_outputs_move()
+        for _ in range(200):
+            if self.s._out_job["state"] == "cancelled":
+                break
+            time.sleep(0.05)
+        time.sleep(0.1)
+        self.assertEqual(self.s._out_job["state"], "cancelled")
+        self.assertFalse(renders.is_symlink())
+        self.assertFalse(list((self.other / self.s.OUTPUT_DIR).glob(".*rocsy-move")))   # staged copy removed
+        self.assertEqual(recreated, [])
+        self.assertEqual(self.s.load()["outputs"], {"at": "comfy", "to": ""})
+
+    def test_handles_and_downloads(self):
+        state = self.s.edit_location("drive", {"handles": ["loras", "outputs"], "downloads": ["loras"], "label": "Big"})
+        loc = next(l for l in state["locations"] if l["id"] == "drive")
+        self.assertEqual((loc["label"], loc["handles"]), ("Big", ["loras", "outputs"]))
+        self.assertEqual(self.s.load()["defaults"]["loras"], "drive")
+        self.write("llm/big/x.gguf")
+        with self.assertRaisesRegex(self.s.Refused, "isn't set to hold LLMs"):
+            self.s.start_move("llm/big/x.gguf", "drive")
+        with self.assertRaisesRegex(self.s.Refused, "isn't set to hold models"):
+            self.s.set_defaults({"models": "drive"})
+        with self.assertRaisesRegex(self.s.Refused, "Turn on"):
+            self.s.edit_location("drive", {"downloads": ["llm"]})
+        self.s.edit_location("drive", {"downloads": []})                      # downloads off -> back to ComfyUI
+        self.assertEqual(self.s.load()["defaults"]["loras"], "comfy")
+        self.s.edit_location("drive", {"downloads": ["loras"]})
+        self.write("loras/a.safetensors")
+        self.assertEqual(self.move("loras/a.safetensors", "drive")["state"], "done")
+        with self.assertRaisesRegex(self.s.Refused, "still live there"):
+            self.s.edit_location("drive", {"handles": ["outputs"]})
+        self.s.edit_location("shm", {"handles": ["outputs"]})                 # outputs only: no model mount
+        self.assertNotIn(self.other, self.s.wanted_mounts(self.s.load()))
+        with self.assertRaisesRegex(self.s.Refused, "at least one"):
+            self.s.edit_location("shm", {"handles": []})
+        self.s.edit_location("drive", {"handles": ["loras"]})
+        with self.assertRaisesRegex(self.s.Refused, "service outputs"):
+            self.s.start_outputs_move("drive")
+        self.assertEqual(self.s.load()["defaults"]["loras"], "drive")           # untouched by the handles change
 
     def test_default_for(self):
         self.assertEqual(self.s.default_for("loras/KreaCustom")["path"], str(self.loc))

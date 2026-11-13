@@ -49,7 +49,7 @@
       <div class="bb-tabs-group" role="presentation">System</div>
       <button type="button" class="bb-tab" role="tab" id="tab-gputune" aria-controls="panel-gputune" data-tab="gputune"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2"/><path d="M15 2v2"/><path d="M9 20v2"/><path d="M15 20v2"/><path d="M2 9h2"/><path d="M2 15h2"/><path d="M20 9h2"/><path d="M20 15h2"/></svg><span class="bb-tab-text"><span class="bb-tab-name">GPU tuning</span><span class="bb-tab-desc">AI overclock, smart switch</span></span></button>
       <button type="button" class="bb-tab" role="tab" id="tab-services" aria-controls="panel-services" data-tab="services"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01"/><path d="M6 17.5h.01"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Services</span><span class="bb-tab-desc">Containers and ComfyUI</span></span></button>
-      <button type="button" class="bb-tab" role="tab" id="tab-locations" aria-controls="panel-locations" data-tab="locations"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Storage</span><span class="bb-tab-desc">Where models are stored</span></span></button>
+      <button type="button" class="bb-tab" role="tab" id="tab-locations" aria-controls="panel-locations" data-tab="locations"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Storage</span><span class="bb-tab-desc">Where models and outputs are stored</span></span></button>
       <button type="button" class="bb-tab" role="tab" id="tab-storage" aria-controls="panel-storage" data-tab="storage"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M6 16h.01"/><path d="M10 16h.01"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Cache &amp; cleanup</span><span class="bb-tab-desc">Generated files and logs</span></span></button>
       <button type="button" class="bb-tab" role="tab" id="tab-security" aria-controls="panel-security" data-tab="security"><svg class="bb-tab-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg><span class="bb-tab-text"><span class="bb-tab-name">Security</span><span class="bb-tab-desc">Password and connections</span></span></button>
       <div class="bb-tabs-group" role="presentation">Advanced</div>
@@ -550,7 +550,7 @@
       </section>
     </div>
     <div class="bb-tab-panel" role="tabpanel" id="panel-locations" aria-labelledby="tab-locations" hidden>
-      <header class="bb-panel-head"><h2 class="bb-panel-title">Storage</h2><p class="bb-panel-lead">Where Rocsy keeps model files. Add folders on other drives, pick where new downloads go, and move installed models from <a href="/Models/#manager">Models → Manager → Installed</a>. ComfyUI's models folder keeps a link to every moved file, so ComfyUI, llama-swap and the studios still find it.</p></header>
+      <header class="bb-panel-head"><h2 class="bb-panel-title">Storage</h2><p class="bb-panel-lead">Where Rocsy keeps model files and what it makes. Add folders on other drives, pick where new downloads go, and move installed models from <a href="/Models/#manager">Models → Manager → Installed</a>. ComfyUI's models folder keeps a link to every moved file, so ComfyUI, llama-swap and the studios still find it.</p></header>
       <section class="bb-section" aria-labelledby="storage-locations-heading" id="storage-locations">
         <div class="bb-section-head"><h2 id="storage-locations-heading">Storage locations</h2><span class="bb-status" id="loc-status" role="status" aria-live="polite"></span></div>
         <div class="bb-loc-list" id="loc-list"><p class="bb-section-note">Loading…</p></div>
@@ -568,6 +568,13 @@
           <div class="bb-loc-form">
             <label class="bb-field">Name<input type="text" id="loc-label" maxlength="60" placeholder="e.g. External SSD"></label>
             <label class="bb-storage-upload-toggle"><input type="checkbox" id="loc-subfolder" checked> Keep models in a “Rocsy models” folder inside it</label>
+            <fieldset class="bb-loc-addholds" id="loc-holds"><legend>Use it for</legend>
+              <label class="bb-storage-upload-toggle"><input type="checkbox" value="models" checked> Models</label>
+              <label class="bb-storage-upload-toggle"><input type="checkbox" value="loras" checked> LoRAs</label>
+              <label class="bb-storage-upload-toggle"><input type="checkbox" value="llm" checked> LLMs</label>
+              <label class="bb-storage-upload-toggle"><input type="checkbox" value="outputs" checked> Service outputs</label>
+            </fieldset>
+            <label class="bb-storage-upload-toggle"><input type="checkbox" id="loc-add-downloads"> Send new downloads of those kinds here</label>
           </div>
           <div class="bb-rules-actions">
             <button type="button" class="bb-button" id="loc-cancel">Cancel</button>
@@ -579,6 +586,16 @@
         <div class="bb-section-head"><h2 id="loc-defaults-heading">Where new downloads go</h2><span class="bb-status" id="loc-defaults-status" role="status" aria-live="polite"></span></div>
         <p class="bb-section-note">Downloads from Models are saved here and linked into ComfyUI's models folder. Updating a moved file keeps it on its drive.</p>
         <div class="bb-loc-defaults" id="loc-defaults"></div>
+      </section>
+      <section class="bb-section" aria-labelledby="loc-outputs-heading">
+        <div class="bb-section-head"><h2 id="loc-outputs-heading">Service outputs</h2><span class="bb-status" id="loc-outputs-status" role="status" aria-live="polite"></span></div>
+        <p class="bb-section-note">Keep everything Rocsy makes in one place: renders from Video, Image and Music, stitched films, Post-Edits, trained LoRAs and Voice clips. They go to a “Rocsy outputs” folder on the location's drive; the old folders become links, so every app keeps finding them. Files are copied and checked while you work, then Rocsy switches over once nothing is rendering (Video, Image, Music and a few helpers restart for a few seconds) and frees the old copies.</p>
+        <div class="bb-loc-outputs" id="loc-outputs"></div>
+        <div class="bb-loc-outputs-row">
+          <label class="bb-field">Store them in<select id="loc-outputs-to"></select></label>
+          <button type="button" class="bb-button bb-button-primary" id="loc-outputs-move">Move outputs here</button>
+        </div>
+        <div class="bb-loc-outputs-job" id="loc-outputs-job" hidden></div>
       </section>
       <section class="bb-section" aria-labelledby="loc-other-heading">
         <div class="bb-section-head"><h2 id="loc-other-heading">Other Rocsy folders</h2></div>

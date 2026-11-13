@@ -37,7 +37,7 @@ A self-hosted, password-gated AI studio for one machine with an AMD GPU (ROCm). 
 serves video, image, music and voice generation, LoRA training, a local LLM server and an
 agent that drives all of them, and every GPU job goes through one shared queue.
 
-> **v1.4.1.** Built and run daily on a single Linux box (RX 7900 XTX, ROCm). The installer sets
+> **v1.5.** Built and run daily on a single Linux box (RX 7900 XTX, ROCm). The installer sets
 > it up on most Linux distros (APT, DNF, Zypper, pacman, APK, XBPS, eopkg, Portage; tested on Arch
 > Linux); immutable systems need a few manual steps. **Windows support is untested**
 > (see [Windows](#windows-untested)). See [Known limits](#known-limits).
@@ -49,7 +49,7 @@ agent that drives all of them, and every GPU job goes through one shared queue.
 | `/` | Home page, Settings (themes, modules, services, notifications, Agentic) | `BunnyBytes/gateway` |
 | `/Agent` | Master Agent: a Hermes agent that plans and runs jobs across the studios | `BunnyBytes/agent` |
 | `/Video` | Video (MiniMax H3, LTX 2.5, Wan 2.2) with Agentic mode and Post-Edit | `Video` |
-| `/Image` | Image (Krea 2, MOSS-Image, Qwen Image 2.1) | `Krea` |
+| `/Image` | Image (Krea 2, MiniMax H3 Image, MOSS-Image, Qwen Image 2.1) | `Krea` |
 | `/Music` | Music (YuE2, MiniMax Music 3), covers and custom voices (RSP + Seed-VC) | `Music` |
 | `/Voice` | Text to speech with saved voices | `BunnyBytes/voice` |
 | `/Trainer` | LoRA training and fine-tunes (ROCm), epoch tests and cleanup | `Trainer` |
@@ -150,8 +150,8 @@ and other host tools are Linux-only. Settings → Services shows the Windows ver
 - Public access goes through a Cloudflare tunnel created on the Connections page (or a
   hand-made one, see `BunnyBytes/cloudflared/README-manual-steps.md`). Rocsy has a single
   shared password; for internet exposure put Cloudflare Access in front of it as well.
-- Some studios target specific model families (MiniMax H3, LTX 2.5, Wan 2.2, Krea 2,
-  Qwen Image 2.1, YuE2). Download their weights in `/Models`; none ship with the repo.
+- Some studios target specific model families (MiniMax H3, MiniMax H3 Image, LTX 2.5, Wan 2.2,
+  Krea 2, Qwen Image 2.1, YuE2). Download their weights in `/Models`; none ship with the repo.
 
 ## Not in this repo
 

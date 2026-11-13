@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import shutil
 from pathlib import Path
 
 import httpx
@@ -91,3 +92,33 @@ def describe(rel: str) -> dict | None:
     loc = next((l for l in snapshot["locations"] if l["id"] == where.get("location")), None)
     return {"id": where.get("location") or "", "label": loc["label"] if loc else "Elsewhere",
             "target": where.get("target", ""), "online": bool(where.get("online")), "managed": bool(loc)}
+
+
+MODEL_HANDLES = ("models", "loras", "llm")
+
+
+def drives(rows: list[dict], builtin_free: int) -> list[dict]:
+    """The drives Installed can show: the models folder, every location that holds models or is set to,
+    and "elsewhere" (links Rocsy doesn't manage) when there are any. One entry = the models folder only."""
+    defaults = snapshot.get("defaults") or {}
+    out = [{"id": "comfy", "label": "ComfyUI models folder", "path": "", "handles": list(MODEL_HANDLES),
+            "downloads": [c for c in MODEL_HANDLES if (defaults.get(c) or "comfy") == "comfy"], "online": True,
+            "free": builtin_free}]
+    for loc in snapshot["locations"]:
+        handles = [h for h in loc.get("handles") or MODEL_HANDLES if h in MODEL_HANDLES]
+        if not handles and not any(r.get("drive") == loc["id"] for r in rows):
+            continue
+        online = os.path.isdir(loc["path"])
+        free = 0
+        if online:
+            with contextlib.suppress(OSError):
+                free = shutil.disk_usage(loc["path"]).free
+        out.append({"id": loc["id"], "label": loc["label"], "path": loc["path"], "handles": handles,
+                    "downloads": [c for c in MODEL_HANDLES if defaults.get(c) == loc["id"]], "online": online, "free": free})
+    if any(r.get("drive") == "elsewhere" for r in rows):
+        out.append({"id": "elsewhere", "label": "Linked by hand", "path": "", "handles": [], "downloads": [],
+                    "online": True, "free": 0})
+    for drive in out:
+        mine = [r for r in rows if r.get("drive") == drive["id"]]
+        drive.update(count=len(mine), size=sum(r["size"] for r in mine))
+    return out

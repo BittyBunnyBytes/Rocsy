@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import struct
 import time
 import uuid
@@ -213,6 +214,22 @@ def scan_hardware() -> dict:
     return hw_cache
 
 
+def live_disks() -> dict:
+    """Re-read free/total space for the scanned disks (one statvfs each). The hardware scan only
+    runs at start-up and on Scan, so downloads, uninstalls and other apps' files made its
+    free-space figure drift by tens of GB."""
+    for label, disk in (hw_cache.get("disks") or {}).items():
+        path = ROOT if label == "Models folder" else None
+        if path is None:
+            continue
+        try:
+            usage = shutil.disk_usage(path)
+            disk.update(free=usage.free, total=usage.total)
+        except OSError:
+            pass
+    return hw_cache.get("disks") or {}
+
+
 # Fire-and-forget work: asyncio only keeps a weak reference to a task, so one nobody holds
 # can be garbage-collected mid-await and silently never finish.
 _spawned: set[asyncio.Task] = set()
@@ -297,6 +314,7 @@ async def page():
 @app.get(f"{PREFIX}/api/state")
 async def state():
     values = load_settings()
+    live_disks()
     return {"hardware": hw_cache, "downloads": downloads.list()[:60], "active": downloads.active_count(),
             "library_task": library.task, "last_check": library.last_check,
             "llama_restart": {"pending": restarter.pending, "reason": restarter.reason, "last": restarter.last},
@@ -1992,7 +2010,11 @@ async def installed(unused_days: int = 7):
         members = sorted((r for r in rows if r["group"] == name), key=lambda r: (r["sub"].casefold(), r.get("epoch") or 0, r["name"].casefold()))
         if members:
             groups.append({"name": name, "count": len(members), "size": sum(r["size"] for r in members), "items": members})
-    return {"groups": groups, "free": hw_cache.get("disks", {}).get("Models folder", {}).get("free", 0),
+    for row in rows:
+        stored = row.get("stored")
+        row["drive"] = stored["id"] if stored and stored.get("managed") else "elsewhere" if stored else "comfy"
+    free = live_disks().get("Models folder", {}).get("free", 0)
+    return {"groups": groups, "free": free, "drives": locations.drives(rows, free),
             "llama_restart": {"pending": restarter.pending}, "unused_days": window // 86400,
             "tracking": {"comfy": usage.since.get("comfy", 0), "llama": usage.since.get("llama", 0), "scanning": usage.busy}}
 

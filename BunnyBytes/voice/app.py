@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -60,6 +60,9 @@ class Generate(BaseModel):
     voice_id: str
     language: str = "English"
     settings: dict = Field(default_factory=dict)
+
+
+ENGINES = {"qwen3", "indextts2", "fish_s2", "fish_drama3", "chatterbox_turbo"}
 
 
 def _qwen_installed(model: Path = MODEL) -> bool:
@@ -187,12 +190,13 @@ async def state():
            "detail": "Local Rocsy engine" if worker_engines.get(key, {}).get("ready")
            else ("Model files are missing" if worker else "Voice engine worker is offline")}
           for key, name in (("indextts2", "IndexTTS2"), ("fish_s2", "Fish Audio S2 Pro"),
-                            ("fish_drama3", "Fish Audio Drama 3"))]],
+                            ("fish_drama3", "Fish Audio Drama 3"), ("chatterbox_turbo", "Chatterbox Turbo"))]],
         # Engines that can create a brand-new voice from a description (Add character).
         "creators": [{"id": "qwen3_design", "name": "Qwen3-TTS VoiceDesign", "ready": _qwen_installed(DESIGN_MODEL),
                       "detail": "Describe a voice in words" if _qwen_installed(DESIGN_MODEL)
                       else "Install it in Models → Manager → Core Backend → Voice engines"}],
-        "voices": _voice_profiles(), "jobs": list(jobs.values())[-30:],
+        "voices": _voice_profiles(),
+        "jobs": [job for job in list(jobs.values()) if not job.get("ephemeral")][-30:],
         "outputs": [{"id": path.stem, "audio": f"{PREFIX}/api/audio/{path.stem}",
                      "created": path.stat().st_mtime, **_output_meta(path)}
                     for path in sorted((DATA / "outputs").glob("*.wav"),
@@ -298,7 +302,9 @@ job_tokens: dict[str, str] = {}
 
 def _set_job(job_id: str, **fields):
     with jobs_lock:
-        job = jobs[job_id]
+        job = jobs.get(job_id)
+        if job is None:   # an API speech request that gave up (timeout / client left)
+            return
         job.update(fields)
         if "chunk" in fields and job.get("chunks"):
             job["progress"] = round(100 * job["chunk"] / job["chunks"], 1)
@@ -367,6 +373,8 @@ async def _run_worker(job_id: str, payload: Generate):
                 "settings": payload.settings},
                 headers={"X-Voice-Worker-Secret": WORKER_SECRET})
             response.raise_for_status()
+        if job_id not in jobs:   # an API speech request that already gave up
+            return
         (DATA / "outputs" / f"{job_id}.wav").write_bytes(response.content)
         _save_meta(job_id, payload)
         _set_job(job_id, state="complete", audio=f"{PREFIX}/api/audio/{job_id}")
@@ -413,9 +421,13 @@ async def _run_worker_queued(job_id: str, payload: Generate, token: str):
     try:
         await _run_worker(job_id, payload)
     finally:
+        # Chatterbox Turbo may stay resident for its keep-loaded window (chat TTS); every other
+        # engine's job unloads it along with the rest.
+        keep = float(payload.settings.get("keep_loaded_s", 0)) if payload.engine == "chatterbox_turbo" else 0
+        eject = {"keep": ["chatterbox_turbo"], "keep_seconds": keep} if keep > 0 else {}
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                await client.post(f"{WORKER}/eject", headers={"X-Voice-Worker-Secret": WORKER_SECRET})
+                await client.post(f"{WORKER}/eject", json=eject, headers={"X-Voice-Worker-Secret": WORKER_SECRET})
         except httpx.HTTPError:
             pass
         job_tokens.pop(job_id, None)
@@ -891,8 +903,8 @@ async def remove_voice(voice_id: str):
 
 
 @app.post(f"{PREFIX}/api/generate")
-async def generate(payload: Generate):
-    if payload.engine not in {"qwen3", "indextts2", "fish_s2", "fish_drama3"}:
+async def generate(payload: Generate, ephemeral: bool = False):
+    if payload.engine not in ENGINES:
         raise HTTPException(422, "Unknown engine")
     if payload.voice_id not in {voice["id"] for voice in _voice_profiles()}:
         raise HTTPException(422, "Choose a saved voice with reference audio")
@@ -910,6 +922,8 @@ async def generate(payload: Generate):
     jobs[job_id] = {"id": job_id, "engine": payload.engine, "state": "queued", "created": time.time(),
                     "text": payload.text, "voice_id": payload.voice_id, "language": payload.language,
                     "settings": payload.settings}
+    if ephemeral:
+        jobs[job_id]["ephemeral"] = True   # API speech: not kept in Generations
     pending[job_id] = payload
     entry = await GPU.enqueue(job_id, f"Voice: {payload.engine}", uses_llm=False, model=payload.engine)
     if entry is None:
@@ -918,6 +932,83 @@ async def generate(payload: Generate):
         raise HTTPException(503, "GPU queue unavailable")
     jobs[job_id]["queue_entry_id"] = entry["entry_id"]
     return jobs[job_id]
+
+
+class Speech(BaseModel):
+    """OpenAI /v1/audio/speech request (SillyTavern's "OpenAI Compatible" TTS provider)."""
+    input: str = Field(min_length=1, max_length=20000)
+    voice: str
+    model: str = "chatterbox_turbo"
+    response_format: str = "wav"
+    speed: float = 1.0
+
+
+def _speech_voice(name: str) -> str:
+    wanted = name.strip().casefold()
+    for voice in _voice_profiles():
+        if wanted in (voice["id"].casefold(), voice["name"].casefold()):
+            return voice["id"]
+    raise HTTPException(404, f"No saved Voice character named '{name}'")
+
+
+@app.get(f"{PREFIX}/v1/audio/voices")
+@app.get(f"{PREFIX}/v1/voices")
+async def speech_voices():
+    """Saved characters usable as `voice` (name or id)."""
+    return {"voices": [{"id": voice["id"], "name": voice["name"]} for voice in _voice_profiles()]}
+
+
+@app.post(f"{PREFIX}/v1/audio/speech")
+async def speech(body: Speech):
+    """Queue one line on the shared GPU, wait for it and return the audio (not kept in Generations).
+    `model` is a Voice engine id (chatterbox_turbo by default; chatterbox-turbo / tts-1 work too)."""
+    engine = body.model.strip().lower().replace("-", "_")
+    engine = {"tts_1": "chatterbox_turbo", "tts_1_hd": "chatterbox_turbo", "chatterbox": "chatterbox_turbo",
+              "gpt_4o_mini_tts": "chatterbox_turbo"}.get(engine, engine)
+    if engine not in ENGINES:
+        raise HTTPException(422, f"Unknown model '{body.model}'; use a Voice engine id such as chatterbox_turbo")
+    job = await generate(Generate(text=body.input, engine=engine, voice_id=_speech_voice(body.voice)),
+                         ephemeral=True)
+    job_id = job["id"]
+    deadline = time.monotonic() + 900 + len(body.input)
+    try:
+        while time.monotonic() < deadline:
+            state = jobs.get(job_id, {}).get("state")
+            if state == "complete":
+                break
+            if state in {"failed", "cancelled"}:
+                raise HTTPException(500, jobs[job_id].get("error") or f"Speech {state}")
+            await asyncio.sleep(0.05)
+        else:
+            raise HTTPException(504, "Speech timed out")
+        output = DATA / "outputs" / f"{job_id}.wav"
+        audio = output.read_bytes()
+    finally:
+        if jobs.get(job_id, {}).get("state") == "queued":
+            try:
+                await cancel_job(job_id)
+            except HTTPException:
+                pass
+        (DATA / "outputs" / f"{job_id}.wav").unlink(missing_ok=True)
+        (DATA / "outputs" / f"{job_id}.json").unlink(missing_ok=True)
+        with jobs_lock:
+            jobs.pop(job_id, None)
+            pending.pop(job_id, None)
+            started.discard(job_id)
+    fmt = body.response_format.lower()
+    tempo = max(0.5, min(2.0, float(body.speed or 1.0)))
+    if fmt in {"wav", "pcm"} and abs(tempo - 1.0) < 0.01:
+        return Response(audio, media_type="audio/wav")
+    codec = {"mp3": (["-c:a", "libmp3lame", "-q:a", "2"], "mp3", "audio/mpeg"),
+             "opus": (["-c:a", "libopus", "-b:a", "96k"], "ogg", "audio/ogg"),
+             "aac": (["-c:a", "aac", "-b:a", "160k"], "adts", "audio/aac"),
+             "flac": (["-c:a", "flac"], "flac", "audio/flac")}.get(fmt, ([], "wav", "audio/wav"))
+    command = ["ffmpeg", "-v", "error", "-i", "pipe:0", *(["-af", f"atempo={tempo:.3f}"] if abs(tempo - 1.0) >= 0.01 else []),
+               *codec[0], "-f", codec[1], "pipe:1"]
+    result = await asyncio.to_thread(subprocess.run, command, input=audio, capture_output=True, check=False)
+    if result.returncode or not result.stdout:
+        raise HTTPException(500, result.stderr.decode("utf-8", "replace")[-500:] or "Audio conversion failed")
+    return Response(result.stdout, media_type=codec[2])
 
 
 @app.get(f"{PREFIX}/api/jobs/{{job_id}}")

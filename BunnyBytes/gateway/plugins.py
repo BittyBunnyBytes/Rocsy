@@ -71,6 +71,10 @@ class Plugin:
     icon_version: str = ""
     version: str = ""
     updates: dict | None = None
+    # An app that only works at the site root (absolute /api, /scripts... URLs, no base-path
+    # setting): the gateway adds `path` to its fetches, module imports and redirects and serves
+    # root-path requests made from its pages (see gateway app.py root_app_shim / root fallback).
+    root_app: bool = False
 
     def public(self) -> dict:
         return {"id": self.id, "name": self.name, "path": self.path, "upstream": self.upstream, "folder": self.folder,
@@ -78,7 +82,7 @@ class Plugin:
                 "health": self.health, "note": self.note, "color": self.color, "icon": self.icon,
                 "container": self.container, "strip_prefix": self.strip_prefix, "themed": self.themed,
                 "icon_url": self.icon_url, "background": (self.home or {}).get("background", "none"),
-                "version": self.version, "updates": bool(self.updates)}
+                "version": self.version, "updates": bool(self.updates), "root_app": self.root_app}
 
     @property
     def icon_url(self) -> str:
@@ -138,6 +142,11 @@ def _parse(folder: Path, data: dict, taken_ids: set[str], taken_paths: set[str])
     if version not in (None, "") and not (isinstance(version, (str, int, float)) and len(str(version)) <= 40):
         raise ValueError("version must be a short text like 1.2.0")
     updates = plugin_updates.clean(data.get("updates"))
+    root_app = data.get("root_app", False)
+    if not isinstance(root_app, bool):
+        raise ValueError("root_app must be true or false")
+    if root_app and not data.get("strip_prefix"):
+        raise ValueError("root_app needs strip_prefix: true (the app is served from its own root)")
     icon_file, icon_version = str(data.get("icon_file") or ""), ""
     if icon_file:
         if not ICON_FILE.match(icon_file):
@@ -157,7 +166,7 @@ def _parse(folder: Path, data: dict, taken_ids: set[str], taken_paths: set[str])
                   icon=_clean_icon(data.get("icon")), color=color.lower(), health=health, home=home or None,
                   gpu_queue=bool(data.get("gpu_queue")), note=str(data.get("note") or "")[:200],
                   container=str(data.get("container") or "")[:63], icon_file=icon_file, icon_version=icon_version,
-                  version=str(version or ""), updates=updates)
+                  version=str(version or ""), updates=updates, root_app=root_app)
 
 
 def load(root: Path, reserved_ids: set[str], reserved_paths: set[str]) -> tuple[list[Plugin], list[dict]]:

@@ -46,6 +46,7 @@ GALLERIES = {
     "Qwen 2.1": ("Krea", "qwen", "loras/KreaCustom", "Image LoRA gallery (Qwen Image 2.1)"),
     "Anima": ("Krea", "anima", "loras/KreaCustom", "Image LoRA gallery (Anima)"),
     "MOSS Image": ("Krea", "moss", "loras/KreaCustom", "Image LoRA gallery (MOSS-Image)"),
+    "MiniMax H3 Image": ("Krea", "h3image", "loras/KreaCustom", "Image LoRA gallery (MiniMax H3 Image)"),
 }
 STUDIO_URL = {"Vid": VID, "Krea": KREA}
 STUDIO_NAME = {"Vid": "Video", "Krea": "Image"}

@@ -108,6 +108,22 @@ SCHEMAS = {
             *_SEGMENTS,
         ],
     },
+    "chatterbox_turbo": {
+        "name": "Chatterbox Turbo",
+        "description": "Fast English voice cloning (Resemble AI, 350M). Needs a reference clip longer than 5 seconds; supports [laugh], [chuckle], [cough] style tags. Used by SillyTavern TTS.",
+        "fields": [
+            number("temperature", "Temperature", 0.8, 0.05, 2.0, 0.05, "Sampling", "Higher values give more variation."),
+            number("top_p", "Top P", 0.95, 0.05, 1.0, 0.05, "Sampling", "Limits token choices by cumulative probability."),
+            number("top_k", "Top K", 1000, 1, 2000, 1, "Sampling", "Limits token choices to the most likely candidates."),
+            number("repetition_penalty", "Repetition penalty", 1.2, 1.0, 2.0, 0.05, "Sampling", "Higher values discourage repeated sounds."),
+            number("min_p", "Min P", 0.0, 0.0, 1.0, 0.01, "Sampling", "Drops tokens below this share of the top token's probability. Zero turns it off."),
+            number("seed", "Seed", 0, 0, 2147483647, 1, "Sampling", "Zero picks a new seed each time; any other value repeats runs."),
+            toggle("norm_loudness", "Normalize reference loudness", True, "Audio & pacing", "Level the reference clip before encoding the voice."),
+            number("keep_loaded_s", "Keep loaded (seconds)", 600, 0, 7200, 30, "Performance", "Stay in VRAM this long after a job so the next line starts at once (chat TTS). Zero unloads after every job; another engine's job always unloads it."),
+            choice("attention", "Attention", "sdpa", _SDPA, "Performance", _SDPA_HINT),
+            *_SEGMENTS,
+        ],
+    },
 }
 
 

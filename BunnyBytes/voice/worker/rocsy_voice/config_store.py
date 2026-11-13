@@ -56,6 +56,11 @@ DEFAULT_CONFIG = {
             "temperature": 1.0, "top_p": 0.9, "seed": 42,
             "max_new_tokens": 0, "context_length": 4096,
         },
+        "chatterbox_turbo": {
+            "temperature": 0.8, "top_p": 0.95, "top_k": 1000, "repetition_penalty": 1.2,
+            "min_p": 0.0, "exaggeration": 0.0, "seed": 0, "norm_loudness": True,
+            "keep_loaded_s": 600, "attention": "sdpa",
+        },
     },
     "editor": {"font_size": 17, "autosave_draft": True, "wrap": True},
     "ui": {"theme": "midnight", "accent": "violet"},

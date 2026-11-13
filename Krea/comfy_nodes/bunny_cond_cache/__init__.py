@@ -215,11 +215,34 @@ def _trim_disk(folder: str) -> None:
 
 # ---------------------------------------------------------------- encoders
 
+class _PositiveOnlyClip:
+    """For a TextEncodeQwenImage21 whose negative output nothing reads (BasicGuider, or cfg 1): the
+    stock node's second tokenize/encode (negative prompt + every reference image through the vision
+    tower again) is skipped and the positive conditioning stands in for the unused negative."""
+
+    def __init__(self, clip):
+        self._clip = clip
+        self._positive = None
+
+    def tokenize(self, text, **kwargs):
+        return None if self._positive is not None else self._clip.tokenize(text, **kwargs)
+
+    def encode_from_tokens_scheduled(self, tokens, **kwargs):
+        if self._positive is None:
+            self._positive = self._clip.encode_from_tokens_scheduled(tokens, **kwargs)
+        return self._positive
+
+    def __getattr__(self, name):
+        return getattr(self._clip, name)
+
+
 def _run_encoder(encoder: str, params: dict, clip, vae, images: dict) -> tuple:
     if encoder == "CLIPTextEncode":
         return (nodes.CLIPTextEncode().encode(clip, params["text"])[0], None, None)
     cls = nodes.NODE_CLASS_MAPPINGS[encoder]
     if encoder == "TextEncodeQwenImage21":
+        if params.get("negative_unused"):
+            clip = _PositiveOnlyClip(clip)
         out = cls.execute(clip=clip, prompt=params["prompt"], negative_prompt=params["negative_prompt"], vae=vae,
                           resolution=params.get("resolution", 1024), images=dict(images))
         return tuple(out.args)

@@ -4412,7 +4412,7 @@ function jobCard(job) {
     ${job.error ? `<div class="job-error">${escapeHtml(job.error)}</div>` : ""}
     ${awaitingSelection ? `<div class="approval-banner">Approval required &mdash; pick a candidate below</div>` : ""}
     ${awaitingSelection ? candidatePicker(job) : ""}
-    ${job.state === "complete" && job.output_url ? `<video class="job-video" src="${job.output_url}"${job.poster_url ? ` data-poster="${job.poster_url}" preload="none"` : ` preload="metadata"`} controls playsinline></video>` : ""}
+    ${job.state === "complete" && job.output_url ? `<div class="job-player" data-src="${escapeHtml(job.output_url)}" data-poster="${escapeHtml(job.poster_url || "")}"></div>` : ""}
     <div class="job-actions">
       <button type="button" class="secondary-button job-icon-button" data-info="${job.id}" title="Generation details" aria-label="Generation details">${JOB_ICONS.info}</button>
       ${(active || finalizing) ? `<button type="button" class="secondary-button job-icon-button danger" data-cancel="${job.id}" ${cancelling ? "disabled" : ""} title="${cancelling ? "Cancelling…" : "Cancel"}" aria-label="${cancelling ? "Cancelling" : "Cancel"}">${JOB_ICONS.cancel}</button>` : ""}
@@ -4478,12 +4478,20 @@ function observePoster(video) {
   posterObserver.observe(video);
 }
 
+// Card player: the Trainer's BunnyPlayer (static/js/player.js); its <video> keeps the job-video class
+// (frame download, lazy posters) and loads nothing until played.
+function mountJobPlayer(host) {
+  if (!host || !window.BunnyPlayer) return;
+  const poster = host.dataset.poster;
+  const player = BunnyPlayer.create(host, { src: host.dataset.src, preload: poster ? "none" : "metadata", videoClass: "job-video" });
+  if (poster) { player.video.dataset.poster = poster; observePoster(player.video); }
+}
+
 function bindJobCard(node) {
-  const still = node.querySelector("video.job-video[data-poster]");
-  if (still) observePoster(still);
+  mountJobPlayer(node.querySelector(".job-player"));
   node.addEventListener("click", (event) => {
     if (!state.stitchMode && !state.compareMode) return;
-    if (event.target.closest("button, a, input, label, video")) return;
+    if (event.target.closest("button, a, input, label, video, .bp")) return;
     if (state.compareMode) toggleCompareSelection(node.dataset.jobId);
     else toggleStitchSelection(node.dataset.jobId);
   });
@@ -4741,9 +4749,8 @@ function renderJobs() {
       group = document.createElement("div");
       group.className = "agentic-session-group";
       group.dataset.agenticSessionId = entry.id;
-      group.innerHTML = `<div class="agentic-session-head"><span class="agentic-session-mark" aria-hidden="true"></span><span class="agentic-session-heading"><strong>Agentic session</strong><small class="agentic-session-title"></small></span><img class="agentic-session-cover" alt="" loading="lazy" hidden title="Show this session's final clips"><span class="agentic-session-count"></span><span class="agentic-collapse-chips"><button type="button" class="secondary-button agentic-collapse-chip" data-collapse="previews" aria-expanded="true"></button><button type="button" class="secondary-button agentic-collapse-chip" data-collapse="finals" aria-expanded="true"></button></span><span class="agentic-session-buttons"><button type="button" class="secondary-button agentic-show-all-button" title="Show every generation again (the session stays active)">Show all</button><button type="button" class="secondary-button job-icon-button agentic-info-button" title="What was sent to start this session" aria-label="What was sent to start this session">${JOB_ICONS.info}</button><button type="button" class="secondary-button job-icon-button agentic-folder-button" title="Session folder: assets, prompt log, rewrite clips" aria-label="Session folder: assets, prompt log, rewrite clips">${jobIcon('<path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>')}</button><button type="button" class="secondary-button agentic-pause-button" hidden></button><button type="button" class="secondary-button agentic-stitch-button" title="Join this session's final clips into one video, in story order" hidden>Stitch</button><button type="button" class="secondary-button agentic-resume-button">Revise</button><button type="button" class="secondary-button job-icon-button danger agentic-delete-button" title="Delete this session and every video it made" aria-label="Delete this session and every video it made">${JOB_ICONS.remove}</button></span></div><div class="agentic-session-cards"><div class="agentic-stage-group"><button type="button" class="agentic-stage-head" aria-expanded="true"><strong>Staging previews</strong><span class="agentic-stage-count"></span><span class="card-chevron" aria-hidden="true"></span></button><div class="agentic-stage-cards"></div><div class="agentic-stage-approval" hidden><label>Notes for every clip<textarea class="agentic-stage-notes" rows="3" placeholder="Changes for the whole series (style, setting, characters). Notes for one clip go in the box under that clip."></textarea></label><div class="agentic-stage-actions"><button type="button" class="secondary-button agentic-stage-accept" data-stage-action="accept">Accept and run final</button><button type="button" class="secondary-button danger agentic-stage-exclude" data-stage-action="exclude">Exclude and retry staging</button></div></div></div><div class="agentic-final-group"><button type="button" class="agentic-stage-head agentic-final-head" aria-expanded="true"><strong>Final clips</strong><span class="agentic-stage-count agentic-final-count"></span><span class="card-chevron" aria-hidden="true"></span></button><div class="agentic-final-cards"></div></div></div>`;
+      group.innerHTML = `<div class="agentic-session-head"><span class="agentic-session-mark" aria-hidden="true"></span><span class="agentic-session-heading"><strong>Agentic session</strong><small class="agentic-session-title"></small></span><div class="agentic-session-cover" hidden></div><span class="agentic-session-count"></span><span class="agentic-collapse-chips"><button type="button" class="secondary-button agentic-collapse-chip" data-collapse="previews" aria-expanded="true"></button><button type="button" class="secondary-button agentic-collapse-chip" data-collapse="finals" aria-expanded="true"></button></span><span class="agentic-session-buttons"><button type="button" class="secondary-button agentic-show-all-button" title="Show every generation again (the session stays active)">Show all</button><button type="button" class="secondary-button job-icon-button agentic-info-button" title="What was sent to start this session" aria-label="What was sent to start this session">${JOB_ICONS.info}</button><button type="button" class="secondary-button job-icon-button agentic-folder-button" title="Session folder: assets, prompt log, rewrite clips" aria-label="Session folder: assets, prompt log, rewrite clips">${jobIcon('<path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>')}</button><button type="button" class="secondary-button agentic-pause-button" hidden></button><button type="button" class="secondary-button agentic-stitch-button" title="Join this session's final clips into one video, in story order" hidden>Stitch</button><button type="button" class="secondary-button agentic-resume-button">Revise</button><button type="button" class="secondary-button job-icon-button danger agentic-delete-button" title="Delete this session and every video it made" aria-label="Delete this session and every video it made">${JOB_ICONS.remove}</button></span></div><div class="agentic-session-cards"><div class="agentic-stage-group"><button type="button" class="agentic-stage-head" aria-expanded="true"><strong>Staging previews</strong><span class="agentic-stage-count"></span><span class="card-chevron" aria-hidden="true"></span></button><div class="agentic-stage-cards"></div><div class="agentic-stage-approval" hidden><label>Notes for every clip<textarea class="agentic-stage-notes" rows="3" placeholder="Changes for the whole series (style, setting, characters). Notes for one clip go in the box under that clip."></textarea></label><div class="agentic-stage-actions"><button type="button" class="secondary-button agentic-stage-accept" data-stage-action="accept">Accept and run final</button><button type="button" class="secondary-button danger agentic-stage-exclude" data-stage-action="exclude">Exclude and retry staging</button></div></div></div><div class="agentic-final-group"><button type="button" class="agentic-stage-head agentic-final-head" aria-expanded="true"><strong>Final clips</strong><span class="agentic-stage-count agentic-final-count"></span><span class="card-chevron" aria-hidden="true"></span></button><div class="agentic-final-cards"></div></div></div>`;
       // Previews / final clips collapse together from the tile chips (grid) or the lane headers (resumed).
-      $(".agentic-session-cover", group).addEventListener("click", () => toggleAgenticCollapse(group, "finals"));
       $(".agentic-stage-head", group).addEventListener("click", () => toggleAgenticCollapse(group, "previews"));
       $(".agentic-final-head", group).addEventListener("click", () => toggleAgenticCollapse(group, "finals"));
       $$(".agentic-collapse-chip", group).forEach((chip) => chip.addEventListener("click", (event) => {
@@ -5072,16 +5079,33 @@ function applyAgenticCollapse(group) {
   }
 }
 
-// Tile cover: the session's newest finished stitch, else its newest finished final clip.
+// Tile cover: a paused player holding the session's renders in story order - the kept (or shown)
+// attempt of each final clip, else of each staging preview. Play runs through them one after another.
+function agenticCoverPlaylist(entry) {
+  const pick = (jobs) => groupAgenticAttempts(jobs).map(([key, attempts]) => {
+    const kept = shownAgenticAttempt(key, attempts);
+    return kept?.state === "complete" && kept.output_url ? kept : attempts.findLast((job) => job.state === "complete" && job.output_url);
+  }).filter(Boolean);
+  const finals = pick(entry.jobs.filter((job) => (job.agentic_phase || "full") === "full"));
+  const jobs = finals.length ? finals : pick(entry.jobs.filter((job) => job.agentic_phase === "staging"));
+  const kind = finals.length ? "Clip" : "Preview";
+  return jobs.map((job) => ({
+    src: job.output_url, poster: job.poster_url || "",
+    label: `${kind} ${job.agentic_planned_clip || job.agentic_clip_index || ""}`.trim(), title: job.prompt || "",
+  }));
+}
+
 function syncAgenticCover(group, entry) {
-  const img = $(".agentic-session-cover", group);
-  const done = (job) => job.state === "complete" && job.poster_url;
-  const stitches = state.jobs.filter((job) => job.model === "stitch" && done(job)
-    && (job.agentic_session_id === entry.id || job.stitch_session_id === entry.id));
-  const cover = stitches[0] || entry.jobs.filter((job) => job.agentic_phase !== "staging" && done(job))
-    .sort((a, b) => (b.agentic_clip_index || 0) - (a.agentic_clip_index || 0))[0];
-  img.hidden = !cover;
-  if (cover && img.getAttribute("src") !== cover.poster_url) img.src = cover.poster_url;
+  const host = $(".agentic-session-cover", group);
+  if (group.classList.contains("is-focused")) host._player?.video.pause();   // the lane hides the tile cover
+  const playlist = agenticCoverPlaylist(entry);
+  host.hidden = !playlist.length;
+  if (!playlist.length || !window.BunnyPlayer) return;
+  const key = playlist.map((item) => item.src).join("|");
+  if (host._coverKey === key) return;
+  host._coverKey = key;
+  if (!host._player) host._player = BunnyPlayer.create(host, { playlist, preload: "none" });
+  else host._player.setPlaylist(playlist);
 }
 
 function toggleAgenticCollapse(group, kind) {
