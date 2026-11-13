@@ -39,6 +39,19 @@ SECURITY_HEADERS = {
 }
 
 
+# Paths of root_app plugins (gateway app.py _register_plugin): third-party apps such as SillyTavern
+# that need inline scripts (the gateway's own fetch/import-map shim, their own bootstraps) and
+# eval (template compilers). The relaxation stays scoped to those already-authenticated paths.
+ROOT_APP_PATHS: set[str] = set()
+ROOT_APP_CSP = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+    "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; "
+    "media-src 'self' data: blob: https:; connect-src 'self' ws: wss: data: blob:; "
+    "worker-src 'self' blob:; font-src 'self' data:; frame-src 'self' https:; "
+    "frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+)
+
+
 class SecurityHeadersMiddleware:
     """Adds the standard hardening headers to every response, and enforces a
     request body size cap on proxied requests before they reach the proxy.
@@ -109,6 +122,9 @@ class SecurityHeadersMiddleware:
                 "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
                 "connect-src 'self' ws: wss:; frame-ancestors 'self'; base-uri 'self'"
             )
+        if any(path == root or path.startswith(root + "/") for root in ROOT_APP_PATHS):
+            headers["X-Frame-Options"] = "SAMEORIGIN"
+            headers["Content-Security-Policy"] = ROOT_APP_CSP
         if path == "/Hermes" or path.startswith("/Hermes/"):
             # Hermes injects a small per-process session-token/base-path bootstrap into
             # index.html and uses blob workers for terminal/editor features. Keep this

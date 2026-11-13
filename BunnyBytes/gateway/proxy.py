@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 
 import gzip
 import hashlib
@@ -56,6 +57,9 @@ _SSE_PATH_HINTS = ("/events",)
 # it along with other visitors' requests. No connection cap - SSE streams hold
 # theirs open indefinitely, as they did with per-request clients.
 _client: httpx.AsyncClient | None = None
+
+
+_HEAD_OPEN = re.compile(rb"<head(?:\s[^>]*)?>", re.I)
 
 
 def shared_client() -> httpx.AsyncClient:
@@ -213,6 +217,9 @@ async def proxy_request(
     adapt_reasoning: bool = False,
     html_transform: Callable[[bytes], bytes] | None = None,
     lite_images: bool = False,
+    head_start_inject: str = "",
+    location_prefix: str = "",
+    body_override: bytes | None = None,
 ) -> Response:
     """Generic streaming reverse-proxy for one upstream app.
 
@@ -245,6 +252,15 @@ async def proxy_request(
 
     `lite_images` (mobile data saver, see datasaver.py) sends big images shown
     in <img> tags as smaller WebP copies.
+
+    `head_start_inject` goes right after the page's <head> tag, before any of its own
+    scripts (root-app plugins: the fetch/import-map shim must run first).
+
+    `location_prefix` puts that prefix in front of root-relative redirects (Location: /login)
+    from an upstream that thinks it lives at the site root.
+
+    `body_override` is sent instead of the client's body (scoped llama keys: the gateway
+    has already read and checked the body, and clamped its limits).
     """
     full_path = request.url.path  # already includes the prefix, e.g. /Video/api/generate
     if strip_prefix and full_path.startswith(prefix):
@@ -259,7 +275,11 @@ async def proxy_request(
                         if part.strip() and part.split("=", 1)[0].strip() != settings.cookie_name)
     if cookies:
         forward_headers["cookie"] = cookies
-    if head_inject and request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+    if (head_inject or head_start_inject or restyle_css or lite_images) and request.method == "GET":
+        # Bodies the gateway may rewrite must arrive in an encoding httpx can decode here
+        # (no brotli/zstd module in this image): a br page would pass through undecoded.
+        _set_header_ci(forward_headers, "accept-encoding", "gzip, deflate")
+    if (head_inject or head_start_inject) and request.method == "GET" and "text/html" in request.headers.get("accept", ""):
         # Page loads must come back as a full 200 so the injected (versioned)
         # theme link is current - a 304 would reuse the cached page and its old link.
         _drop_headers_ci(forward_headers, "if-none-match", "if-modified-since")
@@ -282,7 +302,8 @@ async def proxy_request(
     # Bodyless GET/HEAD requests go upstream without a chunked request body.
     has_body = (request.method not in ("GET", "HEAD") or "content-length" in request.headers
                 or "transfer-encoding" in request.headers)
-    body_stream = _sized_request_stream(request, settings.max_body_bytes) if has_body else None
+    body_stream = (_sized_request_stream(request, settings.max_body_bytes)
+                   if has_body and body_override is None else None)
     adapt = adapt_reasoning and request.method == "POST" and reasoning_adapter.applies(full_path)
     raw_body = sent_body = b""
     buffered_error: bytes | None = None
@@ -299,7 +320,8 @@ async def proxy_request(
 
     try:
         if adapt:
-            raw_body = b"".join([chunk async for chunk in body_stream]) if body_stream else b""
+            raw_body = (body_override if body_override is not None
+                        else b"".join([chunk async for chunk in body_stream]) if body_stream else b"")
             sent_body = reasoning_adapter.adapt_body(raw_body)
             upstream_response = await send(sent_body)
             if upstream_response.status_code >= 400:
@@ -310,6 +332,8 @@ async def proxy_request(
                     await upstream_response.aclose()
                     buffered_error = None
                     upstream_response = await send(retry)
+        elif body_override is not None:
+            upstream_response = await send(body_override)
         else:
             if "content-length" in request.headers:
                 forward_headers["content-length"] = request.headers["content-length"]
@@ -327,7 +351,20 @@ async def proxy_request(
     content_type = upstream_response.headers.get("content-type", "")
     is_sse = content_type.startswith("text/event-stream")
 
-    response_headers = _filter_headers(upstream_response.headers)
+    response_headers = _filter_headers(upstream_response.headers, extra_drop={"set-cookie"})
+    # httpx joins repeated headers with ", " in items(); each Set-Cookie must stay its own header
+    # (a joined pair - or any cookie with an Expires date - can't be parsed by browsers).
+    upstream_cookies = upstream_response.headers.get_list("set-cookie")
+
+    def with_cookies(response: Response) -> Response:
+        response.raw_headers.extend((b"set-cookie", cookie.encode("latin-1")) for cookie in upstream_cookies)
+        return response
+
+    if location_prefix:
+        location = _header_ci(response_headers, "location")
+        if (location.startswith("/") and not location.startswith("//")
+                and location != location_prefix and not location.startswith(location_prefix + "/")):
+            _set_header_ci(response_headers, "location", location_prefix + location)
     # Everything proxied here sits behind the login, so Cloudflare must never
     # keep a shared copy: it caches by file extension (a thumbnail URL ending
     # in .mp4 was served from the edge to logged-out visitors). Browsers still
@@ -355,8 +392,8 @@ async def proxy_request(
         # Already read (decoded) to check for an effort rejection; not retried.
         await upstream_response.aclose()
         _drop_headers_ci(response_headers, "content-encoding", "content-length")
-        return Response(buffered_error, status_code=upstream_response.status_code,
-                        headers=response_headers, media_type=content_type or None)
+        return with_cookies(Response(buffered_error, status_code=upstream_response.status_code,
+                        headers=response_headers, media_type=content_type or None))
 
     if (restyle_css and request.method == "GET" and upstream_response.status_code == 200
             and content_type.startswith("text/css")):
@@ -365,7 +402,7 @@ async def proxy_request(
             return _upstream_broke()
         _drop_headers_ci(response_headers, "content-encoding", "content-length")
         body = _gzip_for(request, restyle.rewrite_cached(css), response_headers, cache=True)
-        return Response(body, status_code=200, headers=response_headers, media_type=content_type)
+        return with_cookies(Response(body, status_code=200, headers=response_headers, media_type=content_type))
 
     if (lite_images and request.method == "GET" and upstream_response.status_code == 200
             and datasaver.shrinkable(request.headers, content_type, _header_ci(response_headers, "content-length"))):
@@ -376,20 +413,24 @@ async def proxy_request(
         validator = _header_ci(response_headers, "etag") or _header_ci(response_headers, "last-modified") or str(len(raw))
         lite = await datasaver.lite_copy(f"{target_url}|{validator}", raw) if len(raw) >= datasaver.MIN_BYTES else None
         if lite is None:
-            return Response(raw, status_code=200, headers=response_headers, media_type=content_type)
+            return with_cookies(Response(raw, status_code=200, headers=response_headers, media_type=content_type))
         # No validators: a later full-size request must never get a 304 for this copy.
         _drop_headers_ci(response_headers, "etag", "last-modified", "content-type")
         _set_header_ci(response_headers, "Vary", "Cookie, Save-Data")
         response_headers["X-Rocsy-Lite"] = "1"
-        return Response(lite, status_code=200, headers=response_headers, media_type="image/webp")
+        return with_cookies(Response(lite, status_code=200, headers=response_headers, media_type="image/webp"))
 
-    if (head_inject and request.method == "GET" and upstream_response.status_code == 200
+    if ((head_inject or head_start_inject) and request.method == "GET" and upstream_response.status_code == 200
             and content_type.startswith("text/html")):
         html = await _read_body(upstream_response)  # decoded (gzip etc.)
         if html is None:
             return _upstream_broke()
+        if head_start_inject:
+            opening = _HEAD_OPEN.search(html)
+            at = opening.end() if opening else 0
+            html = html[:at] + head_start_inject.encode() + html[at:]
         index = html.lower().find(b"</head>")
-        if index >= 0:
+        if index >= 0 and head_inject:
             html = html[:index] + head_inject.encode() + html[index:]
         if restyle_css:
             html = restyle.tag_stylesheets(html)
@@ -397,7 +438,7 @@ async def proxy_request(
             html = html_transform(html)
         _drop_headers_ci(response_headers, "content-encoding", "content-length", "etag", "last-modified")
         html = _gzip_for(request, html, response_headers)
-        return Response(html, status_code=200, headers=response_headers, media_type=content_type)
+        return with_cookies(Response(html, status_code=200, headers=response_headers, media_type=content_type))
 
     async def body_iterator() -> AsyncIterator[bytes]:
         try:
@@ -406,9 +447,9 @@ async def proxy_request(
         finally:
             await upstream_response.aclose()
 
-    return _UpstreamStream(
+    return with_cookies(_UpstreamStream(
         body_iterator(),
         status_code=upstream_response.status_code,
         headers=response_headers,
         media_type=content_type or None,
-    )
+    ))

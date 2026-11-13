@@ -86,21 +86,21 @@ def size_for_ratio(ratio_w: float, ratio_h: float, pixel_area: int) -> tuple[int
     return clamp_size(math.sqrt(pixel_area * ratio), math.sqrt(pixel_area / ratio))
 
 
-def krea_size_for_ratio(ratio_w: float, ratio_h: float, pixel_area: int) -> tuple[int, int]:
+def krea_size_for_ratio(ratio_w: float, ratio_h: float, pixel_area: int, max_side: int = MAX_SIZE) -> tuple[int, int]:
     """Reshape Krea's selected pixel budget to a ratio while honoring its
-    512..1536 per-side limits and 32-pixel latent grid."""
+    512..max_side (1536 for Krea) per-side limits and 32-pixel latent grid."""
     ratio = ratio_w / ratio_h
     width, height = math.sqrt(pixel_area * ratio), math.sqrt(pixel_area / ratio)
-    scale = min(1.0, MAX_SIZE / max(width, height))
+    scale = min(1.0, max_side / max(width, height))
     width, height = width * scale, height * scale
     # Very extreme ratios cannot satisfy both the minimum short side and the
     # maximum long side. Preserve the ratio and max side in that case.
     if min(width, height) < MIN_SIZE:
         scale = MIN_SIZE / min(width, height)
-        if max(width, height) * scale <= MAX_SIZE:
+        if max(width, height) * scale <= max_side:
             width, height = width * scale, height * scale
     width, height = _round32(width), _round32(height)
-    return min(MAX_SIZE, width), min(MAX_SIZE, height)
+    return min(max_side, width), min(max_side, height)
 
 
 def parse_ratio(value: str | None) -> tuple[float, float] | None:
@@ -377,7 +377,7 @@ def resolve_size(request: GenerationRequest, enhanced: EnhancerResult | None = N
     return clamp_size(width, height)
 
 
-def resolve_krea_size(request: GenerationRequest, enhanced: EnhancerResult) -> tuple[int, int]:
+def resolve_krea_size(request: GenerationRequest, enhanced: EnhancerResult, max_side: int = MAX_SIZE) -> tuple[int, int]:
     """Apply the PE model's ratio decision to Krea/Lustify while keeping the
     user's selected pixel budget. Invalid or unusable decisions fall back to
     the requested size."""
@@ -388,7 +388,7 @@ def resolve_krea_size(request: GenerationRequest, enhanced: EnhancerResult) -> t
     if enhanced.ratio_follow and enhanced.ratio_follow <= len(references):
         ref = references[enhanced.ratio_follow - 1]
         if ref.width and ref.height:
-            return krea_size_for_ratio(ref.width, ref.height, width * height)
+            return krea_size_for_ratio(ref.width, ref.height, width * height, max_side)
     if ratio := parse_ratio(enhanced.wh_ratio):
-        return krea_size_for_ratio(*ratio, width * height)
+        return krea_size_for_ratio(*ratio, width * height, max_side)
     return width, height

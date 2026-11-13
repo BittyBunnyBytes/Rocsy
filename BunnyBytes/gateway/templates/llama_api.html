@@ -54,6 +54,65 @@
       </div>
     </section>
 
+    <section class="bb-section" aria-labelledby="keys-heading">
+      <div class="bb-section-head">
+        <h2 id="keys-heading">Keys for other apps</h2>
+        <button type="button" class="bb-api-button" id="key-new">New key</button>
+      </div>
+      <p class="bb-section-note">Give a bot or app its own key instead of the one above: limit it to certain models,
+        a small context, short replies and a request rate, and revoke it any time without touching anything else.</p>
+
+      <form class="bb-key-form" id="key-form" hidden>
+        <div class="bb-api-fields">
+          <label class="bb-api-field"><span class="bb-label">Name</span>
+            <input class="bb-input" id="kf-name" maxlength="60" required placeholder="e.g. Discord bot"></label>
+          <fieldset class="bb-api-field bb-key-models"><legend class="bb-label">Models (none ticked = all)</legend>
+            <div id="kf-models" class="bb-key-model-list"></div></fieldset>
+          <div class="bb-key-grid">
+            <label class="bb-api-field"><span class="bb-label">Context (tokens)</span>
+              <input class="bb-input" id="kf-ctx" type="number" min="256" step="256" value="4096"></label>
+            <label class="bb-api-field"><span class="bb-label">Max reply (tokens)</span>
+              <input class="bb-input" id="kf-out" type="number" min="16" step="16" value="512"></label>
+            <label class="bb-api-field"><span class="bb-label">Requests / minute (0 = no limit)</span>
+              <input class="bb-input" id="kf-rpm" type="number" min="0" value="6"></label>
+            <label class="bb-api-field"><span class="bb-label">Requests / day (0 = no limit)</span>
+              <input class="bb-input" id="kf-rpd" type="number" min="0" value="300"></label>
+          </div>
+          <fieldset class="bb-api-field bb-key-models"><legend class="bb-label">Permissions</legend>
+            <label class="bb-key-check"><input type="checkbox" id="kf-images"> Vision: allow pictures
+              (each counts about 1,024 tokens of context)</label>
+            <label class="bb-api-field bb-key-inline"><span class="bb-label">Max pictures per request</span>
+              <input class="bb-input" id="kf-maximg" type="number" min="1" max="64" value="4"></label>
+            <label class="bb-key-check"><input type="checkbox" id="kf-audio"> Audio: allow audio input</label>
+          </fieldset>
+          <label class="bb-key-check"><input type="checkbox" id="kf-loaded"> Only answer when the model is already loaded
+            (never swaps out what you're running)</label>
+          <label class="bb-field">Character (SillyTavern card)
+            <select class="bb-input" id="kf-character"><option value="">None: the app sends its own prompt</option></select>
+            <small>Read live from SillyTavern on every request and used as the system prompt; the app's own system prompt is ignored.</small></label>
+          <label class="bb-field">System prompt additions
+            <textarea class="bb-input" id="kf-extra" rows="5" maxlength="8000" placeholder="Rules added to the system prompt on every request (after the character card)"></textarea>
+            <small>Always sent, after the card. The app can't change or remove it.</small></label>
+          <label class="bb-key-check"><input type="checkbox" id="kf-thinking" checked> Thinking: let the model think before answering
+            (off = direct replies; thinking counts toward the reply limit)</label>
+        </div>
+        <div class="bb-key-actions">
+          <button type="submit" class="bb-api-button is-primary" id="kf-submit">Create key</button>
+          <button type="button" class="bb-api-button" id="kf-cancel">Cancel</button>
+        </div>
+      </form>
+
+      <div class="bb-key-created" id="key-created" hidden>
+        <p><strong>Copy this key now.</strong> It won't be shown again.</p>
+        <div class="bb-api-copyrow">
+          <code id="key-token"></code>
+          <button type="button" class="bb-api-button" data-copy="key-token">Copy</button>
+        </div>
+      </div>
+
+      <ul class="bb-key-list" id="key-list" aria-live="polite"></ul>
+    </section>
+
     <section class="bb-section" aria-labelledby="snippets-heading">
       <div class="bb-section-head">
         <h2 id="snippets-heading">Use it</h2>

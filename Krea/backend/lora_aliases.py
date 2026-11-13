@@ -13,7 +13,7 @@ from .config import settings
 
 PATH = settings.data_dir / 'lora-trigger-aliases.json'
 _lock = threading.RLock()
-_data: dict[str, list[dict[str, Any]]] = {'krea': [], 'qwen': [], 'moss': [], 'anima': []}
+_data: dict[str, list[dict[str, Any]]] = {'krea': [], 'qwen': [], 'moss': [], 'anima': [], 'h3image': []}
 _loaded = False
 
 
@@ -38,7 +38,7 @@ def _save() -> None:
 
 def get(model: str) -> list[dict[str, Any]]:
     if model not in _data:
-        raise ValueError('Choose Krea 2, Qwen-Image 2.1, MOSS-Image, or Anima')
+        raise ValueError('Choose Krea 2, Qwen-Image 2.1, MOSS-Image, Anima, or MiniMax H3 Image')
     with _lock:
         _load()
         return [dict(entry) for entry in _data[model]]

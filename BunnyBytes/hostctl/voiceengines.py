@@ -52,6 +52,20 @@ SPECS = {
                     "model": LEGACY / "FishDrama3/checkpoints", "files": (DRAMA3_GGUF,),
                     "source": LEGACY / "FishDrama3/audio.cpp", "git": "https://github.com/0xShug0/audio.cpp.git",
                     "ref": "0df48c7c6d79cdd8995a75531449b953c7f6bb7f", "native": True},
+    # Fast English cloning for chat TTS (SillyTavern). A PyPI package (no git checkout): its own
+    # venv with ROCm torch, chatterbox-tts without deps (its pins would pull CUDA torch 2.6).
+    "chatterbox_turbo": {"name": "Chatterbox Turbo", "repo": "ResembleAI/chatterbox-turbo",
+                         "model": LEGACY / "ChatterboxTurbo/checkpoints",
+                         "files": ("ve.safetensors", "t3_turbo_v1.safetensors", "s3gen_meanflow.safetensors",
+                                   "tokenizer_config.json"),
+                         "source": LEGACY / "ChatterboxTurbo", "pip": "chatterbox-tts==0.1.7",
+                         "deps": ("numpy<2", "librosa==0.11.0", "s3tokenizer", "transformers==5.2.0",
+                                  "diffusers==0.29.0", "resemble-perth>=1.0.0", "conformer==0.3.2",
+                                  "safetensors==0.5.3", "pyloudnorm", "omegaconf", "pykakasi==2.3.0", "soundfile"),
+                         # Only what tts_turbo loads (skips the 1 GB non-meanflow s3gen).
+                         "allow": ("ve.safetensors", "t3_turbo_v1.safetensors", "s3gen_meanflow.safetensors",
+                                   "conds.pt", "*.json", "*.txt"),
+                         "python": "python3.11", "torch": "2.8.0", "rocm": "rocm6.4"},
 }
 
 
@@ -83,6 +97,10 @@ def _ready(engine: str) -> tuple[bool, bool]:
     source = spec["source"]
     if spec.get("native"):
         return weights, DRAMA3_SERVER.is_file() and (VOICE / ".worker-venv/bin/python").is_file() and WORKER_READY.is_file()
+    if spec.get("pip"):
+        package = spec["pip"].split("==")[0].replace("-", "_")
+        installed = any((source / ".venv/lib").glob(f"python3*/site-packages/{package}-*.dist-info"))
+        return weights, (installed and (VOICE / ".worker-venv/bin/python").is_file() and WORKER_READY.is_file())
     backend = ((source / ".venv/bin/python").is_file() and (source / "pyproject.toml").is_file()
                and (VOICE / ".worker-venv/bin/python").is_file() and WORKER_READY.is_file())
     return weights, backend
@@ -117,16 +135,60 @@ def _flash_status() -> dict:
             "running": _active("qwen3-flash"), "phase": meta.get("phase", ""), "error": meta.get("error", "")}
 
 
+_SIZES: dict[str, tuple[float, int]] = {}
+SIZE_TTL = 600
+
+
+def _tree_size(path: Path) -> int:
+    """Bytes on disk under `path` (files counted once; symlinks not followed)."""
+    total, seen, stack = 0, set(), [path]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            info = entry.stat(follow_symlinks=False)
+                            if (info.st_dev, info.st_ino) not in seen:
+                                seen.add((info.st_dev, info.st_ino))
+                                total += info.st_blocks * 512
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
+def _engine_size(engine: str, fresh: bool = False) -> int:
+    """Disk use of one engine: its folder (backend + checkpoints) or, for the Qwen models that run
+    in the Voice image, the checkpoint folder. Cached for ten minutes (venvs have many files)."""
+    spec = SPECS[engine]
+    root = spec.get("source") or spec["model"]
+    if engine == "fish_drama3":
+        root = LEGACY / "FishDrama3"
+    cached = _SIZES.get(engine)
+    if not fresh and cached and time.time() - cached[0] < SIZE_TTL:
+        return cached[1]
+    size = _tree_size(Path(root)) if Path(root).exists() else 0
+    _SIZES[engine] = (time.time(), size)
+    return size
+
+
 def status() -> dict:
     engines = []
     for engine, spec in SPECS.items():
         weights, backend = _ready(engine)
         meta = _read(engine)
+        # A finished install changes the folder: measure again instead of serving the cache.
+        fresh = meta.get("finished", 0) > _SIZES.get(engine, (0, 0))[0]
         engines.append({"id": engine, "name": spec["name"], "repo": spec["repo"],
                         "weights": weights, "backend": backend, "installed": weights and backend,
                         "running": _active(engine), "phase": meta.get("phase", ""),
                         "error": meta.get("error", ""), "path": str(spec["model"]),
                         "creates_voices": bool(spec.get("creates_voices")),
+                        "size": _engine_size(engine, fresh),
                         **({"deepspeed": _deepspeed_status()} if engine == "indextts2" else {}),
                         **({"flash": _flash_status()} if engine == "qwen3" else {})})
     return {"engines": engines}
@@ -176,6 +238,31 @@ def _backend(engine: str, log) -> None:
         _command([str(python), "-m", "pip", "install", "fastapi", "uvicorn", "python-multipart"], log)
     # An interrupted pip install must not be reported as a complete backend.
     _command([str(python), "-c", "import torch; assert torch.version.hip; import huggingface_hub"], log)
+
+
+def _pip_backend(engine: str, log) -> None:
+    """A PyPI engine in its own venv: ROCm torch first, then the package without its deps (its
+    torch pin would replace the ROCm build), then the deps it needs, then an import check."""
+    spec = SPECS[engine]
+    source = spec["source"]
+    python = source / ".venv/bin/python"
+    module = spec["pip"].split("==")[0].split("-")[0]
+    if python.is_file():
+        valid = subprocess.run([str(python), "-c", f"import torch, {module}; assert torch.version.hip"],
+                               capture_output=True, timeout=60)
+        if valid.returncode == 0:
+            return
+    else:
+        source.mkdir(parents=True, exist_ok=True)
+        _write(engine, phase="installing backend")
+        _command([PYTHON311, "-m", "venv", str(source / ".venv")], log)
+    _write(engine, phase="installing backend")
+    _command([str(python), "-m", "pip", "install", "--upgrade", "pip"], log)
+    _command([str(python), "-m", "pip", "install", f"torch=={spec['torch']}", f"torchaudio=={spec['torch']}",
+              "--index-url", f"https://download.pytorch.org/whl/{spec['rocm']}"], log)
+    _command([str(python), "-m", "pip", "install", "--no-deps", spec["pip"]], log)
+    _command([str(python), "-m", "pip", "install", *spec.get("deps", ())], log)
+    _command([str(python), "-c", f"import torch; assert torch.version.hip; import {module}"], log)
 
 
 def _native_backend(engine: str, log) -> None:
@@ -239,7 +326,7 @@ def install(engine: str) -> int:
         try:
             if engine not in ("qwen3", "qwen3_design"):
                 _write(engine, phase="preparing backend", error="")
-                (_native_backend if spec.get("native") else _backend)(engine, log)
+                (_native_backend if spec.get("native") else _pip_backend if spec.get("pip") else _backend)(engine, log)
                 _write(engine, phase="installing Voice worker")
                 _worker_backend(log)
             _write(engine, phase="downloading model", error="")
@@ -252,7 +339,7 @@ def install(engine: str) -> int:
             if not weights:
                 # Native engines ship several quant files; fetch only the one Rocsy runs.
                 _command([str(_hub_python(log)), "-c", script, spec["repo"], str(model),
-                          *(spec["files"] if spec.get("native") else ())], log)
+                          *(spec["files"] if spec.get("native") else spec.get("allow", ()))], log)
             weights, backend = _ready(engine)
             if not weights or not backend:
                 raise RuntimeError("Required backend or checkpoint files are missing after download")

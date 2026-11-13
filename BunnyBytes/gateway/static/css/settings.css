@@ -902,3 +902,25 @@ button.bb-conn-stat:focus-visible { outline: 2px solid var(--bb-blue); outline-o
 @media (max-width: 640px) { .bb-loc-card { grid-template-columns: 1fr; } .bb-loc-actions { flex-wrap: wrap; } .bb-loc-drive { flex: 1 1 140px; } }
 .bb-loc-defaults .bb-section-note { margin: 0; font-weight: 400; font-size: 0.78rem; }
 .bb-loc-picker { grid-template-columns: minmax(0, 1fr); } .bb-loc-picker > * { min-width: 0; }
+
+.bb-loc-outputs { display: grid; gap: 6px; margin-bottom: 12px; }
+.bb-loc-out { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 14px; padding: 9px 12px; border: 1px solid var(--bb-border); border-radius: 9px; background: var(--bb-panel-alt); font-size: 0.86rem; }
+.bb-loc-out > span { color: var(--bb-muted); font-size: 0.8rem; overflow-wrap: anywhere; }
+.bb-loc-out.is-offline { border-style: dashed; }
+.bb-loc-out.is-offline > span { color: var(--bb-red); }
+.bb-loc-outputs-row { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.bb-loc-outputs-row .bb-field { flex: 1 1 220px; margin: 0; }
+.bb-loc-outputs-job { display: grid; gap: 7px; margin-top: 12px; padding: 11px 13px; border: 1px solid var(--bb-border); border-radius: 10px; background: var(--bb-panel-alt); font-size: 0.86rem; }
+.bb-loc-outputs-job .bb-loc-facts { margin: 0; }
+.bb-loc-outputs-job[data-kind="error"] { border-color: color-mix(in srgb, var(--bb-red) 50%, var(--bb-border)); }
+.bb-loc-outputs-job .bb-button { justify-self: start; }
+
+.bb-loc-edit { grid-column: 1 / -1; display: grid; gap: 10px; padding-top: 10px; border-top: 1px solid var(--bb-border); }
+.bb-loc-edit .bb-field { margin: 0; max-width: 360px; }
+.bb-loc-holds { display: grid; grid-template-columns: repeat(2, minmax(0, max-content)); gap: 6px 28px; align-items: center; }
+.bb-loc-holds-h { color: var(--bb-muted); font-size: 0.76rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.bb-loc-holds .bb-section-note { margin: 0; font-size: 0.78rem; }
+.bb-loc-edit .bb-rules-actions { align-items: center; }
+.bb-loc-addholds { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 8px 12px; border: 1px solid var(--bb-border); border-radius: 9px; }
+.bb-loc-addholds legend { padding: 0 4px; color: var(--bb-muted); font-size: 0.8rem; }
+@media (max-width: 640px) { .bb-loc-holds { grid-template-columns: 1fr 1fr; gap: 6px 12px; } }

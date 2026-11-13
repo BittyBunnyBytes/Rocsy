@@ -233,3 +233,27 @@
   .bb-api-tabs { width: 100%; flex-wrap: nowrap; }
   .bb-api-tab { flex: 1; padding: 6px 4px; font-size: 0.82rem; }
 }
+
+
+/* Keys for other apps (llama_keys.py). */
+.bb-key-form { margin: 0 0 16px; padding: 16px; border: 1px solid var(--bb-border); border-radius: 10px; }
+.bb-key-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.bb-key-models { border: 0; padding: 0; margin: 0; }
+.bb-key-model-list { display: flex; flex-wrap: wrap; gap: 6px 14px; max-height: 180px; overflow: auto; }
+.bb-key-model-list label, .bb-key-check { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; }
+.bb-key-actions { display: flex; gap: 8px; margin-top: 14px; }
+.bb-api-button.is-primary { background: var(--bb-blue); color: var(--bb-bg, #0f1418); border-color: var(--bb-blue); }
+.bb-key-created { margin: 0 0 16px; padding: 14px; border: 1px solid var(--bb-green); border-radius: 10px; }
+.bb-key-created p { margin: 0 0 8px; }
+.bb-key-created code { word-break: break-all; }
+.bb-key-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.bb-key-item { border: 1px solid var(--bb-border); border-radius: 10px; padding: 12px 14px; }
+.bb-key-item.is-revoked { opacity: 0.55; }
+.bb-key-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.bb-key-name { font-weight: 600; }
+.bb-key-hint { font-family: ui-monospace, monospace; color: var(--bb-muted); font-size: 0.85rem; margin-left: 8px; }
+.bb-key-meta { margin: 6px 0 0; color: var(--bb-muted); font-size: 0.85rem; line-height: 1.5; }
+.bb-key-buttons { display: flex; gap: 6px; }
+.bb-key-badge { font-size: 0.75rem; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--bb-red); color: var(--bb-red); }
+.bb-key-empty { color: var(--bb-muted); font-size: 0.9rem; }
+.bb-key-inline { max-width: 220px; margin: 4px 0 6px 24px; }

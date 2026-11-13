@@ -97,6 +97,7 @@ HF_BASE_REPOS = {
     "Qwen 2.1": ["Qwen/Qwen-Image-2.1", "Comfy-Org/Qwen-Image-2.1"],
     "Qwen": ["Qwen/Qwen-Image", "Qwen/Qwen-Image-2512", "Qwen/Qwen-Image-Edit-2511", "Qwen/Qwen-Image-Edit-2509"],
     "MiniMax H3": ["MiniMaxAI/MiniMax-H3", "Comfy-Org/MiniMax-H3"],
+    "MiniMax H3 Image": ["MiniMaxAI/MiniMax-H3-Image", "Comfy-Org/MiniMax-H3-Image"],
     "LTXV 2.5": ["Lightricks/LTX-2.5"], "LTXV 2.3": ["Lightricks/LTX-2.3"], "LTXV2": ["Lightricks/LTX-2"],
     "LTXV": ["Lightricks/LTX-Video"], "Anima": ["circlestone-labs/Anima"],
     "Wan Video 2.2 I2V-A14B": ["Wan-AI/Wan2.2-I2V-A14B", "Wan-AI/Wan2.2-I2V-A14B-Diffusers"],

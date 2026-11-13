@@ -5,6 +5,7 @@
       "github": "owner/repo",                 GitHub releases (latest release; tags if it has none)
       "url": "https://… or /Name/api/latest", any JSON feed: {"version"|"tag_name", "url"|"html_url", "notes"|"body"}
       "current_url": "/Name/api/version",     the running app reports its own version (beats "version")
+      "current_key": "pkgVersion",            the field of that reply holding it (default version / tag_name)
       "prereleases": false                    GitHub only: count pre-releases too
     }
 
@@ -33,6 +34,11 @@ def clean(updates: object) -> dict[str, Any] | None:
         raise ValueError('updates must be an object like {"github": "owner/repo"}')
     github, url = str(updates.get("github") or "").strip(), str(updates.get("url") or "").strip()
     current_url = str(updates.get("current_url") or "").strip()
+    current_key = str(updates.get("current_key") or "").strip()
+    if current_key and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,39}", current_key):
+        raise ValueError("updates.current_key must be a field name like pkgVersion")
+    if current_key and not current_url:
+        raise ValueError("updates.current_key needs updates.current_url")
     if github and url:
         raise ValueError("updates: use either github or url, not both")
     if github and not GITHUB_REPO.match(github.removeprefix("https://github.com/").strip("/")):
@@ -45,7 +51,7 @@ def clean(updates: object) -> dict[str, Any] | None:
     if not github and not url and not current_url:
         return None
     return {"github": github.removeprefix("https://github.com/").strip("/"), "url": url,
-            "current_url": current_url, "prereleases": bool(updates.get("prereleases"))}
+            "current_url": current_url, "current_key": current_key, "prereleases": bool(updates.get("prereleases"))}
 
 
 def _numbers(version: str) -> tuple[int, ...] | None:
@@ -151,7 +157,8 @@ async def check(key: str, config: dict[str, Any], upstream: str, force: bool = F
             async with httpx.AsyncClient(timeout=10.0) as client:
                 if updates["current_url"]:
                     try:
-                        reported = _pick(await _json(client, f"{upstream}{updates['current_url']}"), "version", "tag_name")
+                        keys = (updates["current_key"],) if updates.get("current_key") else ("version", "tag_name")
+                        reported = _pick(await _json(client, f"{upstream}{updates['current_url']}"), *keys)
                         if reported:
                             result["current"] = current = reported
                     except (httpx.HTTPError, LookupError, ValueError):

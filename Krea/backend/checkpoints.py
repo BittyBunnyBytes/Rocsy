@@ -1,4 +1,4 @@
-"""Installed Krea 2 and Qwen Image 2.1 diffusion models from ComfyUI."""
+"""Installed Krea 2, Qwen Image 2.1, MOSS-Image and MiniMax H3 Image diffusion models from ComfyUI."""
 from __future__ import annotations
 
 import json
@@ -8,18 +8,21 @@ from typing import Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from .comfy import ComfyService
 from .config import settings
-from .models import MODEL_LUSTIFY, MODEL_MOSS, MODEL_QWEN_IMAGE_21, QWEN_ABLITERATED_GGUF
+from .models import MODEL_H3_IMAGE, MODEL_LUSTIFY, MODEL_MOSS, MODEL_QWEN_IMAGE_21, QWEN_ABLITERATED_GGUF
 
 # File name -> family for models whose names don't say which base they are,
 # reported by Rocsy Models from the download's base model (see register()).
 REGISTRY = settings.data_dir / "checkpoint-families.json"
-FAMILIES = ("krea2", "qwen_image_21", MODEL_MOSS)
+FAMILIES = ("krea2", "qwen_image_21", MODEL_MOSS, MODEL_H3_IMAGE)
 
 DEFAULTS = {
     "krea2": "krea2_turbo_int8_convrot.safetensors",
     MODEL_LUSTIFY: "lustifyNSFWCheckpoint_v10Krea2_fp8.safetensors",
     MODEL_QWEN_IMAGE_21: "qwen_image_2.1_int8_convrot.safetensors",
     MODEL_MOSS: "moss_image_sft_int8_convrot.safetensors",
+    # Comfy-Org's W4A8 (12.5 GB) fits the 24 GB card with room for 2048x2048 latents;
+    # the int8 one (21 GB) is the official template's default.
+    MODEL_H3_IMAGE: "minimax_h3_image_pruned_w4a8.safetensors",
 }
 _EXTENSIONS = (".safetensors", ".ckpt", ".pt", ".pth", ".gguf")
 # ComfyUI-GGUF's loader lists .gguf diffusion models (what Models downloads for GGUF repos).
@@ -71,6 +74,11 @@ def family(filename: str, registered: dict[str, str] | None = None) -> str | Non
         return "qwen_image_21"
     if re.search(r"moss[._ -]*image", name):
         return MODEL_MOSS
+    # Pruna's p-h3-image is a different model (PH3ImageConditioning, 2912 px), not supported here.
+    if re.search(r"(^|[^a-z0-9])p[._ -]?h3[._ -]*image", name):
+        return None
+    if re.search(r"h3[._ -]*image", name):
+        return MODEL_H3_IMAGE
     if re.search(r"krea[._ -]*2|lustify", name):
         return "krea2"
     return None
@@ -117,7 +125,7 @@ async def installed(comfy: ComfyService) -> dict[str, list[str]]:
 
 
 def resolve(model: str, selected: str | None, found: dict[str, list[str]]) -> str:
-    group = MODEL_MOSS if model == MODEL_MOSS else "qwen_image_21" if model == MODEL_QWEN_IMAGE_21 else "krea2"
+    group = model if model in (MODEL_MOSS, MODEL_QWEN_IMAGE_21, MODEL_H3_IMAGE) else "krea2"
     options = found[group]
     if selected:
         if selected not in options:

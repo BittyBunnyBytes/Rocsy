@@ -6,7 +6,7 @@ import random
 import time
 from typing import Any
 
-from . import anima, moss, qwen
+from . import anima, h3image, moss, qwen
 from .checkpoints import loader_node
 from .config import Settings
 from .models import (
@@ -20,6 +20,8 @@ from .models import (
     TURBO_LORAS,
     MODEL_ANIMA,
     MODEL_MOSS,
+    MODEL_H3_IMAGE,
+    H3_IMAGE_MAX_SIDE,
     GenerationRequest,
 )
 
@@ -88,6 +90,11 @@ def build_workflow(config: Settings, request: GenerationRequest, seed: int | Non
             raise GenerationError("workflow_incompatible", str(exc)) from exc
     if request.model == MODEL_ANIMA:
         return anima.build_workflow(request, seed), seed, "render"
+    if request.model == MODEL_H3_IMAGE:
+        try:
+            return h3image.build_workflow(request, seed, config.h3_image_clip_name, config.h3_image_vae_name), seed, "render"
+        except ValueError as exc:
+            raise GenerationError("workflow_incompatible", str(exc)) from exc
     if request.model == MODEL_MOSS:
         try:
             return moss.build_workflow(request, seed, config.moss_clip_name, config.moss_vae_name,
@@ -140,7 +147,8 @@ def build_enhanced_workflows(config: Settings, request: GenerationRequest, seed:
         enhanced = qwen.parse_enhancer_output(enhancer_text)
     except qwen.QwenWorkflowError as exc:
         raise GenerationError("enhancer_failed", str(exc)) from exc
-    width, height = qwen.resolve_krea_size(request, enhanced)
+    width, height = qwen.resolve_krea_size(request, enhanced,
+                                           H3_IMAGE_MAX_SIDE if request.model == MODEL_H3_IMAGE else qwen.MAX_SIZE)
     render_request = request.model_copy(update={
         "prompt": enhanced.prompt,
         "width": width,
@@ -149,6 +157,9 @@ def build_enhanced_workflows(config: Settings, request: GenerationRequest, seed:
     })
     if request.model == MODEL_ANIMA:
         builder = lambda current_seed: anima.build_workflow(render_request, current_seed)
+    elif request.model == MODEL_H3_IMAGE:
+        builder = lambda current_seed: h3image.build_workflow(render_request, current_seed, config.h3_image_clip_name,
+                                                              config.h3_image_vae_name)
     elif request.model == MODEL_MOSS:
         builder = lambda current_seed: moss.build_workflow(render_request, current_seed, config.moss_clip_name,
                                                            config.moss_vae_name, config.moss_workflow_path,
@@ -165,6 +176,8 @@ def display_size(request: GenerationRequest) -> tuple[int, int]:
         return qwen.resolve_size(request) or qwen.reference_output_size(request) or request.normalized_size()
     if request.model == MODEL_MOSS:
         return moss.output_size(request)
+    if request.model == MODEL_H3_IMAGE:
+        return h3image.output_size(request)
     return request.normalized_size()
 
 

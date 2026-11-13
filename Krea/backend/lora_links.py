@@ -126,15 +126,18 @@ def _compatibility(value: str, model: str) -> bool:
     qwen = 'qwen' in text
     moss = 'moss' in text
     anima = 'anima' in text
-    if krea or qwen or moss or anima:
-        return {'krea': krea, 'qwen': qwen, 'moss': moss, 'anima': anima}[model]
+    # MiniMax H3 Image LoRAs; a plain "MiniMax H3" LoRA is for the video model and fits none of these.
+    h3image = bool(re.search(r'h3[\s_.-]*image', text))
+    h3 = 'h3' in text
+    if krea or qwen or moss or anima or h3:
+        return {'krea': krea, 'qwen': qwen, 'moss': moss, 'anima': anima, 'h3image': h3image}[model]
     return True
 
 
 async def inspect(url: str, model: str, token: str) -> dict[str, Any]:
     provider = source_kind(url)
-    if model not in {"krea", "qwen", "moss", "anima"}:
-        raise ValueError("Choose Krea 2, Qwen-Image 2.1, MOSS-Image, or Anima")
+    if model not in {"krea", "qwen", "moss", "anima", "h3image"}:
+        raise ValueError("Choose Krea 2, Qwen-Image 2.1, MOSS-Image, Anima, or MiniMax H3 Image")
     if provider == "civitai":
         return await _civitai(url, model, token)
     return await _huggingface(url, model, token)

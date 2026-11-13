@@ -34,11 +34,16 @@ FISH_S2_MODEL = FISH_S2_ROOT / "checkpoints/s2-pro"
 DRAMA3_MODEL = DRAMA3_ROOT / "checkpoints"
 DRAMA3_GGUF = "drama-3-backbone-8bit-experts-Q3_K_S.gguf"
 DRAMA3_SERVER_BIN = DRAMA3_ROOT / "audio.cpp/build/linux-hip-release/bin/audiocpp_server"
+CHATTERBOX_ROOT = ROOT / "models" / "legacy" / "ChatterboxTurbo"
+CHATTERBOX_PYTHON = CHATTERBOX_ROOT / ".venv/bin/python"
+CHATTERBOX_MODEL = CHATTERBOX_ROOT / "checkpoints"
+CHATTERBOX_FILES = ["ve.safetensors", "t3_turbo_v1.safetensors", "s3gen_meanflow.safetensors", "tokenizer_config.json"]
 
 ENGINE_NAMES = {
     "indextts2": "IndexTTS2",
     "fish_s2": "Fish Audio S2 Pro",
     "fish_drama3": "Fish Audio Drama 3",
+    "chatterbox_turbo": "Chatterbox Turbo",
 }
 GENERATION_LOCK = threading.Lock()
 # sitecustomize.py in here applies ROCSY_SDPA_BACKEND inside the engines' own Python processes.
@@ -273,20 +278,114 @@ class _Drama3Server(_FishS2Server):
         output.write_bytes(audio)
 
 
+class _ChatterboxServer(_FishS2Server):
+    """Own the resident Chatterbox Turbo process (chatterbox_server.py in its own venv).
+
+    Unlike the other engines it can stay loaded between jobs (Settings -> Keep loaded) so chat
+    TTS (SillyTavern) answers without a model load; an idle timer and any other engine's job
+    unload it again."""
+
+    key = "chatterbox_turbo"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._last_used = 0.0
+        self._keep_s = 0.0
+        threading.Thread(target=self._reaper, daemon=True).start()
+
+    def _reaper(self) -> None:
+        while True:
+            time.sleep(15)
+            with self._lock:
+                idle = time.monotonic() - self._last_used
+                # Only a keep-loaded window expires here; without one, the job's /eject unloads it.
+                if self._process is not None and self._keep_s > 0 and idle > self._keep_s \
+                        and not GENERATION_LOCK.locked():
+                    self._stop_locked()
+
+    def keep_for(self, seconds: float) -> None:
+        with self._lock:
+            self._keep_s = max(0.0, float(seconds))
+            self._last_used = time.monotonic()
+
+    def ensure(self, device: str, settings: dict, log: Callable[[str], None]) -> None:
+        runtime_key = (device,)
+        with self._lock:
+            self._last_used = time.monotonic()
+            if self._process is not None and self._process.poll() is None and self._runtime_key == runtime_key:
+                return
+            self._stop_locked()
+            self._logs = []
+            self._port = self._free_port()
+            self._process = subprocess.Popen(
+                [str(CHATTERBOX_PYTHON), str(Path(__file__).resolve().parent / "chatterbox_server.py"),
+                 "--port", str(self._port), "--device", device, "--model-dir", str(CHATTERBOX_MODEL)],
+                cwd=CHATTERBOX_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                errors="replace", start_new_session=True,
+                env={**os.environ, "PYTHONUNBUFFERED": "1", "HF_HUB_OFFLINE": "1", "TQDM_DISABLE": "1",
+                     # MIOpen's exhaustive search costs seconds per new audio length on ROCm.
+                     "MIOPEN_FIND_MODE": os.environ.get("MIOPEN_FIND_MODE", "FAST"), **_attention_env(settings)},
+            )
+            self._runtime_key = runtime_key
+            threading.Thread(target=self._read_logs, args=(self._process,), daemon=True).start()
+
+        log("Starting Chatterbox Turbo; loading the model once into VRAM")
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            with self._lock:
+                process = self._process
+                logs = self._logs[-12:]
+            if process is None or process.poll() is not None:
+                self.stop()
+                raise RuntimeError("Chatterbox Turbo stopped during startup:\n" + "\n".join(logs))
+            try:
+                self._request("/health", timeout=2)
+                log("Chatterbox Turbo is loaded and ready")
+                return
+            except (HTTPError, URLError, TimeoutError, OSError):
+                time.sleep(0.3)
+        self.stop()
+        raise RuntimeError("Chatterbox Turbo did not become ready within three minutes")
+
+    def synthesize(self, segment: Segment, voice: dict, output: Path, settings: dict,
+                   log: Callable[[str], None]) -> None:
+        payload = {"text": segment.text, "reference": str(voice["audio_path"])}
+        for key in ("temperature", "top_p", "top_k", "repetition_penalty", "min_p", "exaggeration",
+                    "seed", "norm_loudness"):
+            if key in settings:
+                payload[key] = settings[key]
+        try:
+            audio = self._request("/tts", payload, timeout=600)
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[-2000:]
+            raise RuntimeError(f"Chatterbox Turbo request failed ({exc.code}): {detail}") from exc
+        finally:
+            with self._lock:
+                self._last_used = time.monotonic()
+        if len(audio) <= 44 or audio[:4] != b"RIFF":
+            raise RuntimeError("Chatterbox Turbo returned no audio")
+        output.write_bytes(audio)
+
+
 FISH_S2_SERVER = _FishS2Server()
 DRAMA3_SERVER = _Drama3Server()
+CHATTERBOX_SERVER = _ChatterboxServer()
 atexit.register(FISH_S2_SERVER.stop)
 atexit.register(DRAMA3_SERVER.stop)
+atexit.register(CHATTERBOX_SERVER.stop)
+SERVERS = (FISH_S2_SERVER, DRAMA3_SERVER, CHATTERBOX_SERVER)
 
 
 def loaded_model_status() -> dict:
     """Return models intentionally kept alive by BunnyVoice."""
-    return {**FISH_S2_SERVER.status(), **DRAMA3_SERVER.status()}
+    return {key: value for server in SERVERS for key, value in server.status().items()}
 
 
-def unload_models() -> dict:
-    """Release all persistent model processes. Safe to call repeatedly."""
-    return {"unloaded": [server.key for server in (FISH_S2_SERVER, DRAMA3_SERVER) if server.stop()]}
+def unload_models(keep: tuple[str, ...] = (), keep_seconds: float = 0) -> dict:
+    """Release persistent model processes, except the ones in `keep` (Chatterbox's keep-loaded
+    window: its idle timer unloads it later). Safe to call repeatedly."""
+    CHATTERBOX_SERVER.keep_for(keep_seconds if CHATTERBOX_SERVER.key in keep else 0)
+    return {"unloaded": [server.key for server in SERVERS if server.key not in keep and server.stop()]}
 
 
 def _split_text(text: str, max_chars: int, min_chars: int) -> list[str]:
@@ -347,6 +446,7 @@ def model_file_statuses() -> list[dict]:
         ("indextts2", INDEX_PYTHON, INDEX_MODEL, ["gpt.pth", "s2mel.pth"]),
         ("fish_s2", FISH_S2_PYTHON, FISH_S2_MODEL, ["codec.pth", "model.safetensors.index.json"]),
         ("fish_drama3", DRAMA3_SERVER_BIN, DRAMA3_MODEL, [DRAMA3_GGUF]),
+        ("chatterbox_turbo", CHATTERBOX_PYTHON, CHATTERBOX_MODEL, CHATTERBOX_FILES),
     ]
     return [
         {
@@ -408,6 +508,7 @@ def model_statuses() -> list[dict]:
     quick = model_file_statuses()
     specs = [(item["id"], {
         "indextts2": INDEX_PYTHON, "fish_s2": FISH_S2_PYTHON, "fish_drama3": DRAMA3_SERVER_BIN,
+        "chatterbox_turbo": CHATTERBOX_PYTHON,
     }[item["id"]], item["ready"]) for item in quick]
     def probe(spec) -> dict:
         key, python, ready = spec
@@ -484,6 +585,11 @@ def _fish_s2(segment: Segment, voice: dict, output: Path, device: str, settings:
 def _fish_drama3(segment: Segment, voice: dict, output: Path, device: str, settings: dict, work: Path, log) -> None:
     DRAMA3_SERVER.ensure(device, settings, log)
     DRAMA3_SERVER.synthesize(segment, voice, output, settings, log)
+
+
+def _chatterbox(segment: Segment, voice: dict, output: Path, device: str, settings: dict, work: Path, log) -> None:
+    CHATTERBOX_SERVER.ensure(device, settings, log)
+    CHATTERBOX_SERVER.synthesize(segment, voice, output, settings, log)
 
 
 def _silence(path: Path, seconds: float) -> None:
@@ -613,8 +719,11 @@ def generate_script(script: str, engine: str, voice_id: str, device_request: str
         raise ValueError("The script contains no speech")
     if engine == "fish_drama3":
         device = "cuda"  # audio.cpp's HIP backend; it has no CPU mode in Rocsy
+    elif engine == "chatterbox_turbo" and CHATTERBOX_SERVER.status()[CHATTERBOX_SERVER.key]:
+        device = CHATTERBOX_SERVER._runtime_key[0]  # resident: skip the ~7 s torch import probe
     else:
-        device = resolve_device({"indextts2": INDEX_PYTHON, "fish_s2": FISH_S2_PYTHON}[engine], device_request)
+        device = resolve_device({"indextts2": INDEX_PYTHON, "fish_s2": FISH_S2_PYTHON,
+                                 "chatterbox_turbo": CHATTERBOX_PYTHON}[engine], device_request)
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     output = OUTPUTS_DIR / f"{engine}-{time.strftime('%Y%m%d-%H%M%S')}.wav"
 
@@ -638,6 +747,8 @@ def generate_script(script: str, engine: str, voice_id: str, device_request: str
                         index_tasks.append((segment, voice, part))
                     else:
                         _index(segment, voice, part, device, settings, lambda line: update("Generating", max(2, int(index / total * 85)), line))
+                elif engine == "chatterbox_turbo":
+                    _chatterbox(segment, voice, part, device, settings, work / f"cb-{index}", lambda line: update("Generating", max(2, int(index / total * 85)), line))
                 elif engine == "fish_s2":
                     _fish_s2(segment, voice, part, device, settings, work / f"s2-{index}", lambda line: update("Generating", max(2, int(index / total * 85)), line))
                 else:

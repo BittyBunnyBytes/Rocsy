@@ -362,6 +362,7 @@ class Library:
 # File name -> Civitai base model name, for model files Civitai can't identify.
 BASE_PATTERNS = [
     (r"krea.?2", "Krea 2"), (r"qwen.?image.?2[._]?1", "Qwen 2.1"), (r"qwen.?image", "Qwen"),
+    (r"minimax.?h3.?image|(^|[_\-])h3.?image", "MiniMax H3 Image"),
     (r"minimax.?h3|h3.?eros|(^|[_\-])h3[_\-]", "MiniMax H3"), (r"ltx.?2[._]?5", "LTXV 2.5"),
     (r"ltx.?2[._]?3", "LTXV 2.3"), (r"ltx.?2(?![._]?\d)", "LTXV2"), (r"ltx.?video", "LTXV"), (r"anima", "Anima"),
     (r"wan.?2[._]?2.*i2v", "Wan Video 2.2 I2V-A14B"), (r"wan.?2[._]?2.*t2v", "Wan Video 2.2 T2V-A14B"),

@@ -155,8 +155,8 @@ def install(path: Path, model: str, label: str, *, source: str = 'upload',
             source_job_id: str = '', triggers: list[str] | None = None,
             suggested_filename: str = '', cancel_check: Callable[[], bool] | None = None) -> dict[str, Any]:
     initialize()
-    if model not in {'krea', 'qwen', 'moss', 'anima'}:
-        raise ValueError('Choose Krea 2, Qwen-Image 2.1, MOSS-Image, or Anima')
+    if model not in {'krea', 'qwen', 'moss', 'anima', 'h3image'}:
+        raise ValueError('Choose Krea 2, Qwen-Image 2.1, MOSS-Image, Anima, or MiniMax H3 Image')
     label = label.strip()[:100]
     if not label:
         raise ValueError('Give the LoRA a name')
@@ -195,7 +195,7 @@ def install(path: Path, model: str, label: str, *, source: str = 'upload',
                 'strength_note': 'Default starting strength; adjust after testing',
                 'triggers': (triggers or [])[:12], 'description': '', 'creator': '',
                 'version': '',
-                'base_model': {'krea': 'Krea 2', 'qwen': 'Qwen-Image 2.1', 'moss': 'MOSS-Image', 'anima': 'Anima'}[model],
+                'base_model': {'krea': 'Krea 2', 'qwen': 'Qwen-Image 2.1', 'moss': 'MOSS-Image', 'anima': 'Anima', 'h3image': 'MiniMax H3 Image'}[model],
                 'url': '', 'previews': [], 'deleted': False,
             }
             _entries.append(entry)
@@ -214,8 +214,8 @@ def register(storage_name: str, model: str, label: str, *, source: str = 'models
     """Add a LoRA the Rocsy Models service downloaded (or the Trainer copied) into
     MODEL_ROOT (no copy). Registering the same file again returns its existing entry."""
     initialize()
-    if model not in {'krea', 'qwen', 'moss', 'anima'}:
-        raise ValueError('Choose Krea 2, Qwen-Image 2.1, MOSS-Image, or Anima')
+    if model not in {'krea', 'qwen', 'moss', 'anima', 'h3image'}:
+        raise ValueError('Choose Krea 2, Qwen-Image 2.1, MOSS-Image, Anima, or MiniMax H3 Image')
     if storage_name != Path(storage_name).name or not storage_name.endswith('.safetensors') or storage_name.startswith('.'):
         raise ValueError('Bad LoRA file name')
     validate_file(MODEL_ROOT / storage_name)
@@ -234,7 +234,7 @@ def register(storage_name: str, model: str, label: str, *, source: str = 'models
             'source': source, 'source_job_id': source_job_id,
             'default_strength': 1.0, 'strength_note': 'Default starting strength; adjust after testing',
             'triggers': (triggers or [])[:12], 'description': '', 'creator': '', 'version': '',
-            'base_model': {'krea': 'Krea 2', 'qwen': 'Qwen-Image 2.1', 'moss': 'MOSS-Image', 'anima': 'Anima'}[model],
+            'base_model': {'krea': 'Krea 2', 'qwen': 'Qwen-Image 2.1', 'moss': 'MOSS-Image', 'anima': 'Anima', 'h3image': 'MiniMax H3 Image'}[model],
             'url': '', 'previews': [], 'deleted': False,
             'slider': looks_like_slider(label, storage_name),
         }

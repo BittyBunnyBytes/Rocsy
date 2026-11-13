@@ -23,6 +23,16 @@ MODEL_ANIMA = "anima"
 MODEL_MOSS = "moss"
 MOSS_FAST_CHECKPOINT = "moss_image_sft_bf16.safetensors"
 MOSS_FAST_MODES = {"dmd8": ("lodestones-8step", 8), "dmad4": ("rapid-moss-4step", 4)}
+# MiniMax H3 Image (backend/h3image.py): distilled, so 6 steps at CFG 1 always (other values are
+# rejected by the official API). Tuned for ~4 MP (2048x2048); its native sizes reach ~16.9 MP
+# (4096x4096, 5024x3360, 6272x2688). References: <Picture 1>.. in the prompt, image_1 = the edit source.
+MODEL_H3_IMAGE = "h3_image"
+H3_IMAGE_STEPS = 6
+H3_IMAGE_CFG = 1.0
+H3_IMAGE_DEFAULT_SIZE = 2048
+H3_IMAGE_MAX_SIDE = 6272
+H3_IMAGE_MAX_PIXELS = 5024 * 3360
+H3_IMAGE_REFERENCE_SLOT_COUNT = 10
 ANIMA_VERSIONS = {
     "base": ("anima_baseV10.safetensors", "Base v1.0"),
     "aesthetic": ("anima_aestheticV11.safetensors", "Aesthetic v1.1"),
@@ -30,7 +40,7 @@ ANIMA_VERSIONS = {
     "preview_29": ("Anima-2.9B-preview-v1.safetensors", "2.9B preview v1"),
     "v38": ("Anima-3.8B-v1.1.safetensors", "3.8B v1.1"),
 }
-ModelId = Literal["krea2", "lustify", "qwen_image_21", "anima", "moss"]
+ModelId = Literal["krea2", "lustify", "qwen_image_21", "anima", "moss", "h3_image"]
 # DiT loaded into the template's UNETLoader per Krea-family model.
 KREA_UNET_NAMES = {
     MODEL_KREA2: "krea2_turbo_int8_convrot.safetensors",
@@ -66,16 +76,18 @@ QWEN_LORA_SLOTS = _local.QWEN_LORA_SLOTS if _local else []
 DEFAULT_QWEN_LORA_ENABLED = (False,) * len(QWEN_LORA_SLOTS)
 MOSS_LORA_SLOTS: list[str] = []
 ANIMA_LORA_SLOTS: list[str] = _local.ANIMA_LORA_SLOTS if _local else []
+H3_IMAGE_LORA_SLOTS: list[str] = []
 
 
 def lora_slots_for(model: str) -> list[str]:
     return {"krea": LORA_SLOTS, "qwen": QWEN_LORA_SLOTS,
-            "moss": MOSS_LORA_SLOTS, "anima": ANIMA_LORA_SLOTS}[model]
+            "moss": MOSS_LORA_SLOTS, "anima": ANIMA_LORA_SLOTS, "h3image": H3_IMAGE_LORA_SLOTS}[model]
 
 
 def lora_family(model: str) -> str:
     return {MODEL_KREA2: "krea", MODEL_LUSTIFY: "krea",
-            MODEL_QWEN_IMAGE_21: "qwen", MODEL_MOSS: "moss", MODEL_ANIMA: "anima"}[model]
+            MODEL_QWEN_IMAGE_21: "qwen", MODEL_MOSS: "moss", MODEL_ANIMA: "anima",
+            MODEL_H3_IMAGE: "h3image"}[model]
 
 # Per LoRA slot: display name, source page, recommended strength and trigger
 # words - shown in the LoRA list and the LoRA gallery (static/lora-gallery,
@@ -172,8 +184,8 @@ class GenerationRequest(BaseModel):
     moss_denoise: float = Field(default=0.6, ge=0.05, le=1.0)
     prompt: str = Field(min_length=1, max_length=4_000)
     # Per-model upper bounds are enforced in model_limits() below.
-    width: int = Field(default=DEFAULT_SIZE, ge=MIN_SIZE, le=QWEN_MAX_SIDE)
-    height: int = Field(default=DEFAULT_SIZE, ge=MIN_SIZE, le=QWEN_MAX_SIDE)
+    width: int = Field(default=DEFAULT_SIZE, ge=MIN_SIZE, le=H3_IMAGE_MAX_SIDE)
+    height: int = Field(default=DEFAULT_SIZE, ge=MIN_SIZE, le=H3_IMAGE_MAX_SIDE)
     seed: int | None = Field(default=None, ge=MIN_SEED, le=MAX_SEED)
     enhance: bool = False
     use_references: bool = False
@@ -235,7 +247,8 @@ class GenerationRequest(BaseModel):
     @classmethod
     def references_bounded(cls, value: list[ReferenceSlot], info: ValidationInfo) -> list[ReferenceSlot]:
         model = info.data.get("model")
-        limit = QWEN_REFERENCE_SLOT_COUNT if model == MODEL_QWEN_IMAGE_21 else MOSS_REFERENCE_SLOT_COUNT if model == MODEL_MOSS else REFERENCE_SLOT_COUNT
+        limit = (QWEN_REFERENCE_SLOT_COUNT if model == MODEL_QWEN_IMAGE_21 else MOSS_REFERENCE_SLOT_COUNT if model == MODEL_MOSS
+                 else H3_IMAGE_REFERENCE_SLOT_COUNT if model == MODEL_H3_IMAGE else REFERENCE_SLOT_COUNT)
         # Older Krea presets/jobs carry a 4th slot; drop trailing slots that are off.
         while len(value) > limit and not (value[-1].enabled and value[-1].image):
             value = value[:-1]
@@ -259,6 +272,13 @@ class GenerationRequest(BaseModel):
 
     @model_validator(mode="after")
     def model_limits(self) -> "GenerationRequest":
+        if self.model == MODEL_H3_IMAGE:
+            width, height = self.normalized_size()
+            if width * height > H3_IMAGE_MAX_PIXELS:
+                raise ValueError(f"MiniMax H3 Image supports up to {H3_IMAGE_MAX_PIXELS / 1e6:.1f} megapixels (e.g. 4096x4096 or 5472x3072).")
+            if self.speed != "standard" or self.enhance:
+                raise ValueError("MiniMax H3 Image always samples its own 6 steps; speed and the 4x upscale don't apply.")
+            return self
         if self.model == MODEL_MOSS:
             if self.width > MAX_SIZE or self.height > MAX_SIZE:
                 raise ValueError(f"MOSS-Image supports sizes up to {MAX_SIZE}px per side in this service.")
@@ -280,6 +300,8 @@ class GenerationRequest(BaseModel):
                 raise ValueError(f"Krea 2 models support sizes up to {MAX_SIZE}px per side.")
         else:
             width, height = self.normalized_size()
+            if max(width, height) > QWEN_MAX_SIDE:
+                raise ValueError(f"Qwen-Image 2.1 supports sizes up to {QWEN_MAX_SIDE}px per side.")
             if width * height > QWEN_MAX_PIXELS:
                 raise ValueError(f"Qwen-Image 2.1 supports up to {QWEN_MAX_PIXELS / 1e6:.1f} megapixels (e.g. 2048x2048 or 2752x1536).")
         return self

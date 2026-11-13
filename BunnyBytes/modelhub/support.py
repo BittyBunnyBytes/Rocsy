@@ -23,6 +23,8 @@ SKIP_DIRS = {"archive", "imports", "api examples"}
 
 # Families with a generation template in the studios: base -> (label, other names).
 STUDIOS = {
+    # Before "MiniMax H3": a repo named MiniMax-H3-Image would match the video family's name too.
+    "MiniMax H3 Image": ("Image · MiniMax H3 Image", ["H3 Image"]),
     "MiniMax H3": ("Video · MiniMax H3", []),
     "LTXV 2.5": ("Video · LTX 2.5", ["LTX 2.5"]),
     "LTXV 2.3": ("Video · LTX 2.3/2.5", ["LTX 2.3"]),  # 2.3 LoRAs load on 2.5 (sources.ALSO_WORKS_ON)

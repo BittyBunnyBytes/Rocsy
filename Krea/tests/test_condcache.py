@@ -57,3 +57,30 @@ class CondCacheWrapTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NegativeUnusedTests(unittest.TestCase):
+    """The Qwen encoder skips its negative pass only when nothing would read it."""
+
+    def flag(self, **fields) -> bool | None:
+        workflow = build_workflows(settings, GenerationRequest(model="qwen_image_21", prompt="a fox", **fields))[0][0]
+        wrapped = condcache.wrap(workflow)
+        node = next(n for n in wrapped.values() if n["inputs"].get("encoder") == "TextEncodeQwenImage21")
+        return json.loads(node["inputs"]["params"]).get("negative_unused")
+
+    def test_turbo_basic_guider(self) -> None:
+        self.assertTrue(self.flag(checkpoint="qwen_image_2.1_turbo_int8_convrot.safetensors"))
+        self.assertTrue(self.flag(checkpoint="qwen_image_2.1_turbo_int8_convrot.safetensors", use_references=True, references=REFS))
+
+    def test_ksampler_cfg(self) -> None:
+        self.assertTrue(self.flag(checkpoint="qwen_image_2.1_bf16.safetensors", cfg=1, steps=20))
+        self.assertIsNone(self.flag(checkpoint="qwen_image_2.1_bf16.safetensors", cfg=4, steps=20))
+
+    def test_unknown_model_patch_keeps_negative(self) -> None:
+        workflow = build_workflows(settings, GenerationRequest(model="qwen_image_21", prompt="a fox",
+                                   checkpoint="qwen_image_2.1_bf16.safetensors", cfg=1, steps=20))[0][0]
+        sampler = next(n for n in workflow.values() if n["class_type"] == "KSampler")
+        workflow["900"] = {"class_type": "SelfAttentionGuidance", "inputs": {"model": sampler["inputs"]["model"]}}
+        sampler["inputs"]["model"] = ["900", 0]
+        node = next(n for n in condcache.wrap(workflow).values() if n["inputs"].get("encoder") == "TextEncodeQwenImage21")
+        self.assertNotIn("negative_unused", json.loads(node["inputs"]["params"]))

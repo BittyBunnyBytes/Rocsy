@@ -164,3 +164,13 @@ auth.json
 
 # Rust build output (bunny-lock)
 /BunnyBytes/lock/target/
+
+# ---- private: never published (2026-11-13) ----
+# Cloudflare tunnels other than the example are this machine's (tunnel IDs, hostnames, credentials)
+/BunnyBytes/cloudflared/*
+!/BunnyBytes/cloudflared/README-manual-steps.md
+!/BunnyBytes/cloudflared/config.example.yml
+# SillyTavern (plugin, chats, cards, secrets), wherever it ends up
+**/sillytavern/
+**/SillyTavern/
+**/*sillytavern*/
