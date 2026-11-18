@@ -66,6 +66,7 @@ fn row_to_entry(row: &Row<'_>) -> rusqlite::Result<Entry> {
         vram_mb: row
             .get::<_, Option<i64>>("vram_mb")?
             .map(|v| v.max(0) as u64),
+        gpu_role: row.get("gpu_role")?,
     })
 }
 
@@ -111,6 +112,7 @@ impl Store {
             ("model", "ALTER TABLE queue ADD COLUMN model TEXT"),
             ("config", "ALTER TABLE queue ADD COLUMN config TEXT"),
             ("vram_mb", "ALTER TABLE queue ADD COLUMN vram_mb INTEGER"),
+            ("gpu_role", "ALTER TABLE queue ADD COLUMN gpu_role TEXT"),
         ] {
             if !columns.iter().any(|c| c == name) {
                 conn.execute(ddl, [])?;
@@ -151,15 +153,16 @@ impl Store {
                     tx.prepare_cached(
                         "INSERT INTO queue (seq, entry_id, app, job_id, token, label, state, is_continuous, shutdown_at,
                                             enqueued_at, became_active_at, expires_at, sort_order, is_locked, grp, instance, uses_llm,
-                                            model, config, vram_mb)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+                                            model, config, vram_mb, gpu_role)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
                          ON CONFLICT(entry_id) DO UPDATE SET
                             token = excluded.token, label = excluded.label, state = excluded.state,
                             shutdown_at = excluded.shutdown_at, became_active_at = excluded.became_active_at,
                             expires_at = excluded.expires_at, sort_order = excluded.sort_order,
                             is_locked = excluded.is_locked, grp = excluded.grp, instance = excluded.instance,
                             uses_llm = excluded.uses_llm, model = excluded.model,
-                            config = excluded.config, vram_mb = excluded.vram_mb",
+                            config = excluded.config, vram_mb = excluded.vram_mb,
+                            gpu_role = excluded.gpu_role",
                     )?
                     .execute(params![
                         e.seq,
@@ -182,6 +185,7 @@ impl Store {
                         e.model,
                         e.config,
                         e.vram_mb.map(|v| v as i64),
+                        e.gpu_role,
                     ])?;
                 }
             }
@@ -229,6 +233,7 @@ mod tests {
                     model: Some("flux".into()),
                     config: Some("1024x1024".into()),
                     vram_mb: Some(9_000),
+                    gpu_role: Some("comfyui_multi".into()),
                 },
                 now,
             );
@@ -243,6 +248,10 @@ mod tests {
         assert_eq!(loaded.entries()[1].uses_llm, Some(false));
         assert_eq!(loaded.entries()[1].model.as_deref(), Some("flux"));
         assert_eq!(loaded.entries()[1].vram_mb, Some(9_000));
+        assert_eq!(
+            loaded.entries()[1].gpu_role.as_deref(),
+            Some("comfyui_multi")
+        );
         assert_eq!(
             parse(Some("2026-10-31T15:13:14.851234+00:00".into())).map(|t| t.timestamp()),
             Some(1793459594)

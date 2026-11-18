@@ -25,7 +25,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import reference
-from bunnylock import BunnyLock, LockUnavailable
+from bunnylock import BunnyLock, LockUnavailable, pin_gpus
+
+# Queue page -> GPUs -> Voice: only that card is visible to this process (torch loads later).
+pin_gpus("voice")
 import settings as voice_settings
 
 PREFIX = "/Voice"
@@ -1071,7 +1074,7 @@ async def slash():
 async def page():
     # Asset links carry the file's mtime, so a browser never keeps an older voice.js/voice.css.
     static = Path(__file__).parent / "static"
-    html = re.sub(r"/Voice/static/(voice\.(?:js|css))\?v=\d+",
+    html = re.sub(r"/Voice/static/((?:voice|realtime)\.(?:js|css))\?v=\d+",
                   lambda match: f"/Voice/static/{match[1]}?v={int((static / match[1]).stat().st_mtime)}",
                   (Path(__file__).parent / "index.html").read_text())
     return HTMLResponse(html, headers={"Cache-Control": "no-cache"})

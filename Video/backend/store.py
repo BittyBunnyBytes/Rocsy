@@ -24,6 +24,16 @@ class Store:
         fresh = not path.exists() or path.stat().st_size == 0
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # WAL + synchronous=NORMAL: a write is one append (~0.03 ms) instead of a rollback journal with
+        # two fsyncs (~5 ms here, on the event loop, for every progress update), and a crash or power cut
+        # can lose the last moments but not corrupt the file. Readers on a read-only mount (the gateway's
+        # RAG & Cache page) need the -wal/-shm files, which exist while this service runs; when it is
+        # stopped they fall back to an immutable open (gateway cache_service._reference_rows).
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+        except sqlite3.Error:
+            pass  # e.g. a filesystem without shared memory: the rollback journal still works
         with self._conn:
             self._conn.executescript(
                 """

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GPU Queue · Rocsy</title>
-  <link rel="stylesheet" href="{{ mount_prefix }}/static/css/queue.css?v={{ app_version }}-ui4">
+  <link rel="stylesheet" href="{{ mount_prefix }}/static/css/queue.css?v={{ app_version }}-ui6">
 </head>
 <body data-mount-prefix="{{ mount_prefix }}">
   <div class="topbar">
@@ -22,11 +22,10 @@
 
     <section id="gpu-panel" class="gpu-panel" aria-label="GPU memory" hidden>
       <div class="gpu-head">
-        <div><strong>GPU memory</strong> <span id="gpu-mode" class="badge"></span></div>
+        <div><strong id="gpu-title">GPU memory</strong> <span id="gpu-mode" class="badge"></span></div>
         <span id="gpu-numbers" class="gpu-numbers"></span>
       </div>
-      <div id="gpu-bar" class="gpu-bar" role="img"></div>
-      <div id="gpu-legend" class="gpu-legend"></div>
+      <div id="gpu-cards" class="gpu-cards"></div>
     </section>
 
     <p id="queue-message" class="queue-message" role="status" hidden></p>
@@ -75,6 +74,28 @@
       </div>
     </details>
 
+    <details id="gpus" class="tools">
+      <summary>GPUs <span id="gpus-count" class="badge"></span></summary>
+      <div class="tools-body">
+        <div class="tool tool-stack">
+          <div><strong>Detected cards</strong><p>In ROCm order (PCI bus order): "GPU 0" is ROCm0. Each card is kept by its ROCm UUID, so adding a card or moving one to another slot doesn't change which work runs where. The PCIe link is the narrowest hop between the card and the CPU.</p></div>
+          <div id="gpu-list" class="gpu-list"></div>
+        </div>
+        <label class="tool">
+          <div><strong>Primary GPU</strong><p id="set-primary-help">Everything runs here unless a role below picks another card, and it comes first for the multi-GPU roles. Automatic = the card with the most VRAM. ComfyUI and Voice move on their next start (Restart ComfyUI below), the LLM on its next model load.</p></div>
+          <select id="set-primary" class="primary-select" aria-label="Primary GPU"></select>
+        </label>
+        <label class="tool">
+          <div><strong>Use multi-GPU wherever it can</strong><p id="set-multi-help">With two or more cards: every LLM is split across the multi-GPU LLM cards below (next model load), and Video's H3 renders set to "GPU 0 only" use split weights across the cards. Image, Music, Voice and the Trainer have no multi-GPU mode and stay on their card.</p></div>
+          <input id="set-multi" type="checkbox" class="switch">
+        </label>
+        <div class="tool tool-stack">
+          <div><strong>Where each kind of work runs</strong><p>Default = the primary card (the one with the most VRAM), or every card with the primary first for the multi-GPU roles. ComfyUI and Voice pick a change up the next time they start (Restart ComfyUI below), the LLM on its next model load. A card that is missing falls back to the default.</p></div>
+          <div id="gpu-roles" class="gpu-roles"></div>
+        </div>
+      </div>
+    </details>
+
     <details class="tools">
       <summary>Maintenance &amp; testing</summary>
       <div class="tools-body">
@@ -89,6 +110,6 @@
       </div>
     </details>
   </main>
-  <script src="{{ mount_prefix }}/static/js/queue.js?v={{ app_version }}-ui4"></script>
+  <script src="{{ mount_prefix }}/static/js/queue.js?v={{ app_version }}-ui6"></script>
 </body>
 </html>

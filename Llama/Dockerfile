@@ -16,6 +16,7 @@ FROM archlinux:base
 # Arch's rolling packages track close enough to CachyOS's to link cleanly.
 ARG LLAMA_SWAP_VERSION=255
 
+# openssl-3: Arch moved to OpenSSL 4 (2026-11); the llama.cpp builds link libssl.so.3 / libcrypto.so.3.
 # The stock mirrorlist has only fastly + geo, and a dropped TLS connection on either fails
 # the whole transaction. Try geo (Arch's own GeoDNS) first, keep fastly as the fallback, and
 # retry: pacman keeps what it already downloaded in its cache.
@@ -23,7 +24,7 @@ RUN printf 'Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch\nServer = ht
         > /etc/pacman.d/mirrorlist \
     && for attempt in 1 2 3 4; do \
         pacman -Syu --noconfirm --needed \
-            openssl gcc-libs zlib brotli zstd fmt google-glog elfutils libdrm numactl gflags \
+            openssl openssl-3 gcc-libs zlib brotli zstd fmt google-glog elfutils libdrm numactl gflags \
             vulkan-icd-loader vulkan-radeon \
             ca-certificates curl tar \
         && break; \

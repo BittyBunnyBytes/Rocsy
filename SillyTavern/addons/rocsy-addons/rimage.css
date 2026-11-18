@@ -1,0 +1,200 @@
+/* Rocsy Image / Voice tools in the character editor (rimage.js). Uses the Rocsy layout's colors when present. */
+.rim {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+}
+.rim.loading { opacity: .7; }
+.rim-block {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+.rim-block + .rim-block {
+    padding-top: 14px;
+    border-top: 1px solid var(--rvo-line, var(--SmartThemeBorderColor));
+}
+.rim-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.rim-badge, .rim-count-badge {
+    margin-left: auto;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: .78em;
+    background: var(--rvo-hover, rgba(127, 127, 127, .2));
+    color: var(--rvo-muted, inherit);
+}
+.rim-badge {
+    background: var(--rvo-accent, #e9a04f);
+    color: var(--rvo-accent-ink, #000);
+}
+.rim-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.rim-row > select { flex: 1 1 120px; min-width: 0; width: auto; }
+.rim-row > .rim-count { flex: 0 0 auto; }
+.rim .rvo-cbtn[disabled] { opacity: .55; cursor: progress; }
+.rim-prompt, .rim textarea { resize: vertical; min-height: 0; }
+.rim-progress {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: .9em;
+    color: var(--rvo-muted, inherit);
+}
+.rim-progress:empty { display: none; }
+.rim-progress .rvo-cbtn { height: 28px; padding: 0 10px; margin-left: auto; }
+.rim-ok { color: var(--rvo-text, inherit); }
+.rim-bad { color: #e36464; white-space: pre-wrap; }
+.rim-results {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+.rim-results:empty { display: none; }
+.rim-pick {
+    position: relative;
+    padding: 0;
+    border: 2px solid transparent;
+    border-radius: 10px;
+    overflow: hidden;
+    background: none;
+    cursor: pointer;
+}
+.rim-pick:hover, .rim-pick:focus-visible { border-color: var(--rvo-accent, #e9a04f); }
+.rim-pick img { display: block; width: 100%; aspect-ratio: 2 / 3; object-fit: cover; }
+.rim-pick-label {
+    position: absolute;
+    inset: auto 0 0 0;
+    display: flex;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px;
+    background: linear-gradient(transparent, rgba(0, 0, 0, .75));
+    color: #fff;
+    font-size: .85em;
+    opacity: 0;
+    transition: opacity .15s;
+}
+.rim-pick:hover .rim-pick-label, .rim-pick:focus-visible .rim-pick-label { opacity: 1; }
+@media (hover: none) { .rim-pick-label { opacity: 1; } }
+.rim-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.rim-sprites {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
+    gap: 6px;
+}
+.rim-sprite {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+    padding: 4px 2px;
+    border: 1px solid var(--rvo-line, rgba(127, 127, 127, .3));
+    border-radius: 8px;
+    /* a checkerboard, so transparent sprites read as such */
+    background: repeating-conic-gradient(rgba(127, 127, 127, .12) 0 25%, transparent 0 50%) 0 0 / 12px 12px;
+}
+.rim-sprite img, .rim-sprite-empty {
+    width: 100%;
+    aspect-ratio: 2 / 3;
+    object-fit: contain;
+}
+.rim-sprite-empty { display: grid; place-items: center; color: var(--rvo-faint, gray); opacity: .6; }
+.rim-sprite small {
+    max-width: 100%;
+    overflow: hidden;
+    font-size: .68em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--rvo-muted, inherit);
+}
+.rim-sprite.busy { border-color: var(--rvo-accent, #e9a04f); animation: rim-pulse 1.2s ease-in-out infinite; }
+.rim-sprite.failed { border-color: #e36464; }
+@keyframes rim-pulse { 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--rvo-accent, #e9a04f) 35%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .rim-sprite.busy { animation: none; } }
+.rim-maker {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid var(--rvo-line, rgba(127, 127, 127, .3));
+    border-radius: 10px;
+}
+.rim-maker[hidden] { display: none; }
+.rim-tabs { display: flex; gap: 4px; }
+.rim-tabs button {
+    flex: 1;
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border: 1px solid var(--rvo-line, rgba(127, 127, 127, .3));
+    border-radius: 8px;
+    background: none;
+    color: var(--rvo-muted, inherit);
+    cursor: pointer;
+    font: inherit;
+    font-size: .88em;
+}
+.rim-tabs button.on { background: var(--rvo-hover, rgba(127, 127, 127, .2)); color: var(--rvo-text, inherit); border-color: var(--rvo-accent, #e9a04f); }
+.rim-finish { display: flex; flex-direction: column; gap: 8px; }
+.rim-finish:empty { display: none; }
+.rim-finish audio { width: 100%; }
+.rim-file { max-width: 100%; font-size: .88em; }
+.rim-start { width: 90px !important; }
+.rim-settings p { margin: 0 0 8px; }
+.rim-label { flex: 0 0 82px; color: var(--rvo-muted, inherit); font-size: .9em; }
+.rim-classifier .rim-row > select, .rim-classifier .rim-row > input { flex: 1 1 160px; min-width: 0; width: auto; }
+.rim-classifier input[hidden] { display: none; }
+.rim-subhead { display: flex; align-items: center; gap: 6px; margin: 14px 0 4px; }
+.rim-pseudo-labels { display: flex; flex-direction: column; gap: 6px; }
+.rim-pseudo-head, .rim-pseudo-row { display: grid; grid-template-columns: minmax(70px, 1fr) minmax(0, 2.2fr) 34px; gap: 6px; align-items: center; }
+.rim-pseudo-head:has(span:nth-child(4)), .rim-pseudo-row.with-from { grid-template-columns: minmax(70px, 1fr) minmax(0, 1.6fr) minmax(0, 1.4fr) 34px; }
+.rim-pseudo-head span { font-size: .78em; color: var(--rvo-muted, inherit); }
+.rim-pseudo-row input { min-width: 0; margin: 0; }
+.rim-x { width: 34px; height: 34px; padding: 0; justify-content: center; }
+.rim-classifier .rim-row > .rvo-cbtn { flex: 0 0 auto; }
+@media (max-width: 600px) {
+    .rim-pseudo-head { display: none; }
+    .rim-pseudo-row, .rim-pseudo-row.with-from { grid-template-columns: 1fr 34px; }
+    .rim-pseudo-row input:not(:first-child) { grid-column: 1; }
+    .rim-pseudo-row .rim-x { grid-row: 1; grid-column: 2; }
+}
+
+/* Finished expressions open the gallery (Rocsy Visual Overhaul). */
+.rim-sprite.has {
+    cursor: zoom-in;
+}
+
+.rim-sprite.has:hover img {
+    filter: brightness(1.12);
+}
+/* Expressions: the master reference every expression is edited from. */
+.rim-master { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px dashed var(--rvo-line, rgba(127,127,127,.35)); border-radius: 10px; min-width: 0; }
+.rim-master-pic { flex: none; width: 64px; aspect-ratio: 2 / 3; padding: 0; border: 1px solid var(--rvo-line, rgba(127,127,127,.35)); border-radius: 8px; overflow: hidden; background: var(--rvo-raised, transparent); cursor: zoom-in; }
+.rim-master-pic img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+.rim-master-text { display: grid; gap: 4px; min-width: 0; justify-items: start; }
+
+/* Expressions → Model & guidance prompt */
+.rim-expr-settings { border: 1px solid var(--rvo-line, rgba(127,127,127,.35)); border-radius: 10px; padding: 6px 10px; min-width: 0; }
+.rim-expr-settings > summary { cursor: pointer; display: flex; align-items: center; gap: 6px; list-style: none; padding: 2px 0; }
+.rim-expr-settings > summary::-webkit-details-marker { display: none; }
+.rim-expr-settings > summary::after { content: '\f078'; font-family: 'Font Awesome 6 Free'; font-weight: 900; font-size: 11px; margin-left: auto; opacity: .6; transition: transform .15s; }
+.rim-expr-settings[open] > summary::after { transform: rotate(180deg); }
+.rim-expr-settings[open] { display: flex; flex-direction: column; gap: 8px; padding-bottom: 10px; }
+.rim-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.rim-field > span { font-size: .9em; font-weight: 600; }
+.rim-expr-prompt { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.45; width: 100%; box-sizing: border-box; }

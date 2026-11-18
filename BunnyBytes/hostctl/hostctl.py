@@ -52,6 +52,7 @@ import coreextras
 import reafolders
 import reamods
 import hostaccess
+import voicemic
 import comfynodes
 import modelfind
 import storage
@@ -63,6 +64,7 @@ import hermeslink
 import llama_optimize
 import loadpriority
 import gputune
+import maintenance
 import codingclis
 import uninstall
 
@@ -89,6 +91,7 @@ ITEMS: dict[str, dict[str, Any]] = {
     "video": {"kind": "container", "group": "Containers", "name": "Video", "note": "MiniMax H3, LTX 2.5 and Wan 2.2", "busy": "vid", "stop_timeout": 40},
     "krea": {"kind": "container", "group": "Containers", "name": "Image", "note": "Krea 2, MOSS-Image and Qwen Image", "busy": "krea"},
     "music": {"kind": "container", "group": "Containers", "name": "Music", "note": "Song generation (Mus)", "busy": "mus"},
+    "model3d": {"kind": "container", "group": "Containers", "name": "3D Models", "note": "Pictures to 3D models (Hunyuan3D)", "busy": "model3d"},
     "bunny-trainer": {"kind": "container", "group": "Containers", "name": "Trainer", "note": "LoRA training", "busy": "trainer"},
     "bunny-agent": {"kind": "container", "group": "Containers", "name": "Agent", "note": "Master Agent (agentic mode)", "busy": "agent"},
     "bunny-lock": {"kind": "container", "group": "Containers", "name": "Queue", "note": "Shared GPU queue coordinator", "busy": "queue"},
@@ -269,8 +272,8 @@ def busy_check(kind: str) -> tuple[bool, str]:
                                                                    "reviewing", "awaiting_approval", "preparing"}]
         parts = [f"{len(jobs)} render(s)"] * bool(jobs) + [f"{len(agentic)} Agentic session(s)"] * bool(agentic)
         return bool(parts), " and ".join(parts)
-    if kind in ("krea", "mus"):
-        port, prefix = {"krea": (8300, "Image"), "mus": (8200, "Music")}[kind]
+    if kind in ("krea", "mus", "model3d"):
+        port, prefix = {"krea": (8300, "Image"), "mus": (8200, "Music"), "model3d": (8320, "Model3D")}[kind]
         jobs = [job for job in _jobs(f"http://127.0.0.1:{port}/{prefix}/api/jobs")
                 if job.get("state") not in {"complete", "failed", "cancelled"}]
         return bool(jobs), f"{len(jobs)} job(s) in progress"
@@ -717,6 +720,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, loadpriority.settings())
         if self.path == "/gpu-tune":
             return self._send(*gputune.handle("GET", self.path, {}))
+        if self.path == "/maintenance":
+            return self._send(*maintenance.handle("GET", self.path, {}))
         if self.path == "/browser":
             return self._send(200, browser_status())
         if self.path in ("/clis", "/clis?fresh=1"):
@@ -749,6 +754,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._comfynodes("GET", {})
         if self.path.startswith("/core/swap"):
             return self._swap("GET", {})
+        if self.path == "/voice/mic":
+            return self._send(*voicemic.handle("GET", self.path, {}))
         if self.path == "/connections/hermes":
             return self._hermes_link("GET", {})
         if self.path.startswith("/llama-optimize/"):
@@ -920,6 +927,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(*reafolders.handle("POST", self.path, body if isinstance(body, dict) else {}))
         if self.path.startswith("/gpu-tune/"):
             return self._send(*gputune.handle("POST", self.path, self._small_json()))
+        if self.path == "/maintenance/check":
+            return self._send(*maintenance.handle("POST", self.path, {}))
         if self.path == "/plugins/config":
             return self._send(*save_plugin_config(self._small_json()))
         if self.path == "/plugins/icon":
@@ -989,6 +998,13 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 body = {}
             return self._runtime("POST", body if isinstance(body, dict) else {})
+        if self.path.startswith("/voice/mic/"):
+            # The "Rocsy Voice" virtual microphone (Voice → Live voice → Send to my microphone).
+            body = self._small_json()
+            status, reply = voicemic.handle("POST", self.path, body)
+            if not self.path.endswith("/heartbeat"):
+                log.info("%s -> %s", self.path, reply.get("error") or ("default mic" if reply.get("is_default") else "ok"))
+            return self._send(status, reply)
         if self.path.startswith("/core/swap/"):
             length = int(self.headers.get("Content-Length") or 0)
             try:
@@ -1066,6 +1082,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "forbidden"})
         if self.path == "/gpu-tune":
             return self._send(*gputune.handle("PUT", self.path, self._small_json()))
+        if self.path == "/maintenance":
+            return self._send(*maintenance.handle("PUT", self.path, self._small_json()))
         if self.path == "/load-priority":
             length = int(self.headers.get("Content-Length") or 0)
             try:
@@ -1170,6 +1188,9 @@ def main() -> None:
     threading.Thread(target=gputune.background_loop, daemon=True).start()
     threading.Thread(target=warm_caches, daemon=True).start()
     storage.busy_check = busy_check
+    maintenance.busy_check = busy_check
+    threading.Thread(target=maintenance.background_loop, daemon=True).start()
+    voicemic.startup()
     storage.start_background()
     server = BoundedHTTPServer((HOST, PORT), Handler)
     log.info("bunny-hostctl on %s:%s (%d items)", HOST, PORT, len(ITEMS))

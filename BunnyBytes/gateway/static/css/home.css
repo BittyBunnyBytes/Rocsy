@@ -266,6 +266,18 @@
 }
 
 .h-studio:hover .h-studio-art.has-art { opacity: 0.45; transform: scale(1.03); }
+/* A card spanning a whole row (home.js marks it .h-wide): a full-width cover
+   would zoom the picture into a thin strip, so it fills the right part of the
+   card instead (about a normal card's shape), fading in behind the text and
+   aimed at the upper third, where faces and subjects usually are. */
+.h-studio.h-wide .h-studio-art:not(.has-wave):not(.has-heat) {
+  left: 50%;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 40%);
+  mask-image: linear-gradient(90deg, transparent, #000 40%);
+}
+.h-studio.h-wide .h-studio-art,
+.h-studio.h-wide .h-art-slide { background-position: center 30%; }
+.h-studio.h-wide:hover .h-studio-art.has-art:not(.has-wave):not(.has-heat) { transform: scale(1.015); }
 
 /* Music card: waveform of the newest song, in the band above the fade. */
 .h-studio-art.has-wave { opacity: 0.5; }

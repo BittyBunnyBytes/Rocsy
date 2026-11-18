@@ -40,7 +40,7 @@ STUDIOS = {
 }
 BASE = {name: os.getenv(env, default).rstrip("/") + prefix for name, (env, default, prefix) in STUDIOS.items()}
 LLAMA = os.getenv("LLAMA_URL", "http://127.0.0.1:8400").rstrip("/")
-MODEL = os.getenv("FRAMEWORK_AGENTIC_MODEL", "qwen3.8-flash-next-uncensored")
+MODEL = os.getenv("FRAMEWORK_AGENTIC_MODEL", "strata-qwen-flash-next")
 KEY = os.getenv("LLAMA_API_KEY", "")
 # Models named "cli:<cli>/<model>" are external coding CLIs on the host (Settings → Sub-agents),
 # answered by bunny-hostctl's chat-completions bridge instead of llama; "hermes:<provider>/<model>"
@@ -66,7 +66,7 @@ _save_pending: asyncio.TimerHandle | None = None
 
 # The generation models each studio can load, keyed as the studio's own request field names them.
 MODEL_LABELS = {
-    "image": {"krea2": "Krea 2", "qwen_image_21": "Qwen Image 2.1", "anima": "Anima"},  # Lustify = a Krea 2 checkpoint
+    "image": {"krea2": "Krea 2", "qwen_image_21": "Qwen Image 2.1", "anima": "Anima", "h3_image": "MiniMax H3 Image"},  # Lustify = a Krea 2 checkpoint
     "music": {"yue2": "YuE2", "minimax_music3": "MiniMax Music 3"},
     "voice": {"qwen3": "Qwen3-TTS 1.7B", "indextts2": "IndexTTS2", "fish_s2": "Fish Audio S2 Pro", "fish_drama3": "Fish Audio Drama 3"},
 }
@@ -592,7 +592,7 @@ async def hermes(system: str, user: str, image_url: str = "", model: str = "", r
 
 # ── plans ────────────────────────────────────────────────────────────────────
 
-LORA_FAMILY = {"krea2": "krea", "qwen_image_21": "qwen"}  # Anima has no LoRAs
+LORA_FAMILY = {"krea2": "krea", "qwen_image_21": "qwen", "h3_image": "h3image"}  # Anima has no LoRAs
 
 
 def lora_options(raw: Any, user_loras: Any = None) -> list[dict[str, Any]]:
@@ -695,9 +695,16 @@ def validate(studio: str, plan: dict[str, Any], settings: dict[str, Any],
         body = {"model": model, "prompt": prompt}
         for field in ("checkpoint", "width", "height", "count", "anima_version", "anima_cfg", "anima_steps",
                       "speed", "enhance", "use_references", "references", "loras", "steps", "cfg",
-                      "negative_prompt", "transparent", "turbo_strength", "krea_steps"):
+                      "negative_prompt", "transparent", "turbo_strength", "krea_steps", "match_reference_size", "h3_fast"):
             if field in settings:
                 body[field] = settings[field]
+        if model == "h3_image":
+            # H3 Image samples its own 6 steps with CFG 1: no speed modes, no 4x upscale, no negative prompt
+            # (Image refuses a request that sets them); Krea-only fields are dropped.
+            body.update(speed="standard", enhance=False)
+            for field in ("turbo_strength", "krea_steps", "steps", "cfg", "negative_prompt", "transparent",
+                          "anima_version", "anima_cfg", "anima_steps"):
+                body.pop(field, None)
         # Qwen and Anima guides ask for a negative prompt; the user's own one wins.
         if isinstance(plan.get("negative_prompt"), str) and model in {"qwen_image_21", "anima"} and not settings.get("negative_prompt"):
             body["negative_prompt"] = plan["negative_prompt"].strip()[:4000]
@@ -876,7 +883,7 @@ async def preview(studio: str, body: PreviewRequest) -> dict[str, Any]:
            "attachment_brief": guide_files.brief_block(texts),
            "attachments": [{"kind": "image", "name": item.name} for item in body.attachments if item.kind == "image"]}
     resolved = rag.resolve(body.request + "\n" + body.guide)
-    row["rag_context"] = rag.context(resolved, [f"{item['label']} is the {item['kind']} {item['name']}" for item in resolved["media"]])
+    row["rag_context"] = rag.context(resolved, [rag.media_line(item) for item in resolved["media"]])
     messages = [{"role": "system", "content": system_prompt(studio, SETTINGS[studio], settings, options=options,
                                                               query=body.request + "\n" + body.guide)},
                 {"role": "user", "content": plan_input(row)}]
@@ -903,7 +910,7 @@ async def apply_rag(row: dict[str, Any]) -> None:
         log(row, "warn", "RAG: " + warning)
     settings, lines = row["settings"], []
     model = str(settings.get("model") or "krea2")
-    limit = {"anima": 0, "qwen_image_21": 10, "moss": 1}.get(model, 3) if row["studio"] == "image" else 0
+    limit = {"anima": 0, "qwen_image_21": 10, "h3_image": 10, "moss": 1}.get(model, 3) if row["studio"] == "image" else 0
     slots = [slot for slot in settings.get("references") or [] if isinstance(slot, dict) and slot.get("enabled") and slot.get("image")] \
         if settings.get("use_references") else []
     for item in resolved["media"]:
@@ -919,8 +926,8 @@ async def apply_rag(row: dict[str, Any]) -> None:
                          + (f" User's note: {item['note']}" if item["note"] else ""))
             log(row, "tool", f"RAG: {item['label']} → reference image {len(slots)}")
         else:
-            lines.append(f"{item['label']} is the {item['kind']} {item['name']}. This studio can't use it as an input; "
-                         "rely on its name and note." + (f" User's note: {item['note']}" if item["note"] else ""))
+            lines.append(f"{rag.media_line(item)}. This studio can't use it as an input; "
+                         "rely on its name, contents and note." + (f" User's note: {item['note']}" if item["note"] else ""))
             log(row, "warn", f"RAG: {item['label']} is a {item['kind']}; {LABEL_OF[row['studio']]} with this model can't take it as an input")
     if len(slots) and row["studio"] == "image":
         settings["references"] = slots

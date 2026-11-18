@@ -26,14 +26,14 @@ ROUTES = {urlsplit(u).path.strip("/"): u for u in UP.values() if urlsplit(u).pat
 SERVICES = ("Vid", "Krea", "Mus", "Trainer", "Motion", "Voice")
 ACTIVE = {"bundling", "encoding", "waiting_for_gpu", "preparing", "queued", "rendering", "running", "finalizing", "cancelling", "uploading", "training", "queuing"}
 DONE = {"complete", "completed", "failed", "cancelled", "canceled", "error", "interrupted"}
-KREA_MODELS = ("krea2", "lustify", "qwen_image_21", "moss")
+KREA_MODELS = ("krea2", "lustify", "qwen_image_21", "moss", "h3_image")
 VIDEO_MODELS = ("minimax_h3", "ltx_2_5", "wan_2_2")
 AGENTIC_VIDEO_MODELS = ("minimax_h3", "wan_2_2")
 VOICE_MODELS = ("qwen3", "indextts2", "fish_s2", "fish_drama3")
 MUSIC_MODELS = ("yue2", "minimax_music3")
 # Shown with every job the Master Agent starts, so the user sees which model a service runs.
 MODEL_LABELS = {"minimax_h3": "MiniMax H3", "ltx_2_5": "LTX 2.5", "wan_2_2": "Wan 2.2", "krea2": "Krea 2", "lustify": "Lustify",
-                "qwen_image_21": "Qwen Image 2.1", "moss": "MOSS-Image", "qwen3": "Qwen3 TTS", "indextts2": "IndexTTS2",
+                "qwen_image_21": "Qwen Image 2.1", "moss": "MOSS-Image", "h3_image": "MiniMax H3 Image", "qwen3": "Qwen3 TTS", "indextts2": "IndexTTS2",
                 "fish_s2": "Fish S2", "fish_drama3": "Fish Drama 3", "yue2": "YuE 2", "minimax_music3": "MiniMax Music 3", "ltx25": "LTX 2.5"}
 # The image studio's id stays "Krea" (routes, containers), but the agent and the chat call it Image:
 # "Krea" next to the "krea2" model kept being read as one thing.
@@ -50,7 +50,8 @@ async def _call(method: str, url: str, body: Any = None, timeout: float = 30) ->
             # X-Rocsy-Agent: Vid keeps the chat model unloaded while the renders it queues for us run.
             response = await client.request(method, url, json=body, headers={"X-Rocsy-Agent": "master"})
     except httpx.HTTPError as exc:
-        raise StudioError(f"{url.split('/')[3]} is not reachable ({type(exc).__name__})") from exc
+        service = "Motion" if url.startswith(UP["Motion"] + "/") else url.split("/")[3]   # Motion has no route in its URL
+        raise StudioError(f"{service} is not reachable ({type(exc).__name__})") from exc
     try:
         data = json.loads(response.content or b"null", strict=False)   # prompts can hold raw control chars
     except ValueError:
@@ -195,7 +196,8 @@ AGENTIC_ACTIVE = {"waiting_for_gpu", "running", "queuing", "rendering", "reviewi
 
 
 async def agentic_video(prompt: str, guide: str, duration: float | None, aspect: str | None, mode: str, preset: str,
-                        default_preset: str, reference_ids: list[str], resume: str | None, model: str = "minimax_h3") -> dict[str, Any]:
+                        default_preset: str, reference_ids: list[str], resume: str | None, model: str = "minimax_h3",
+                        ledger: dict[str, Any] | None = None, direct: bool = False) -> dict[str, Any]:
     """Vid's Agentic mode: Video's own Hermes plans the clips (continuations, references,
     reviews, staging, finishing) and renders them. Returns {job_id, session_id, state}."""
     # Agentic plans the whole film from the request. Its generation.duration is only
@@ -222,7 +224,9 @@ async def agentic_video(prompt: str, guide: str, duration: float | None, aspect:
         if generation["mode"] == "ref2v":
             generation["reference_ids"] = reference_ids
     body = {"generation": generation, "guide": guide or "", "available_reference_ids": reference_ids[:24],
-            **({"resume_session_id": resume} if resume else {})}
+            **({"resume_session_id": resume} if resume else {}),
+            # Prompt ledger handover: Vid takes these clips as its ledger and plan (no pasted plan text).
+            **({"ledger": ledger, "direct": direct} if ledger else {})}
     return await _call("POST", f"{UP['Vid']}/api/enhancement/agentic", body, timeout=90)
 
 
@@ -424,6 +428,12 @@ async def _long_haul_job(session: dict[str, Any], chain: list[dict[str, Any]]) -
 VID_REF_ROLE = "agentic-references"
 
 
+async def vid_reference_aliases() -> dict[str, str]:
+    """{Vid reference id: its alias (image7, video2, ...)}: Vid numbers references in upload order, per kind."""
+    return {str(r.get("id")): str(r.get("alias") or "") for r in await _call("GET", f"{UP['Vid']}/api/references") or []
+            if isinstance(r, dict)}
+
+
 async def vid_reference_ids() -> set[str]:
     return {str(r.get("id")) for r in await _call("GET", f"{UP['Vid']}/api/references") or [] if isinstance(r, dict)}
 
@@ -472,6 +482,9 @@ async def image(prompt: str, model: str | None, width: int | None, height: int |
     # fail on malformed JSON; --enhance remains available when explicitly requested.
     body = {**base, "model": model, "prompt": prompt, "prompt_enhancer": enhance,
             **_drop_none({"width": width, "height": height, "count": count})}
+    if model == "h3_image":
+        # Its own 6 steps, CFG 1: Image refuses speed modes and the 4x upscale for it.
+        body.update(speed="standard", enhance=False)
     if references:
         body.update(use_references=True, references=references)
     return await _call("POST", f"{UP['Krea']}/api/generate", body, timeout=60)
@@ -547,6 +560,27 @@ async def postedit_transcribe(job_id: str) -> dict[str, Any]:
 
 async def postedit_transcript(job_id: str, vocals: bool = True) -> dict[str, Any]:
     return await _call("GET", f"{UP['Vid']}/api/postedit/transcribe/{job_id}?vocals={'true' if vocals else 'false'}", timeout=30)
+
+
+async def transcribe_file(path: str, vocals: bool = True) -> dict[str, Any]:
+    """GPU Whisper on an audio file that isn't a Vid job (`$R transcript`): {"id", "state", ...cues/words when ready}.
+    Vid keeps the file by content hash, so the same audio comes back from its cache."""
+    try:
+        with open(path, "rb") as handle:
+            async with httpx.AsyncClient(timeout=600) as client:
+                response = await client.post(f"{UP['Vid']}/api/transcribe/file", files={"file": (os.path.basename(path), handle)},
+                                             data={"vocals": "true" if vocals else "false"})
+    except (OSError, httpx.HTTPError) as exc:
+        raise StudioError(f"couldn't send the audio to Vid ({type(exc).__name__})") from exc
+    data = json.loads(response.content or b"null", strict=False) if response.content else None
+    if response.status_code >= 400 or not isinstance(data, dict):
+        detail = (data or {}).get("detail") if isinstance(data, dict) else None
+        raise StudioError(f"Vid transcript {response.status_code}: {detail or response.text[:200]}")
+    return data
+
+
+async def transcribe_file_status(key: str, vocals: bool = True) -> dict[str, Any]:
+    return await _call("GET", f"{UP['Vid']}/api/transcribe/file/{key}?vocals={'true' if vocals else 'false'}", timeout=30)
 
 
 async def tts(text: str, voice: str, provider: str = "edge", rate: int = 0, pitch: int = 0) -> dict[str, Any]:

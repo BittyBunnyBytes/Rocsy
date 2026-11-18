@@ -13,6 +13,7 @@ import mimetypes
 import os
 import random
 import re
+import struct
 from pathlib import Path
 from typing import Any
 
@@ -22,11 +23,17 @@ DOC_LIMIT = 20000      # characters of one document, the Master Agent's chat lim
 TOTAL_LIMIT = 40000    # characters of all documents in one run
 MAX_FILES = 20         # files per run, the Master Agent's attachment limit
 MENTION = re.compile(r"(?<![\w@])@(?:\{([^{}\n]{1,200})\}|([\w.-]+))(\s+(?:all|random\s+\d+)\b)?", re.I)
+MODEL_SUFFIXES = {".glb", ".gltf", ".vrm", ".fbx", ".obj", ".stl", ".ply"}
+for _ext, _mime in ((".glb", "model/gltf-binary"), (".gltf", "model/gltf+json"), (".vrm", "model/gltf-binary"),
+                    (".fbx", "application/octet-stream"), (".obj", "model/obj"), (".stl", "model/stl"), (".ply", "application/octet-stream")):
+    mimetypes.add_type(_mime, _ext)
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".json", ".csv", ".log", ".py", ".js", ".jsx", ".ts", ".tsx", ".css",
                  ".html", ".htm", ".yaml", ".yml", ".xml", ".srt", ".vtt", ".sh", ".toml", ".ini"}
 
 
 def _kind(path: Path, mime: str) -> str:
+    if path.suffix.lower() in MODEL_SUFFIXES:
+        return "model"
     if path.suffix.lower() in TEXT_SUFFIXES or mime.startswith("text/"):
         return "text"
     head = mime.split("/")[0]
@@ -171,6 +178,67 @@ def resolve(text: str, chooser: random.Random | None = None) -> dict[str, Any]:
         result["docs"].append({"label": label, "name": item["name"], "note": item["note"], "text": content})
     result["calls"] = list(dict.fromkeys(result["calls"]))
     return result
+
+
+def _gltf_json(path: Path) -> dict[str, Any] | None:
+    """The JSON part of a .glb/.vrm (binary) or .gltf file, or None."""
+    with path.open("rb") as handle:
+        head = handle.read(20)
+        if head[:4] == b"glTF" and len(head) == 20:
+            length, chunk = struct.unpack("<I4s", head[12:20])
+            if chunk != b"JSON" or length > 64 * 1024 * 1024:
+                return None
+            return json.loads(handle.read(length))
+    if path.suffix.lower() == ".gltf" and path.stat().st_size <= 64 * 1024 * 1024:
+        return json.loads(path.read_text(encoding="utf-8"))
+    return None
+
+
+def model_summary(item: dict[str, Any]) -> str:
+    """One line on what a pinned 3D model contains (glTF family only; other formats get their format name)."""
+    path = ROOT / item["path"]
+    fmt = path.suffix.lower().lstrip(".").upper()
+    try:
+        gl = _gltf_json(path)
+    except (OSError, ValueError, struct.error):
+        gl = None
+    if not isinstance(gl, dict):
+        return f"a {fmt} 3D model"
+    accessors = gl.get("accessors") or []
+    tris = 0
+    morphs: list[str] = []
+    for mesh in gl.get("meshes") or []:
+        for prim in mesh.get("primitives") or []:
+            ref = prim.get("indices", prim.get("attributes", {}).get("POSITION"))
+            if isinstance(ref, int) and ref < len(accessors) and prim.get("mode", 4) == 4:
+                tris += int(accessors[ref].get("count", 0)) // 3
+        morphs += [str(n) for n in (mesh.get("extras") or {}).get("targetNames") or []]
+    bones = sorted({j for skin in gl.get("skins") or [] for j in skin.get("joints") or []})
+    clips = [str(a.get("name") or f"clip {i + 1}") for i, a in enumerate(gl.get("animations") or [])]
+    emotions: list[str] = []
+    for node in gl.get("nodes") or []:
+        for key, value in (node.get("extras") or {}).items():
+            if re.search(r"(^|_)(emotions|expressions)$", key, re.I):
+                try:
+                    emotions += list(json.loads(value) if isinstance(value, str) else value)
+                except (ValueError, TypeError):
+                    pass
+    facts = [f"{len(gl.get('meshes') or [])} mesh(es), about {tris:,} triangles"]
+    facts.append(f"rigged with {len(bones)} bones" if bones else "not rigged")
+    if clips:
+        facts.append("animations: " + ", ".join(clips[:20]))
+    if morphs:
+        facts.append(f"{len(set(morphs))} morph targets: " + ", ".join(list(dict.fromkeys(morphs))[:30]))
+    if emotions:
+        facts.append("expression presets: " + ", ".join(emotions[:20]))
+    return f"a {fmt} 3D model (" + "; ".join(facts) + ")"
+
+
+def media_line(item: dict[str, Any]) -> str:
+    """How a media file is described to the planner when the studio can't take it as an input."""
+    if item["kind"] == "model":
+        return f"{item['label']} is {model_summary(item)}, file {item['name']}"
+    return f"{item['label']} is the {item['kind']} {item['name']}"
 
 
 def context(resolved: dict[str, Any], media_lines: list[str] | None = None) -> str:

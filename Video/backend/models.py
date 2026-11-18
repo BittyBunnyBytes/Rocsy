@@ -343,6 +343,9 @@ class GenerationRequest(BaseModel):
     mode: Literal["text", "fl2v", "ref2v"] = "text"
     prompt: str = Field(min_length=1, max_length=20_000)
     reference_ids: list[str] = Field(default_factory=list, max_length=24)
+    # Per-request segment of a video/audio reference, {ref_id: [start, end]} in seconds of the attachment as
+    # trimmed by the user; set by Agentic's refs=video1@START-END so one long source can feed several clips.
+    reference_trims: dict[str, list[float]] | None = None
     first_frame_id: str | None = None
     last_frame_id: str | None = None
     megapixels: float = Field(default=0.92, ge=0.004, le=4.2)  # 0.004 = 64x64, the smallest custom size
@@ -760,6 +763,23 @@ class GuideAttachment(BaseModel):
         return self
 
 
+class LedgerHandoffClip(BaseModel):
+    """One clip of a prompt ledger handed over by the Master Agent (its ledger.py is a copy of ours)."""
+    model_config = ConfigDict(extra="ignore")
+    n: int = Field(ge=1, le=200)                 # the clip's number across the whole story
+    prompt: str = Field(min_length=1, max_length=40_000)
+    seconds: float | None = Field(default=None, ge=0, le=60)
+    approved: bool = False                       # the user approved this prompt in the Master Agent
+
+
+class LedgerHandoff(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    clips: list[LedgerHandoffClip] = Field(min_length=1, max_length=24)
+    outline: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
+    directions: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
+    source: str = Field(default="master-agent", max_length=60)
+
+
 class AgenticRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     resume_session_id: str | None = None
@@ -770,6 +790,9 @@ class AgenticRequest(BaseModel):
     guide_attachments: list[GuideAttachment] = Field(default_factory=list, max_length=12)
     # Generate with a pasted ::VIDEO plan: queue its clips exactly as written, with no Hermes planning or review.
     direct: bool = False
+    # Clips handed over from another prompt ledger (the Master Agent's): they become this session's ledger and the
+    # plan, so the prompts don't travel as one huge pasted text and aren't written again.
+    ledger: LedgerHandoff | None = None
 
     @model_validator(mode="before")
     @classmethod

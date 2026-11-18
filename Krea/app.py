@@ -89,7 +89,8 @@ def _workflow_model_seeds() -> dict[str, dict[str, Any]]:
             Slot("VAELoader", "vae_name", settings.moss_vae_name, "MOSS VAE")]},
         MODEL_H3_IMAGE: {"label": "MiniMax H3 Image", "slots": [
             Slot("CLIPLoader", "clip_name", settings.h3_image_clip_name, "Qwen3-VL text encoder (shared with H3 video)"),
-            Slot("VAELoader", "vae_name", settings.h3_image_vae_name, "H3 Image VAE")]},
+            Slot("VAELoader", "vae_name", settings.h3_image_vae_name, "H3 Image VAE"),
+            Slot("LoraLoaderModelOnly", "lora_name", "minimax_h3_pdmd_2nfe_comfyui.safetensors", "pDMD speed LoRA (Fewer steps)")]},
     }
 
 

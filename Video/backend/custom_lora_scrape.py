@@ -5,9 +5,7 @@ import asyncio
 import io
 import json
 import re
-import shutil
 from html.parser import HTMLParser
-from pathlib import Path
 from urllib.parse import parse_qs, urlsplit, urljoin
 
 from PIL import Image

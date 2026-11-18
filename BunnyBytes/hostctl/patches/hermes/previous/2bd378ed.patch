@@ -1,0 +1,449 @@
+diff --git a/Dockerfile b/Dockerfile
+index 60ba5ad9bb..baa23a987c 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -402,6 +402,13 @@ RUN /opt/hermes/.venv/bin/python -m docker.build_agent
+ # read-only for the hermes user (go-w from the --chmod above).
+ 
+ USER root
++# Rocsy: the GPU's media engine for the agent's own ffmpeg (VA-API: -hwaccel vaapi, h264_vaapi).
++# Late layer so adding it doesn't rebuild the toolchain stages above. renderD128 is passed in compose.
++RUN apt-get -o Acquire::Retries=3 update && \
++    apt-get -o Acquire::Retries=3 install -y --no-install-recommends mesa-va-drivers libva-drm2 vainfo && \
++    rm -rf /var/lib/apt/lists/*
++# Rocsy: yt-dlp from the Manager-managed folder mounted at /opt/rocsy-tools/yt-dlp (compose).
++RUN ln -sf /opt/rocsy-tools/yt-dlp/yt-dlp /usr/local/bin/yt-dlp
+ RUN mkdir -p /opt/hermes/bin && \
+     cp /opt/hermes/docker/hermes-exec-shim.sh /opt/hermes/bin/hermes && \
+     chmod 0755 /opt/hermes /opt/hermes/bin/hermes && \
+diff --git a/gateway/platforms/api_server_runs.py b/gateway/platforms/api_server_runs.py
+index 599812a117..922208e5da 100644
+--- a/gateway/platforms/api_server_runs.py
++++ b/gateway/platforms/api_server_runs.py
+@@ -386,6 +386,16 @@ def _make_run_event_callback(self, run_id: str, loop: asyncio.AbstractEventLoop,
+             if event_type == "tool.completed":
+                 event_fields["preview"] = _tool_completed_preview(
+                     kwargs.get("result"), redact_sensitive_text)
++                # Rocsy: browser_exec (v0.23's browser) reports its screenshot copy; the older built-in tools did too.
++                if tool_name in {"browser_exec", "browser_navigate", "browser_click", "browser_back"} and not kwargs.get("is_error"):
++                    try:
++                        payload = kwargs.get("result")
++                        payload = json.loads(payload) if isinstance(payload, str) else payload
++                        if isinstance(payload, dict) and payload.get("success") and payload.get("rocsy_screenshot_path"):
++                            event_fields["screenshot_path"] = payload["rocsy_screenshot_path"]
++                            event_fields["page_url"] = payload.get("url", "")
++                    except (ValueError, TypeError):
++                        pass
+             _push(_run_event(run_id, event_type, **event_fields))
+         elif event_type in {"subagent.start", "subagent.complete"}:
+             event = _run_event(run_id, event_type)
+@@ -1081,6 +1091,44 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
+             loop.call_soon_threadsafe(run.put_event, _run_event(
+                 run_id, "message.interim", text=text, already_streamed=bool(already_streamed)))
+ 
++    def _reasoning_cb(delta: Optional[str]) -> None:
++        if not delta or run_id not in self._run_streams:
++            return
++        with suppress(Exception):
++            loop.call_soon_threadsafe(run.put_event, _run_event(run_id, "reasoning.delta", delta=delta))
++
++    def _terminal_event(name: str, call_id: str, tool_name: str, args: Any, result: Any = None) -> None:
++        if tool_name not in {"terminal", "exec_command"} or run_id not in self._run_streams:
++            return
++        from agent.redact import redact_sensitive_text
++        safe = lambda value: redact_sensitive_text(str(value or ""), force=True)
++        command = safe(args.get("command", "")) if isinstance(args, dict) else ""
++        event = _run_event(run_id, name, tool_id=f"{run_id}:{call_id}", command=command[:8000])
++        if name == "terminal.completed":
++            payload = result
++            if isinstance(payload, str):
++                with suppress(ValueError, TypeError):
++                    payload = json.loads(payload)
++            if isinstance(payload, dict):
++                output = payload.get("output", "")
++                error = payload.get("error")
++                event["exit_code"] = payload.get("exit_code")
++                event["error"] = safe(error)[:1000] if error else ""
++            else:
++                output = result
++                event["exit_code"] = None
++                event["error"] = ""
++            output = safe(output)
++            event["output"] = output[:24000] + ("\n[output truncated]" if len(output) > 24000 else "")
++        with suppress(Exception):
++            loop.call_soon_threadsafe(run.put_event, event)
++
++    def _terminal_start(call_id: str, tool_name: str, args: Any) -> None:
++        _terminal_event("terminal.started", call_id, tool_name, args)
++
++    def _terminal_complete(call_id: str, tool_name: str, args: Any, result: Any) -> None:
++        _terminal_event("terminal.completed", call_id, tool_name, args, result)
++
+     def _finish(status: str, extra: Optional[dict] = None, **fields: Any) -> None:
+         """Terminal status, then best-effort ``run.<status>`` event; key order is wire shape."""
+         extra = extra or {}
+@@ -1117,15 +1165,18 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
+             def _tool_start(call_id, name, args):
+                 from agent.display import build_tool_preview
+                 tool_cb("tool.started", name, build_tool_preview(name, args or {}) or "", args, tool_call_id=call_id)
++                _terminal_start(call_id, name, args)  # Rocsy: terminal.started for the chat's terminal view
+ 
+             def _tool_complete(call_id, name, args, result):
+                 from agent.display import _detect_tool_failure
+                 is_error, _ = _detect_tool_failure(name, result)
+-                tool_cb("tool.completed", name, None, args, tool_call_id=call_id, is_error=bool(is_error))
++                # Rocsy: result= lets tool.completed carry the browser screenshot path (and its preview).
++                tool_cb("tool.completed", name, None, args, tool_call_id=call_id, is_error=bool(is_error), result=result)
++                _terminal_complete(call_id, name, args, result)
+ 
+             with observe_api_controls(run.admission, _control_cb):
+                 result, usage = await observe_api_turn(
+-                    run.admission, stream_delta_callback=_text_cb,
++                    run.admission, stream_delta_callback=_text_cb, reasoning_callback=_reasoning_cb,
+                     tool_start_callback=_tool_start, tool_complete_callback=_tool_complete)
+             # The canonical turn has no agent object here; the served pair rides on the
+             # committed usage/result runtime metadata when the turn recorded one.
+@@ -1134,8 +1185,11 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
+         else:
+             with self._profile_scope(run.request_profile):
+                 agent = self._create_agent(
+-                    stream_delta_callback=_text_cb, tool_progress_callback=self._make_run_event_callback(run_id, loop),
+-                    interim_assistant_callback=_interim_cb, **run.agent_kwargs)
++                    stream_delta_callback=_text_cb, reasoning_callback=_reasoning_cb,
++                    tool_progress_callback=self._make_run_event_callback(run_id, loop),
++                    interim_assistant_callback=_interim_cb,
++                    tool_start_callback=_terminal_start, tool_complete_callback=_terminal_complete,
++                    **run.agent_kwargs)
+             self._active_run_agents[run_id] = agent
+             approval_notify = _make_approval_notify(self, run, _api_server=_api_server)
+             result, usage, served_runtime = await _submit_api_worker(
+diff --git a/gateway/run_goals.py b/gateway/run_goals.py
+index 42d38850a9..e184ef42bb 100644
+--- a/gateway/run_goals.py
++++ b/gateway/run_goals.py
+@@ -42,9 +42,9 @@ class GatewayGoalsMixin:
+                 from hermes_cli.config import load_config
+ 
+                 goals_cfg = (load_config() or {}).get("goals") or {}
+-            return int(goals_cfg.get("max_turns", 20) or 20)
++            return int(goals_cfg.get("max_turns", -1))
+         except Exception:
+-            return 20
++            return -1
+ 
+     async def _warm_goals_session_db(self, label: str) -> None:
+         """Warm the goals SessionDB cache off-loop (best-effort): a cold cache runs the state.db
+diff --git a/hermes_cli/cli_loops_mixin.py b/hermes_cli/cli_loops_mixin.py
+index 3b5c5cbe78..da1d4bb7f9 100644
+--- a/hermes_cli/cli_loops_mixin.py
++++ b/hermes_cli/cli_loops_mixin.py
+@@ -622,9 +622,9 @@ class CLILoopsMixin:
+             from hermes_cli.config import load_config
+             try:
+                 goals_cfg = (load_config() or {}).get("goals") or {}
+-                return int(goals_cfg.get("max_turns", 20) or 20)
+-            except Exception:  # health: allow BLE001 -- main's fallback: an unreadable goals config is the 20-turn default
+-                return 20
++                return int(goals_cfg.get("max_turns", -1))
++            except Exception:  # health: allow BLE001 -- Rocsy: an unreadable goals config means unlimited turns (-1)
++                return -1
+ 
+         def load():
+             from hermes_cli.goals import GoalManager
+diff --git a/hermes_cli/cli_status_bar_mixin.py b/hermes_cli/cli_status_bar_mixin.py
+index 2caf109792..ca190aeb6e 100644
+--- a/hermes_cli/cli_status_bar_mixin.py
++++ b/hermes_cli/cli_status_bar_mixin.py
+@@ -990,7 +990,11 @@ class CLIStatusBarMixin:
+             return ""
+         used = snapshot.get("goal_turns_used") or 0
+         max_turns = snapshot.get("goal_max_turns") or 0
+-        return t("cli.status_bar.goal_turns", used=used, max=max_turns) if max_turns else t("cli.status_bar.goal")
++        if max_turns > 0:
++            return t("cli.status_bar.goal_turns", used=used, max=max_turns)
++        if max_turns < 0:
++            return f"⊙ goal {used}/∞"
++        return t("cli.status_bar.goal")
+ 
+     def _get_status_bar_field_set(self) -> Optional[frozenset]:
+         """Visible status-bar fields from ``display.status_bar.fields`` (module-level
+diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
+index 50117f6fb1..b3a48d85a3 100644
+--- a/hermes_cli/config_defaults.py
++++ b/hermes_cli/config_defaults.py
+@@ -1382,12 +1382,10 @@ DEFAULT_CONFIG = {
+     # every API call for few-shot priming. Never saved to sessions/logs/trajectories.
+     "prefill_messages_file": "",
+     # Goals — persistent cross-turn /goal loop: after each turn an aux-model judge checks if the
+-    # goal is satisfied, else a continuation prompt re-enters the session until done, budget
+-    # exhausted, or paused. Judge failures fail OPEN; the budget is the backstop.
++    # goal is satisfied, else a continuation prompt re-enters the session until done or paused.
+     "goals": {
+-        # Max continuation turns before auto-pause (/goal resume) — guards against judge false
+-        # negatives and unbounded spend.
+-        "max_turns": 20,
++        # Max continuation turns before auto-pause. A non-positive value is unlimited.
++        "max_turns": -1,
+     },
+     # Loops — /loop re-runs a prompt or slash command on a cadence in-session. Fixed interval fires
+     # on the user's clock; self-paced (no interval) starts at the floor and backs off exponentially
+diff --git a/hermes_cli/goal_command.py b/hermes_cli/goal_command.py
+index 0c19ebf364..5a183de34e 100644
+--- a/hermes_cli/goal_command.py
++++ b/hermes_cli/goal_command.py
+@@ -151,8 +151,9 @@ def _set(mgr, arg, *, drafting, last_user_message, render, progress):
+         contract = contract if not contract.is_empty() else None
+     previous = mgr.state.goal if mgr.has_goal() else ""
+     state = mgr.set(headline or arg, contract=contract)
+-    output = render("gateway.goal.set", "⊙ Goal set ({budget}-turn budget): {goal}",
+-                    budget=state.max_turns, goal=state.goal)
++    output = (f"⊙ Goal set (unlimited turns): {state.goal}" if state.max_turns <= 0 else
++              render("gateway.goal.set", "⊙ Goal set ({budget}-turn budget): {goal}",
++                     budget=state.max_turns, goal=state.goal))
+     if previous and previous != state.goal:
+         output += f"\n(replaced the previous goal)\n  was: {previous}"
+     if state.has_contract():
+@@ -167,8 +168,8 @@ def _set(mgr, arg, *, drafting, last_user_message, render, progress):
+     else:
+         against = " against the contract above" if state.has_contract() else ""
+         output += (f"\nAfter each turn, a judge model checks if the goal is done{against}. "
+-                   "Hermes keeps working until it is, you pause/clear it, or the budget is "
+-                   "exhausted. Use /goal status, /goal show, /goal pause, /goal resume, /goal clear.")
++                   "Hermes keeps working until it is, or you pause/clear it. "
++                   "Use /goal status, /goal show, /goal pause, /goal resume, /goal clear.")
+     return GoalCommandResult(output, goals.goal_kick_prompt(state.goal, last_user_message), kickoff=True)
+ 
+ 
+diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
+index 96ee695e28..e4e6ea6129 100644
+--- a/hermes_cli/goals.py
++++ b/hermes_cli/goals.py
+@@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
+ 
+ # ── Constants & defaults ──────────────────────────────────────────────
+ 
+-DEFAULT_MAX_TURNS = 20
++# A non-positive budget means no turn-count limit. Safety pauses for blocked goals,
++# broken judge credentials, and repeatedly unparseable judge output still apply.
++DEFAULT_MAX_TURNS = -1
+ DEFAULT_JUDGE_TIMEOUT = 30.0
+ # Judge output budget. Reasoning models burn hidden-reasoning tokens before the visible one-line
+ # JSON verdict; 200 (the original) reliably truncated it and tripped the auto-pause. 4096 covers
+@@ -1122,7 +1124,8 @@ class GoalManager:
+         s = self._state
+         if s is None or s.status == "cleared":
+             return "No active goal. Set one with /goal <text>."
+-        turns = f"{s.turns_used}/{s.max_turns} turns"
++        turns = (f"{s.turns_used} turns (unlimited)" if s.max_turns <= 0
++                 else f"{s.turns_used}/{s.max_turns} turns")
+         sub = f", {len(s.subgoals)} subgoal{'s' if len(s.subgoals) != 1 else ''}" if s.subgoals else ""
+         con = ", contract" if self.has_contract() else ""
+         gat = f", {len(s.gates)} gate{'s' if len(s.gates) != 1 else ''}" if s.gates else ""
+@@ -1504,7 +1507,8 @@ class GoalManager:
+         # so the judge is skipped and the gate's output drives the next turn (same turn budget).
+         gate_decision = self._check_gates()
+         if gate_decision is not None:
+-            if gate_decision.get("should_continue") and state.turns_used >= state.max_turns:
++            if (gate_decision.get("should_continue") and state.max_turns > 0
++                    and state.turns_used >= state.max_turns):
+                 return self._budget_pause(state, "gate_failed", gate_decision.get("reason", ""), note=" (a quality gate is still failing)")
+             return gate_decision
+ 
+@@ -1558,13 +1562,15 @@ class GoalManager:
+                 + _JUDGE_CONFIG_HINT.format(provider="openrouter", model="google/gemini-3-flash-preview"),
+             )
+ 
+-        if state.turns_used >= state.max_turns:
++        if state.max_turns > 0 and state.turns_used >= state.max_turns:
+             return self._budget_pause(state, "continue", reason)
+ 
+         self._save()
+         return _decision(
+             "active", True, self.next_continuation_prompt(), "continue", reason,
+-            f"↻ Continuing toward goal ({state.turns_used}/{state.max_turns}): {reason}",
++            (f"↻ Continuing toward goal ({state.turns_used} turns, unlimited): {reason}"
++             if state.max_turns <= 0 else
++             f"↻ Continuing toward goal ({state.turns_used}/{state.max_turns}): {reason}"),
+         )
+ 
+     def next_continuation_prompt(self) -> Optional[str]:
+diff --git a/tests/hermes_cli/test_cli_status_bar_goal.py b/tests/hermes_cli/test_cli_status_bar_goal.py
+index fcfddcf528..4cc9d9fe2b 100644
+--- a/tests/hermes_cli/test_cli_status_bar_goal.py
++++ b/tests/hermes_cli/test_cli_status_bar_goal.py
+@@ -30,6 +30,13 @@ def _attach_goal(cli_obj, *, active: bool, turns_used: int = 3, max_turns: int =
+     return cli_obj
+ 
+ class TestStatusBarGoalSegment:
++    def test_unlimited_goal_segment_uses_infinity_symbol(self):
++        cli_obj = _attach_goal(_make_cli(), active=True, turns_used=23, max_turns=-1)
++
++        snapshot = cli_obj._get_status_bar_snapshot()
++
++        assert cli_obj._status_bar_goal_segment(snapshot) == "⊙ goal 23/∞"
++
+     def test_goal_segment_composition(self):
+         cli_obj = _attach_goal(_make_cli(), active=True, turns_used=3, max_turns=20)
+ 
+@@ -55,3 +62,16 @@ class TestStatusBarGoalSegment:
+         text = cli_obj._build_status_bar_text(width=120)
+ 
+         assert "⊙ goal 5/20" in text
++    def test_active_goal_rendered_in_medium_status_bar(self):
++        cli_obj = _attach_goal(_make_cli(), active=True, turns_used=1, max_turns=20)
++
++        text = cli_obj._build_status_bar_text(width=60)
++
++        assert "⊙ goal 1/20" in text
++
++    def test_active_goal_rendered_in_narrow_status_bar(self):
++        cli_obj = _attach_goal(_make_cli(), active=True, turns_used=2, max_turns=20)
++
++        text = cli_obj._build_status_bar_text(width=50)
++
++        assert "⊙ goal" in text
+diff --git a/tests/hermes_cli/test_goals.py b/tests/hermes_cli/test_goals.py
+index 32113fbdcd..75c01dd54a 100644
+--- a/tests/hermes_cli/test_goals.py
++++ b/tests/hermes_cli/test_goals.py
+@@ -105,6 +105,25 @@ class TestJudgeGoal:
+ 
+ class TestGoalManager:
+ 
++    def test_default_goal_has_no_turn_limit(self, hermes_home):
++        from hermes_cli import goals
++        from hermes_cli.goals import GoalManager
++
++        mgr = GoalManager(session_id="unlimited-goal")
++        state = mgr.set("keep working")
++        assert state.max_turns <= 0
++
++        with patch.object(
++            goals, "judge_goal", return_value=("continue", "more remains", False, None, False)
++        ):
++            for turn in range(25):
++                decision = mgr.evaluate_after_turn(f"step {turn}")
++
++        assert decision["status"] == "active"
++        assert decision["should_continue"] is True
++        assert mgr.state.turns_used == 25
++        assert "unlimited" in mgr.status_line()
++
+     def test_set_then_status(self, hermes_home):
+         from hermes_cli.goals import GoalManager
+ 
+diff --git a/tests/tools/test_rocsy_browser_screenshot.py b/tests/tools/test_rocsy_browser_screenshot.py
+new file mode 100644
+index 0000000000..4a1232e85c
+--- /dev/null
++++ b/tests/tools/test_rocsy_browser_screenshot.py
+@@ -0,0 +1,27 @@
++"""Rocsy: browser_exec's screenshot is copied into the Rocsy workspace for the chat (and only there)."""
++import os
++import time
++
++import tools.browser_use_cli as cli
++
++
++def test_copied_into_the_rocsy_workspace(tmp_path, monkeypatch):
++    monkeypatch.setattr(cli, "get_hermes_home", lambda: str(tmp_path))
++    (tmp_path / "rocsy-workspace").mkdir()
++    shot = tmp_path / "shot.png"
++    shot.write_bytes(b"png")
++    old = tmp_path / "rocsy-workspace/.browser-screenshots"
++    old.mkdir()
++    stale = old / "page-old.png"
++    stale.write_bytes(b"x")
++    os.utime(stale, (time.time() - 2 * 86400,) * 2)
++    copy = cli._rocsy_screenshot(str(shot))
++    assert copy.startswith(str(old)) and copy.endswith(".png") and open(copy, "rb").read() == b"png"
++    assert not stale.exists()
++
++
++def test_nothing_without_a_rocsy_workspace(tmp_path, monkeypatch):
++    monkeypatch.setattr(cli, "get_hermes_home", lambda: str(tmp_path))
++    shot = tmp_path / "shot.jpg"
++    shot.write_bytes(b"jpg")
++    assert cli._rocsy_screenshot(str(shot)) == ""
+diff --git a/tools/browser_use_cli.py b/tools/browser_use_cli.py
+index ff9b9cd7a7..3bcc171a0d 100644
+--- a/tools/browser_use_cli.py
++++ b/tools/browser_use_cli.py
+@@ -325,6 +325,31 @@ def _native_screenshot_result(result: dict[str, Any], path: str) -> Optional[dic
+         return None
+ 
+ 
++def _rocsy_screenshot(path: str) -> str:
++    """Rocsy: a copy of this call's screenshot in the Rocsy workspace, for the chat to show ("" when this
++    Hermes isn't Rocsy's). The copy keeps the chat's picture after the harness overwrites its shot.png;
++    copies older than a day are removed."""
++    workspace = Path(get_hermes_home()) / "rocsy-workspace"
++    if not workspace.is_dir():
++        return ""
++    import shutil
++    import uuid
++    folder = workspace / ".browser-screenshots"
++    try:
++        folder.mkdir(parents=True, exist_ok=True)
++        cutoff = time.time() - 24 * 3600
++        for old in folder.glob("page-*"):
++            with contextlib.suppress(OSError):
++                if old.stat().st_mtime < cutoff:
++                    old.unlink()
++        target = folder / f"page-{uuid.uuid4().hex}{Path(path).suffix or '.png'}"
++        shutil.copyfile(path, target)
++        return str(target)
++    except OSError as exc:
++        logger.debug("Rocsy page screenshot copy failed: %s", exc)
++        return ""
++
++
+ def _served_profile_tag() -> str:
+     """``""`` outside a served-profile scope (every legacy key stays byte-identical); under a
+     multiplexed turn, the routed profile's home key — one profile's browser must never be handed
+@@ -889,8 +914,13 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
+     screenshot = _find_screenshot(proc.stdout, started)
+     if screenshot:
+         result["screenshot_path"] = screenshot
++        rocsy = _rocsy_screenshot(screenshot)
++        if rocsy:
++            result["rocsy_screenshot_path"] = rocsy
+         native = _native_screenshot_result(result, screenshot)
+         if native is not None:
++            if rocsy:  # Rocsy: the run stream reads these off the tool result (api_server_runs)
++                native.update(success=result["success"], rocsy_screenshot_path=rocsy)
+             return native
+     return tool_result(result)
+ 
+diff --git a/tui_gateway/methods_tools.py b/tui_gateway/methods_tools.py
+index b0914c2bcc..a73457d2ab 100644
+--- a/tui_gateway/methods_tools.py
++++ b/tui_gateway/methods_tools.py
+@@ -803,9 +803,9 @@ def _cmd_goal(rid, params, session, name, arg):
+         if err:
+             return err
+         try:
+-            max_turns = int((_load_cfg().get("goals") or {}).get("max_turns", 20) or 20)
++            max_turns = int((_load_cfg().get("goals") or {}).get("max_turns", -1))
+         except Exception:
+-            max_turns = 20
++            max_turns = -1
+         mgr = goals.GoalManager(session_id=sid_key, default_max_turns=max_turns)
+         from hermes_cli.goal_command import dispatch_goal_command
+         result = dispatch_goal_command(
+diff --git a/tui_gateway/prompt_turn.py b/tui_gateway/prompt_turn.py
+index c661ee64dd..a93ed928f9 100644
+--- a/tui_gateway/prompt_turn.py
++++ b/tui_gateway/prompt_turn.py
+@@ -68,9 +68,9 @@ def _active_goal_manager(session: dict):
+     """The session's GoalManager when a goal is active, else None."""
+     from hermes_cli.goals import GoalManager
+     try:
+-        max_turns = int((_load_cfg().get("goals") or {}).get("max_turns", 20) or 20)
++        max_turns = int((_load_cfg().get("goals") or {}).get("max_turns", -1))
+     except Exception:
+-        max_turns = 20
++        max_turns = -1
+     goal_mgr = GoalManager(
+         session_id=str(session.get("session_key") or ""), default_max_turns=max_turns)
+     return goal_mgr if goal_mgr.is_active() else None

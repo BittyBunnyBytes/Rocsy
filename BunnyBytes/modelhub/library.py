@@ -369,7 +369,8 @@ BASE_PATTERNS = [
     (r"wan.?2[._]?2.*5b", "Wan Video 2.2 TI2V-5B"), (r"wan.?2[._]?1", "Wan Video"),
     (r"flux.?1.?krea", "Flux.1 Krea"), (r"flux.?1.*(dev|d\b)|flux1-dev", "Flux.1 D"), (r"flux.?2.*klein.*9b", "Flux.2 Klein 9B"),
     (r"flux.?2.*klein.*4b", "Flux.2 Klein 4B"), (r"z.?image.?turbo", "ZImageTurbo"), (r"z.?image", "ZImageBase"),
-    (r"hidream", "HiDream"), (r"chroma", "Chroma"), (r"hunyuan.?video", "Hunyuan Video"), (r"illustrious|noob", "Illustrious"),
+    (r"hidream", "HiDream"), (r"chroma", "Chroma"), (r"hunyuan.?3d|hunyuan3d", "Hunyuan3D"), (r"trellis", "Trellis.2"), (r"pixal", "Pixal3D"),
+    (r"hunyuan.?video", "Hunyuan Video"), (r"illustrious|noob", "Illustrious"),
     (r"pony", "Pony"), (r"sdxl|juggernaut.?xl|realvis.?xl", "SDXL 1.0"), (r"sd.?1[._]?5|v1-5", "SD 1.5"),
     (r"yue", "YuE2"), (r"ace.?step", "ACE Audio"),
 ]

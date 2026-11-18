@@ -1,0 +1,12 @@
+{
+    "display_name": "Rocsy Visual Overhaul",
+    "loading_order": 900,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Rocsy",
+    "version": "1.0.0",
+    "homePage": "https://github.com/BittyBunnyBytes/Rocsy",
+    "auto_update": false
+}

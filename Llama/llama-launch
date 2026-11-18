@@ -21,7 +21,7 @@ fi
 args_file=/app/overrides/$model_id.args
 
 # Only the RDNA-boost ROCm builds may run. The default is built for gfx1100
-# (RX 7900 XTX) AND gfx1101 (RX 7800 XT): the old gfx1100-only build exited as
+# (RX 7900 XTX / 7900 XT) AND gfx1101 (RX 7800 XT): the old gfx1100-only build exited as
 # soon as a multi-GPU model touched ROCm1 (still allowed for rollback).
 # Models -> Manager -> Core Backend points llama.cpp-builds/active at a newer
 # llama.cpp release converted to RDNA Boost, or at a stock llama.cpp build the
@@ -103,20 +103,49 @@ prefix=ROCm
 [ "$backend" = vulkan ] && prefix=Vulkan
 
 # Multi-GPU is a per-model setting (Parameters tab -> "--multi-gpu on" in the
-# model's .args file); off by default, which keeps the model on GPU 0 only.
+# model's .args file); off by default.
+#
+# Which cards: the GPU queue keeps that (Queue page -> GPUs; role "llama", or
+# "llama_multi" for a Multi-GPU model; with "Use multi-GPU wherever it can" on
+# and 2+ cards, "llama" is every multi-GPU card). It answers GPU UUIDs in
+# order; they go into ROCR_VISIBLE_DEVICES, so inside this process the first
+# is ROCm0, the next ROCm1 - the LLM can live on any card, not only the first.
+# LLAMA_GPU_DEVICES / LLAMA_MULTI_GPU_DEVICES set explicitly win (old
+# behaviour: ROCm indices in PCI order), and so does a queue that can't be
+# reached (ROCm0, or ROCm0,ROCm1 for Multi-GPU).
+multi=0
+if [ -n "$model_id" ] && [ -r "$args_file" ] && tr -d '\r' < "$args_file" | grep -qx -- '--multi-gpu on'; then
+  multi=1
+fi
 if [ "$backend" = vulkan ]; then
   devices=${LLAMA_VULKAN_DEVICES:-Vulkan0}
+  if [ "$multi" = 1 ]; then devices=${LLAMA_VULKAN_MULTI_GPU_DEVICES:-Vulkan0,Vulkan1}; fi
 else
-  devices=${LLAMA_GPU_DEVICES:-ROCm0}
-fi
-if [ -n "$model_id" ] && [ -r "$args_file" ] && tr -d '\r' < "$args_file" | grep -qx -- '--multi-gpu on'; then
-  if [ "$backend" = vulkan ]; then
-    devices=${LLAMA_VULKAN_MULTI_GPU_DEVICES:-Vulkan0,Vulkan1}
-  else
-    devices=${LLAMA_MULTI_GPU_DEVICES:-ROCm0,ROCm1}
+  role=llama
+  explicit=${LLAMA_GPU_DEVICES:-}
+  if [ "$multi" = 1 ]; then role=llama_multi; explicit=${LLAMA_MULTI_GPU_DEVICES:-}; fi
+  visible=
+  if [ -z "$explicit" ] && [ -z "${ROCR_VISIBLE_DEVICES:-}" ]; then
+    visible=$(curl -fsS --max-time 3 "${LOCK_URL:-http://127.0.0.1:8600}/v2/gpus/visible?role=$role" 2>/dev/null | tr -d ' \r\n')
+    case "$visible" in *[!A-Za-z0-9,-]*) visible= ;; esac
   fi
-  echo "Multi-GPU on: $devices" >&2
+  if [ -n "$visible" ]; then
+    export ROCR_VISIBLE_DEVICES=$visible
+    devices=
+    n=0
+    old_ifs=$IFS; IFS=,
+    for _ in $visible; do devices=${devices:+$devices,}ROCm$n; n=$((n + 1)); done
+    IFS=$old_ifs
+    echo "GPUs for $role (from the GPU queue): $visible -> $devices" >&2
+  elif [ -n "$explicit" ]; then
+    devices=$explicit
+  elif [ "$multi" = 1 ]; then
+    devices=ROCm0,ROCm1
+  else
+    devices=ROCm0
+  fi
 fi
+if [ "$multi" = 1 ]; then echo "Multi-GPU on: $devices" >&2; fi
 case "$devices" in
   "${prefix}0"|"${prefix}0",*) ;;
   *) echo "GPU devices must start with ${prefix}0" >&2; exit 2 ;;

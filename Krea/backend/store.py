@@ -21,6 +21,13 @@ class Store:
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # WAL + synchronous=NORMAL: a write is one append instead of a rollback journal with two fsyncs
+        # on the event loop for every progress update; a crash can lose the last moments, never the file.
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+        except sqlite3.Error:
+            pass  # e.g. a filesystem without shared memory: the rollback journal still works
         with self._conn:
             self._conn.executescript(
                 """

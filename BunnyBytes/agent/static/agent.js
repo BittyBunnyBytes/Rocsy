@@ -23,6 +23,7 @@
   const terminals = new Map();      // terminal tool id -> its panel (long sessions have hundreds)
   const boards = new Map();         // video board id (scan1) -> its card: the Trainer's auto-cut view of a video
   let current = null, stream = null, retry = null, listKey = "";
+  let setupShown = null, setupKey = "", setupOpen = false; const setupOpenSecs = new Set();   // the open setup chat's draft panel
   let draftProject = "", projectTab = "chats";   // the project whose page is open: new chats start in it
   // Show available reasoning and tool activity unless this browser opted out.
   let hideThink = false;
@@ -367,8 +368,119 @@
     }
     if (e.kind === "ask") askCard(li, e);
     if (e.kind === "offer") offerRow(li, e);
+    if (isLedgerEvent(e)) ledgerCard(li, e);
     return li;
   }
+
+  /* Prompt ledger plugin: a card wherever the ledger was written, and a reader for every prompt.
+     Read through the agent's own `$R prompt` tool route (list = counts/summaries/outline, show = full prompts). */
+  const LEDGER_CMD = /(?:\$R|rocsy\.py\s+\S+)\s+prompt\s+(?:save|status|delete|outline|direction)\b/;
+  const isLedgerEvent = (e) => (e.kind === "system" && /^Prompt ledger:/.test(e.text || ""))
+    || (e.kind === "terminal" && e.status === "complete" && LEDGER_CMD.test(e.command || "")
+        && /Saved clip|Clips? .* now |Deleted clip|Outline set|Standing direction/.test(e.text || ""));
+  let ledgerCache = { key: "", promise: null }, ledgerFilter = "all";
+  function parseLedger(list, show) {
+    const clips = new Map(), outline = [], directions = [];
+    let section = "clips", head = "", files = "";
+    for (const line of list.split("\n")) {
+      if (line.startsWith("Clips:")) { head = line; continue; }
+      if (line.startsWith("Files:")) { files = line.slice(6).trim(); continue; }
+      if (line.startsWith("OUTLINE")) { section = "outline"; continue; }
+      if (line.startsWith("STANDING DIRECTIONS")) { section = "directions"; continue; }
+      let m;
+      if (section === "clips" && (m = line.match(/^\s+(\d+)\. \[([^\]]+)\](?: \(([\d.]+) s\))? ?(.*)$/)))
+        clips.set(+m[1], { n: +m[1], status: m[2].split(",")[0], editing: m[2].includes("being edited"), seconds: m[3] ? +m[3] : null, summary: m[4], prompt: "" });
+      else if (section === "outline" && (m = line.match(/^\s+(\d+)\. \(([\d.]+) s\) (.*)$/))) outline.push({ n: +m[1], seconds: +m[2], beat: m[3] });
+      else if (section === "directions" && (m = line.match(/^\s+from clip (\d+): (.*)$/))) directions.push({ from: +m[1], text: m[2] });
+    }
+    const parts = show.split(/^-- clip (\d+) \[([^\]]+)\](?: \(([\d.]+) s\))? --$/m);
+    for (let i = 1; i + 3 < parts.length + 1; i += 4) {
+      const n = +parts[i], c = clips.get(n) || { n, status: parts[i + 1], seconds: parts[i + 2] ? +parts[i + 2] : null, summary: "" };
+      c.prompt = (parts[i + 3] || "").trim(); clips.set(n, c);
+    }
+    return { head, files, outline, directions, clips: [...clips.values()].sort((a, b) => a.n - b.n) };
+  }
+  function ledgerData(force = false) {
+    const sid = current; if (!sid) return Promise.reject(new Error("No chat open"));
+    const key = `${sid}:${$("#a-log")?.querySelectorAll(".a-ledger-card").length || 0}`;
+    if (!force && ledgerCache.key === key && ledgerCache.promise) return ledgerCache.promise;
+    const call = (action) => api(`/tool/${sid}/prompt`, { method: "POST", body: JSON.stringify({ action }) }).then((r) => r.text || "");
+    ledgerCache = { key, promise: Promise.all([call("list"), call("show")]).then(([l, s]) => {
+      if (/^error:/.test(l)) throw new Error(l.replace(/^error:\s*/, ""));
+      return parseLedger(l, s);
+    }) };
+    ledgerCache.promise.catch(() => { ledgerCache = { key: "", promise: null }; });
+    return ledgerCache.promise;
+  }
+  const ledgerChip = (status) => el("span", `a-ledger-chip is-${status}`, status === "in-progress" ? "in progress" : status);
+  function ledgerRow(c) {
+    const row = el("div", "a-ledger-row");
+    row.append(el("span", "a-ledger-n", String(c.n)), ledgerChip(c.status));
+    if (c.seconds) row.append(el("span", "a-ledger-secs", `${c.seconds} s`));
+    row.append(el("span", "a-ledger-sum", c.summary || ""));
+    return row;
+  }
+  function ledgerCard(li, e) {
+    const card = el("div", "a-ledger-card");
+    const head = el("div", "a-ledger-head");
+    head.append(el("span", "a-ledger-title", "📜 Prompt ledger"), el("span", "a-ledger-count a-access-note", ""));
+    const open = el("button", "a-btn ghost a-ledger-open", "Open ledger"); open.type = "button";
+    open.addEventListener("click", () => openLedger());
+    head.append(open);
+    const rows = el("div", "a-ledger-rows");
+    card.append(head, rows);
+    li.append(card);
+    // Only the newest card lists the clips; older ones keep their line and the button.
+    requestAnimationFrame(() => {
+      const cards = [...document.querySelectorAll("#a-log .a-ledger-card")];
+      if (cards.at(-1) !== card) return;
+      cards.slice(0, -1).forEach((c) => c.querySelector(".a-ledger-rows")?.replaceChildren());
+      ledgerData().then((d) => {
+        $(".a-ledger-count", card).textContent = d.head.replace(/ · strip \S+/, "").replace(/^Clips: /, "") ;
+        const shown = d.clips.slice(-6);
+        rows.replaceChildren(...(d.clips.length > shown.length ? [el("div", "a-access-note", `…${d.clips.length - shown.length} earlier clip${d.clips.length - shown.length > 1 ? "s" : ""}`)] : []), ...shown.map(ledgerRow));
+      }).catch((err) => { rows.replaceChildren(el("span", "a-access-note", err.message)); });
+    });
+  }
+  async function openLedger(force = false) {
+    const dlg = $("#a-ledger-dialog");
+    if (!dlg.open) dlg.showModal();
+    $("#a-lg-list").replaceChildren(el("p", "a-access-note", "Loading…"));
+    try { paintLedger(await ledgerData(force)); }
+    catch (err) { $("#a-lg-list").replaceChildren(el("p", "a-modal-error", err.message)); }
+  }
+  let ledgerShown = null;
+  function paintLedger(d) {
+    ledgerShown = d;
+    $("#a-lg-summary").textContent = d.head.replace(/ · strip \S+/, "").replace(/^Clips: /, "Clips: ");
+    document.querySelectorAll("[data-lgf]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.lgf === ledgerFilter)));
+    const clips = d.clips.filter((c) => ledgerFilter === "all" || c.status === ledgerFilter);
+    $("#a-lg-list").replaceChildren(...(clips.length ? clips.map((c) => {
+      const item = el("details", "a-ledger-item");
+      const sum = el("summary"); sum.append(ledgerRow(c));
+      const body = el("div", "a-ledger-body");
+      const pre = el("pre", "a-ledger-prompt", c.prompt || "(no text)");
+      body.append(copyButton(() => c.prompt, `clip ${c.n}`, "a-ledger-copy"), pre);
+      item.append(sum, body);
+      return item;
+    }) : [el("p", "a-access-note", d.clips.length ? "No clips with this status." : "The ledger is empty.")]));
+    const extra = [];
+    if (d.outline.length) {
+      extra.push(el("h3", null, `Outline (${d.outline.length} clips)`));
+      const ol = el("div", "a-ledger-outline");
+      ol.append(...d.outline.map((o) => el("div", "a-ledger-row", `${o.n}. (${o.seconds} s) ${o.beat}`)));
+      extra.push(ol);
+    }
+    if (d.directions.length) {
+      extra.push(el("h3", null, "Standing directions"));
+      extra.push(...d.directions.map((x) => el("div", "a-ledger-row", `From clip ${x.from}: ${x.text}`)));
+    }
+    if (d.files) extra.push(el("p", "a-access-note", `Files: ${d.files}`));
+    $("#a-lg-extra").replaceChildren(...extra);
+  }
+  document.querySelectorAll("[data-lgf]").forEach((b) => b.addEventListener("click", () => { ledgerFilter = b.dataset.lgf; if (ledgerShown) paintLedger(ledgerShown); }));
+  $("#a-lg-close").addEventListener("click", () => $("#a-ledger-dialog").close());
+  $("#a-lg-refresh").addEventListener("click", () => openLedger(true));
 
   // The agent's question: a card with its choices (1-9 pick one); any later message of yours answers it.
   const ASK_ICON = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4.5"/><path d="M12 18h.01"/></svg>';
@@ -553,14 +665,35 @@
       }
       const node = eventNode(e);
       const liveThink = e.kind === "think" && log.querySelector('.a-ev[data-live="reasoning"]');
+      const liveReply = e.kind === "assistant" && log.querySelector('.a-ev[data-live="assistant"]');
       if (liveThink) adoptLiveThink(liveThink, node);
       else log.append(node);
+      if (liveReply) {                   // the finished reply replaces the streamed one: keep its code blocks' scroll
+        const was = scrollerStates(liveReply);
+        if (was.length) requestAnimationFrame(() => applyScrollers(node, was));
+      }
       if (e.kind === "board" && e.board) placeBoard(e.board, node);
       if (e.job && (jobEnds(e) || !cards.has(e.job))) placeCard(e.job, node);
     }
     requestAnimationFrame(() => {
       for (const o of scrollOutputs) o.scrollTop = o.scrollHeight;
       stick();
+    });
+  }
+
+  // Code blocks and tables scroll on their own. A rebuilt reply (each streaming frame, and the final message
+  // that replaces the live one) gets their positions back by order: one you were following stays at its tail,
+  // one you scrolled in stays put, one open full screen stays open.
+  const SCROLLERS = ".a-md-code, .a-md-table";
+  const scrollerStates = (node) => [...node.querySelectorAll(SCROLLERS)].map((s) => ({
+    top: s.scrollTop, left: s.scrollLeft, tail: s.scrollHeight - s.scrollTop - s.clientHeight < 24,
+    full: Boolean(s.closest(".a-md-codebox.is-full")) }));
+  function applyScrollers(node, was) {
+    [...node.querySelectorAll(SCROLLERS)].forEach((s, i) => {
+      const w = was[i]; if (!w) return;
+      if (w.full) { const box = s.closest(".a-md-codebox"); if (box) setFullCode(box, true); }
+      s.scrollTop = w.tail ? s.scrollHeight : w.top;
+      s.scrollLeft = w.left;
     });
   }
 
@@ -582,24 +715,16 @@
         node._value = value;
         if (kind === "think") updateThink(node, value, true);
         else {
-          const md = renderMd(value);
+          const md = renderMd(value, true);
           let tail = md;
           while (tail.lastChild && tail.lastChild === tail.lastElementChild && !/^(PRE|TABLE|HR|BR|DIV)$/.test(tail.lastChild.tagName)) tail = tail.lastChild;
           tail.append(el("span", "a-caret"));
           // Each frame rebuilds the reply, so its code blocks are new elements that would open at the top.
           // Carry every block's scroll over (by position in the reply): one you were at the bottom of keeps
           // following the newest lines; one you scrolled up in stays exactly where you left it. Full screen too.
-          const SCROLLERS = ".a-md-code, .a-md-table";
-          const was = [...node.querySelectorAll(SCROLLERS)].map((s) => ({
-            top: s.scrollTop, left: s.scrollLeft, tail: s.scrollHeight - s.scrollTop - s.clientHeight < 24,
-            full: Boolean(s.closest(".a-md-codebox.is-full")) }));
+          const was = scrollerStates(node);
           node.replaceChildren(md);
-          [...node.querySelectorAll(SCROLLERS)].forEach((s, i) => {
-            const w = was[i]; if (!w) return;
-            if (w.full) { const box = s.closest(".a-md-codebox"); if (box) setFullCode(box, true); }
-            s.scrollTop = w.tail ? s.scrollHeight : w.top;
-            s.scrollLeft = w.left;
-          });
+          applyScrollers(node, was);
         }
       }
       if (node !== log.lastElementChild && !(key === "reasoning" && node.nextElementSibling?.dataset.live === "assistant")) {
@@ -1065,26 +1190,32 @@
 
   // Small, DOM-built (never innerHTML) markdown: fences, headings, lists, quotes, tables, rules,
   // `code`, **bold**, *italic*, ~~strike~~, [links](https://…) and bare URLs.
-  const INLINE_MD = /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*|__[^_\n]+?__)|(~~[^~\n]+?~~)|((?<![\w*])\*[^*\s](?:[^*\n]*[^*\s])?\*(?!\w)|(?<!\w)_[^_\s](?:[^_\n]*[^_\s])?_(?!\w))|(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g;
+  // Inline markdown. Order matters: escapes and code spans first, so nothing inside them is formatted.
+  //  `` a`b `` code with backticks · ***bold italic*** · **bold with *italic* inside** · __bold words__ (not
+  //  __init__: in a chat about code that's a name) · links whose URL has (brackets) · \* stays a literal *.
+  const INLINE_MD = /(?<esc>\\[\\`*_{}\[\]()#+\-.!|~<>])|(?<ticks>`+)(?<code>[^`\n](?:[^\n]*?[^`\n])??)\k<ticks>(?!`)|\*\*\*(?<bi>[^*\s](?:[^*\n]*?[^*\s])?)\*\*\*(?!\*)|\*\*(?<bold>[^*\s](?:[^*\n]|\*[^*\n]+\*)*?)\*\*(?!\*)|(?<!\w)__(?<ubold>[^_\s][^_\n]*?\s[^_\n]*?[^_\s])__(?!\w)|~~(?<strike>[^~\n]+?)~~|(?<![\w*\\])\*(?<em>[^*\s](?:[^*\n]*[^*\s])?)\*(?!\w)|(?<![\w\\])_(?<uem>[^_\s](?:[^_\n]*[^_\s])?)_(?!\w)|\[(?<label>[^\]\n]+)\]\((?<href>https?:\/\/(?:[^()\s]|\([^()\s]*\))+)\)|(?<url>https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g;
   function inlineMd(node, text) {
     let at = 0;
     for (const m of text.matchAll(INLINE_MD)) {
       if (m.index > at) node.append(text.slice(at, m.index));
-      const [all, code, bold, strike, em, link, url] = m;
-      if (code) node.append(el("code", "", code.slice(1, -1)));
-      else if (bold) { const b = el("strong"); inlineMd(b, bold.slice(2, -2)); node.append(b); }
-      else if (strike) { const d = el("del"); inlineMd(d, strike.slice(2, -2)); node.append(d); }
-      else if (em) { const i = el("em"); inlineMd(i, em.slice(1, -1)); node.append(i); }
+      const g = m.groups;
+      const wrap = (tag, inner) => { const n = el(tag); inlineMd(n, inner); node.append(n); return n; };
+      if (g.esc) node.append(g.esc.slice(1));
+      else if (g.code != null) node.append(el("code", "", /^ .*[^ ].* $/.test(g.code) ? g.code.slice(1, -1) : g.code));
+      else if (g.bi) { const b = el("strong"); const i = el("em"); inlineMd(i, g.bi); b.append(i); node.append(b); }
+      else if (g.bold || g.ubold) wrap("strong", g.bold || g.ubold);
+      else if (g.strike) wrap("del", g.strike);
+      else if (g.em || g.uem) wrap("em", g.em || g.uem);
       else {
-        const [, label, href] = link ? link.match(/^\[([^\]]+)\]\((.+)\)$/) : [null, url, url];
-        const a = el("a", "", label); a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer";
+        const a = el("a", "", g.label || g.url); a.href = g.href || g.url; a.target = "_blank"; a.rel = "noopener noreferrer";
         node.append(a);
       }
-      at = m.index + all.length;
+      at = m.index + m[0].length;
     }
     if (at < text.length) node.append(text.slice(at));
   }
-  const tableCells = (line) => line.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+  // Cells of a table row: outer pipes optional, \| is a literal pipe.
+  const tableCells = (line) => line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
   // Copy buttons: every message you sent or the agent wrote, and every code block it wrote.
   const COPY_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>';
   const COPIED_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
@@ -1461,67 +1592,154 @@
     return box;
   }
 
-  function renderMd(text) {
+  const LIST_ITEM = /^(\s*)([-*+•]|\d{1,3}[.)])\s+(.*)$/;
+  const FENCE_OPEN = /^(\s*)(`{3,}|~{3,})\s*([^\s`]*)/;
+  const NESTING_LANGS = new Set(["md", "markdown", "mdx"]);
+  const indentOf = (line) => { let n = 0; for (const ch of line) { if (ch === " ") n++; else if (ch === "\t") n += 4 - (n % 4); else break; } return n; };
+  const makeList = (tag, marker) => { const l = el(tag); const n = parseInt(marker, 10); if (tag === "ol" && n !== 1) l.start = n; return l; };
+  // A fenced block from lines[start]: its lines (indent of the fence removed) and the index of its last line.
+  //  - ```` (4+) closes only on a bare fence at least as long, so it can hold ``` examples;
+  //  - a ```markdown block can hold ```lang … ``` blocks (models nest them when writing docs);
+  //  - any other block that meets a ```lang line was left open by mistake: it ends there and that line opens
+  //    the next block (it used to be eaten as the closing fence, gluing the next block's code into prose).
+  function fenceBlock(lines, start, open) {
+    const ch = open[2][0], len = open[2].length, pad = indentOf(open[1]);
+    const nests = len === 3 && NESTING_LANGS.has(open[3].toLowerCase());
+    const unpad = (l) => l.replace(new RegExp(`^ {0,${pad}}`), "");
+    const body = [];
+    let depth = 0;
+    for (let i = start + 1; i < lines.length; i++) {
+      const l = lines[i], m = l.match(FENCE_OPEN);
+      const same = m && m[2][0] === ch;
+      if (same && !m[3] && m[2].length >= len && !l.slice(m[0].length).trim()) {      // a bare fence
+        if (!depth) return { body, end: i };
+        depth--;
+      } else if (same && m[3] && len === 3) {
+        if (nests) depth++;
+        else return { body, end: i - 1 };
+      }
+      body.push(unpad(l));
+    }
+    return { body, end: lines.length - 1 };                  // unclosed (still streaming): to the end
+  }
+  const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$|^\s*\|\s*:?-+:?\s*\|\s*$/;
+  const tableStart = (line, next) => line.includes("|") && TABLE_SEP.test(next) && tableCells(line).length >= (/^\s*\|.*\|\s*$/.test(line) ? 1 : 2);
+
+  function renderMd(text, live = false) {
     const root = el("div", "a-md");
     const lines = String(text).replace(/\r/g, "").split("\n");
-    let para = null, list = null, quote = null;
-    const close = () => { para = list = quote = null; };
+    let para = null, gap = false;             // gap: a blank line came before this line, inside a list
+    const lists = [];                          // open lists, outermost first: { el, indent, tag }
+    const close = () => { para = null; gap = false; lists.length = 0; };
+    // The item that indented text (or a code block) at this indent belongs to: the deepest list it's indented past.
+    const listHost = (ind) => (lists.findLast((l) => ind > l.indent) || lists[0]).el.lastElementChild;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      const fence = line.match(/^\s*(```|~~~)\s*([\w+#.-]*)/);
-      if (fence) {
+      // A setup chat's draft block (also one the model put in a code fence or bolded): it's shown in the panel
+      // above the composer, so the reply gets a chip. Fences inside its documents are skipped with it.
+      const DRAFT = /^[\s>*_]*::PROJECT\b/, DRAFT_END = /^[\s>*_]*::ENDPROJECT\b/, BARE = /^\s*(```|~~~)\s*$/;
+      const fenced = /^\s*(```|~~~)/.test(line) && DRAFT.test(lines[i + 1] || "");
+      if (DRAFT.test(line) || fenced) {
         close();
-        const buf = [];
-        while (++i < lines.length && !lines[i].trim().startsWith(fence[1])) buf.push(lines[i]);
-        root.append(codeBox(buf.join("\n"), fence[2]));
+        if (fenced) i++;
+        let ended = false, inside = false;
+        while (++i < lines.length) {
+          if (DRAFT_END.test(lines[i])) { ended = true; break; }
+          if (fenced && /^\s*(```|~~~)/.test(lines[i])) {          // no ::ENDPROJECT: the outer fence closes it
+            if (inside) inside = !BARE.test(lines[i]);
+            else if (BARE.test(lines[i])) { ended = true; i--; break; }
+            else inside = true;
+          }
+        }
+        if (fenced && ended && BARE.test(lines[i + 1] || "")) i++;     // its closing fence
+        root.append(el("div", "a-draft-chip", !ended && live ? "📋 Writing the project draft…" : "📋 Project draft updated: review it above the message box"));
+        continue;
+      }
+      const fence = line.match(FENCE_OPEN);
+      if (fence) {
+        const { body, end } = fenceBlock(lines, i, fence);
+        const box = codeBox(body.join("\n"), fence[3].match(/^[\w+#.-]*/)[0]);
+        const pad = indentOf(line);
+        if (lists.length && pad >= 2) listHost(pad).append(box);    // a code block inside a list item
+        else { close(); root.append(box); }
+        para = null; gap = false;
+        i = end;
         continue;
       }
       const bare = barePlan(lines, i) || bareH3(lines, i) || bareLyrics(lines, i);
       if (bare) { close(); root.append(codeBox(bare.source, bare.named)); i = bare.end; continue; }
-      if (!line.trim()) { close(); continue; }
-      const heading = line.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/);
+      if (!line.trim()) {
+        para = null;
+        if (lists.length) {              // a blank line inside a list: it goes on if an item or indented text follows
+          let k = i + 1;
+          while (k < lines.length && !lines[k].trim()) k++;
+          if (k < lines.length && (LIST_ITEM.test(lines[k]) || indentOf(lines[k]) >= 2)) { gap = true; continue; }
+        }
+        close();
+        continue;
+      }
+      const heading = line.match(/^\s{0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/);    // "# Learn C#" keeps its #
       if (heading) { close(); const h = el(`h${Math.min(heading[1].length + 2, 6)}`); inlineMd(h, heading[2]); root.append(h); continue; }
       if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { close(); root.append(el("hr")); continue; }
-      if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] || "")) {
+      if (tableStart(line, lines[i + 1] || "")) {
         close();
-        const table = el("table"), head = el("tr");
-        for (const c of tableCells(line)) { const th = el("th"); inlineMd(th, c); head.append(th); }
-        table.append(el("thead"), el("tbody")); table.tHead.append(head);
-        for (i += 2; i < lines.length && /^\s*\|/.test(lines[i]); i++) {
+        const head = tableCells(line), align = tableCells(lines[i + 1]).map((c) => (/^:-+:$/.test(c) ? "center" : /-:$/.test(c) ? "right" : ""));
+        const table = el("table"), hr = el("tr");
+        const cell = (tag, text, n) => { const c = el(tag); inlineMd(c, text); if (align[n]) c.style.textAlign = align[n]; return c; };
+        head.forEach((c, n) => hr.append(cell("th", c, n)));
+        table.append(el("thead"), el("tbody")); table.tHead.append(hr);
+        for (i += 2; i < lines.length && lines[i].trim() && lines[i].includes("|"); i++) {
           const tr = el("tr");
-          for (const c of tableCells(lines[i])) { const td = el("td"); inlineMd(td, c); tr.append(td); }
+          tableCells(lines[i]).slice(0, Math.max(head.length, 1)).forEach((c, n) => tr.append(cell("td", c, n)));
           table.tBodies[0].append(tr);
         }
         i--;
         const wrap = el("div", "a-md-table"); wrap.append(table); root.append(wrap);
         continue;
       }
-      const item = line.match(/^(\s*)([-*+•]|\d{1,3}[.)])\s+(.*)$/);
+      const item = line.match(LIST_ITEM);
       if (item) {
-        const tag = /\d/.test(item[2]) ? "OL" : "UL";
-        if (!list || list.tagName !== tag) {
-          para = quote = null;
-          list = el(tag.toLowerCase());
-          if (tag === "OL" && parseInt(item[2], 10) !== 1) list.start = parseInt(item[2], 10);
-          root.append(list);
+        const ind = indentOf(item[1]), tag = /\d/.test(item[2]) ? "ol" : "ul";
+        para = null; gap = false;
+        while (lists.length && lists.at(-1).indent > ind + 1) lists.pop();       // back out of deeper lists
+        let top = lists.at(-1);
+        if (top && ind >= top.indent + 2) {                                      // indented under the last item: nested
+          const nested = makeList(tag, item[2]);
+          top.el.lastElementChild.append(nested);
+          lists.push(top = { el: nested, indent: ind, tag });
+        } else if (!top || top.tag !== tag) {
+          const fresh = makeList(tag, item[2]);
+          if (top) { top.el.after(fresh); lists.pop(); } else root.append(fresh);
+          lists.push(top = { el: fresh, indent: ind, tag });
         }
         const li = el("li");
         const task = item[3].match(/^\[([ xX])\]\s+(.*)$/);
         if (task) { li.classList.add("is-task"); li.dataset.done = task[1] !== " " ? "1" : ""; inlineMd(li, task[2]); }
         else inlineMd(li, item[3]);
-        list.append(li);
+        top.el.append(li);
         continue;
       }
-      const q = line.match(/^\s*>\s?(.*)$/);
-      if (q) {
-        if (!quote) { para = list = null; quote = el("blockquote"); root.append(quote); }
-        else quote.append(el("br"));
-        inlineMd(quote, q[1]);
+      if (/^\s*>/.test(line)) {          // a quote: its lines are markdown too (lists, code, bold…)
+        close();
+        const buf = [];
+        for (; i < lines.length && /^\s*>/.test(lines[i]); i++) buf.push(lines[i].replace(/^\s*>\s?/, ""));
+        i--;
+        const quote = el("blockquote");
+        quote.append(...renderMd(buf.join("\n")).childNodes);
+        root.append(quote);
         continue;
       }
-      if (list && /^\s{2,}\S/.test(line)) { list.lastElementChild.append(el("br")); inlineMd(list.lastElementChild, line.trim()); continue; }
-      if (para) para.append(el("br"));
-      else { list = quote = null; para = el("p"); root.append(para); }
+      if (lists.length && indentOf(line) >= 2) {      // more text of a list item
+        const host = listHost(indentOf(line));
+        if (gap) { para = el("p"); host.append(para); }                         // after a blank line: its own paragraph
+        else if (para && para.parentNode === host) para.append(el("br"));
+        else { para = null; host.append(el("br")); inlineMd(host, line.trim()); continue; }
+        inlineMd(para, line.trim());
+        gap = false;
+        continue;
+      }
+      if (para && !lists.length) para.append(el("br"));
+      else { close(); para = el("p"); root.append(para); }
       inlineMd(para, line);
     }
     // Two or more detected prompts (H3 prompts, ::VIDEO plan parts, lyrics…): one button copies them all,
@@ -1955,6 +2173,7 @@
     head.classList.toggle("by-agent", s.named === "agent");
     $("#a-rename").hidden = false;
     renderCrumb(s);
+    renderSetup(s);
     $("#a-stage").textContent = s.stage || stateText(s.state);
     $("#a-stop").hidden = !s.busy; $("#a-stop").disabled = !!s.stop;
     $("#a-stop-inline").hidden = !s.busy; $("#a-stop-inline").disabled = !!s.stop;
@@ -2199,7 +2418,7 @@
     $("#a-empty").hidden = !!current; $("#a-session").hidden = !current;
     updateJump();
     $("#a-log").replaceChildren(); cards.clear(); terminals.clear(); boards.clear(); hideBusy();
-    $("#a-meters").hidden = true;
+    $("#a-meters").hidden = true; $("#a-setup").hidden = true;
     if (push) history.replaceState(null, "", current ? `?s=${current}` : location.pathname);
     document.querySelectorAll(".a-sess").forEach((b) => b.setAttribute("aria-current", String(b.dataset.id === current)));
     listKey = "";
@@ -2925,7 +3144,18 @@
   // Thinking / tool lines: visible by default, one toggle.
   const toggle = el("button", "a-think-toggle"); toggle.type = "button";
   const label = () => { toggle.textContent = hideThink ? "Show thinking and tool calls" : "Hide thinking and tool calls"; $("#a-log").classList.toggle("hide-think", hideThink); };
-  toggle.addEventListener("click", () => { hideThink = !hideThink; label(); try { localStorage.setItem("agent-think-stream", hideThink ? "hide" : "show"); } catch (_) {} });
+  toggle.addEventListener("click", () => {
+    // Keep your place: the first message on screen that stays visible keeps its offset (thinking and tool
+    // lines above it appearing or vanishing used to move it far out of view). At the bottom, stay there.
+    const host = $("#a-session"), top = host.getBoundingClientRect().top;
+    const anchor = follow ? null : [...$("#a-log").querySelectorAll(':scope > .a-ev:is([data-kind="user"], [data-kind="assistant"], [data-kind="say"])')]
+      .find((n) => n.getBoundingClientRect().bottom > top);
+    const before = anchor?.getBoundingClientRect().top;
+    hideThink = !hideThink; label();
+    if (anchor) { host.scrollTop += anchor.getBoundingClientRect().top - before; lastTop = host.scrollTop; updateJump(); }
+    else if (follow) toBottom();
+    try { localStorage.setItem("agent-think-stream", hideThink ? "hide" : "show"); } catch (_) {}
+  });
   $("#a-log").before(toggle); label();
 
   // A hidden tab drops its stream; coming back reconnects from where it left off.
@@ -3046,6 +3276,8 @@
     $("#a-project-chats").hidden = projectTab !== "chats";
     $("#a-project-sources").hidden = projectTab !== "sources";
     $("#a-project-access").hidden = projectTab !== "access";
+    $("#a-project-plugins").hidden = projectTab !== "plugins";
+    if (projectTab === "plugins") renderPlugins();
     const chats = (project.chats || []).filter((c) => !doomed.has(c.id));
     for (const id of [...pSelected]) if (!chats.some((c) => c.id === id && !chatBusy(c))) pSelected.delete(id);
     $("#a-pchat-tools").hidden = projectTab !== "chats" || (!chats.length && !pSelecting);
@@ -3220,6 +3452,7 @@
   function editProject(project) {
     editing = project;
     $("#a-pd-title").textContent = project ? "Edit project" : "New project";
+    $("#a-pd-agent").textContent = project ? "✨ Update with the agent" : "✨ Set up with the agent";
     $("#a-pd-name").value = project?.name || "";
     pickIcon = project?.icon || "folder"; pickColor = project?.color || "blue";
     $("#a-pd-error").hidden = true;
@@ -3229,6 +3462,110 @@
   $("#a-project-new").addEventListener("click", () => editProject(null));
   $("#a-project-new-side").addEventListener("click", () => { drawer(false); editProject(null); });
   $("#a-project-edit").addEventListener("click", () => editProject(openProject));
+  $("#a-project-chat-setup").addEventListener("click", () => openProject && startSetup(openProject));
+  $("#a-pd-agent").addEventListener("click", () => {
+    const project = editing, name = $("#a-pd-name").value.trim();
+    $("#a-project-dialog").close();
+    startSetup(project, name);
+  });
+
+  /* project setup chats: talk the project into shape, then confirm it with the chat's own button */
+  async function startSetup(project, name = "") {
+    const prompt = project ? `Help me update the project “${project.name}”: its instructions, documents and plugins.`
+      : name ? `Help me set up a new project called “${name}”.` : "Help me set up a new project.";
+    try {
+      const s = await api("/sessions", { method: "POST", body: JSON.stringify({ prompt, tz: TZ, setup: project ? project.id : "new" }) });
+      remember(s, true); open(s.id);
+    } catch (err) { msg(err.message); }
+  }
+  function renderSetup(s) {
+    const box = $("#a-setup"), st = s.setup;
+    box.hidden = !st;
+    if (!st) { setupShown = null; return; }
+    if (setupShown && setupShown.sid !== s.id) { setupOpen = false; setupOpenSecs.clear(); }   // a different chat
+    const d = st.draft, applied = !!d && st.applied === d.version;
+    const key = JSON.stringify([s.id, st, setupOpen, s.busy]);
+    if (key === setupKey) return;
+    setupKey = key; setupShown = { sid: s.id, ...st };
+    $("#a-setup-title").textContent = st.project ? `Updating ${st.project_name}` : st.gone ? "The project was deleted: this makes a new one" : "New project setup";
+    $("#a-setup-sub").textContent = !d ? "Chat with the agent; its draft shows up here."
+      : `Draft v${d.version}: ${d.summary}${applied ? " · applied" : st.applied ? ` · v${st.applied} applied` : ""}`;
+    const apply = $("#a-setup-apply");
+    apply.textContent = applied ? "Open project" : st.project && !st.gone ? "Apply changes" : "Create project";
+    apply.disabled = !d || (!applied && s.busy);
+    apply.title = s.busy && !applied ? "Wait for the agent to finish its reply" : "";
+    $("#a-setup-newchat").hidden = !applied;
+    $("#a-setup-review").hidden = !d;
+    $("#a-setup-review").setAttribute("aria-expanded", String(setupOpen && !!d));
+    $("#a-setup-review").textContent = setupOpen ? "Hide draft" : "Review draft";
+    const detail = $("#a-setup-detail");
+    detail.hidden = !(setupOpen && d);
+    if (detail.hidden) return;
+    const scroll = detail.scrollTop;
+    // Sections stay open across refreshes (the panel repaints when the agent starts or ends a reply).
+    const section = (key, title, openByDefault) => {
+      const sec = el("details", "a-setup-sec"); sec.dataset.key = key;
+      sec.open = setupOpenSecs.has(key) || (openByDefault && !setupOpenSecs.has("!" + key));
+      sec.append(el("summary", "", title));
+      sec.addEventListener("toggle", () => {
+        setupOpenSecs.delete(sec.open ? "!" + key : key); setupOpenSecs.add(sec.open ? key : "!" + key);
+      });
+      return sec;
+    };
+    const row = (label, value) => { const p = el("p", "a-setup-field"); p.append(el("strong", "", label + " "), typeof value === "string" ? document.createTextNode(value) : value); return p; };
+    const parts = [];
+    if (d.name || d.icon || d.color) {
+      const v = el("span", "a-setup-name");
+      if (d.icon || d.color) v.append(tile({ icon: d.icon || "folder", color: d.color || "blue" }));
+      v.append(document.createTextNode(d.name || "(no name yet)"));
+      parts.push(row("Project", v));
+    }
+    if (d.instructions != null) {
+      const sec = section("instructions", "Instructions", true);
+      sec.append(el("pre", "a-setup-pre", d.instructions || "(empty)"));
+      parts.push(sec);
+    }
+    for (const doc of d.documents || []) {
+      const sec = section("doc:" + doc.name, `📄 ${doc.name} · ${doc.chars.toLocaleString()} characters`);
+      const pre = el("pre", "a-setup-pre", doc.text + (doc.chars > doc.text.length ? "\n…" : ""));
+      sec.append(pre);
+      const loadFull = async () => {          // the snapshot carries a preview; fetch the whole text when opened
+        if (!sec.open || doc.chars <= doc.text.length || pre.dataset.full) return;
+        try {
+          const full = (await api(`/sessions/${s.id}/setup`)).draft?.documents?.find((x) => x.name === doc.name);
+          if (full) { pre.textContent = full.text; pre.dataset.full = "1"; }
+        } catch {}
+      };
+      sec.addEventListener("toggle", loadFull); loadFull();
+      parts.push(sec);
+    }
+    for (const pg of d.new_plugins || []) {
+      const sec = section("plugin:" + pg.label, `${pg.icon || "🧩"} New plugin: ${pg.label}`);
+      const flags = [pg.capture ? `saves \`\`\`${pg.capture} blocks` : "instructions only", pg.feed_back ? "handed back each turn" : "", pg.button ? "button by the paperclip" : ""].filter(Boolean).join(" · ");
+      sec.append(el("p", "a-access-note", [pg.description, flags].filter(Boolean).join(" — ")), el("pre", "a-setup-pre", pg.instructions || ""));
+      parts.push(sec);
+    }
+    if (d.plugins) parts.push(row("Plugins on:", (d.plugin_labels || d.plugins).join(", ") || "none"));
+    if (d.remove?.length) parts.push(row("Remove:", d.remove.join(", ")));
+    detail.replaceChildren(...parts);
+    detail.scrollTop = scroll;
+  }
+  $("#a-setup-review").addEventListener("click", () => { setupOpen = !setupOpen; setupKey = ""; const snap = cache.get(current)?.snap; if (snap) renderSetup(snap); });
+  $("#a-setup-newchat").addEventListener("click", () => { if (setupShown?.project) { showProject(setupShown.project); input.focus(); } });
+  $("#a-setup-apply").addEventListener("click", async () => {
+    const st = setupShown, d = st?.draft; if (!d) return;
+    if (st.applied === d.version) { showProject(st.project); return; }
+    const btn = $("#a-setup-apply"); btn.disabled = true;
+    try {
+      const r = await api(`/sessions/${st.sid}/setup/apply`, { method: "POST", body: JSON.stringify({ version: d.version }) });
+      storeProject(r.project);
+      remember(r.session, true);
+      const entry = cache.get(st.sid); if (entry?.snap) { setupKey = ""; renderHead(entry.snap); }
+      toast(r.created ? `Created ${r.project.name}` : `Updated ${r.project.name}`);
+      pluginSpecs = null;
+      refreshProjects().catch(() => {});
+    } catch (err) { msg(err.message); btn.disabled = false; }
+  });
   $("#a-pd-cancel").addEventListener("click", () => $("#a-project-dialog").close());
   $("#a-project-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -3271,7 +3608,12 @@
   /* model and access */
   let accessOptions = null;
   async function saveProject(change) {
-    try { paintProject(await api(`/projects/${openProject.id}`, { method: "PATCH", body: JSON.stringify(change) })); }
+    try {
+      const saved = await api(`/projects/${openProject.id}`, { method: "PATCH", body: JSON.stringify(change) });
+      paintProject(saved);
+      const row = projectOf(saved.id); if (row && change.plugins) row.plugins = saved.plugins;
+      if (change.plugins) renderPluginButtons();
+    }
     catch (err) { msg(err.message); renderAccess(); }
   }
   function accessRow(label, on, enabled, note, onChange) {
@@ -3325,6 +3667,168 @@
     $("#a-pa-tools").replaceChildren(
       accessRow("Terminal", access.terminal !== false, opts.terminal_on, opts.terminal_on ? "Shell commands and scripts. Rocsy's services above still work when this is off." : offInSettings, async (on) => { await change({ terminal: on }); renderAccess(); }));
   }
+  async function renderPlugins() {
+    const pid = openProject?.id; if (!pid) return;
+    try {
+      accessOptions = accessOptions || await Promise.all([api("/projects/options"), api("/options")]);
+    } catch (err) { msg(err.message); return; }
+    if (openProject?.id !== pid || projectTab !== "plugins") return;
+    const list = accessOptions[0].plugins || [], on = openProject.plugins || {};
+    const row = (x) => accessRow(`${x.icon || "🧩"} ${x.label}`, !!on[x.id]?.on, true, x.description || pluginSummary(x), (yes) => {
+      const plugins = { ...(openProject.plugins || {}) };
+      if (yes) plugins[x.id] = { on: true }; else delete plugins[x.id];
+      saveProject({ plugins });
+    });
+    const builtin = list.filter((x) => !x.custom), custom = list.filter((x) => x.custom);
+    $("#a-pp-list").replaceChildren(...(builtin.length ? builtin.map(row) : [el("p", "a-access-note", "No plugins available.")]));
+    $("#a-pp-custom").replaceChildren(...(custom.length ? custom.map((x) => {
+      const r = row(x);
+      const edit = el("button", "a-btn ghost a-pp-edit", "Edit"); edit.type = "button";
+      edit.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); openPluginEditor(x); });
+      r.insertBefore(edit, r.lastChild);
+      return r;
+    }) : [el("p", "a-access-note", "None yet: press New plugin.")]));
+  }
+  const pluginSummary = (x) => [x.instructions ? "instructions" : "", x.capture ? `saves \`\`\`${x.capture} blocks` : "",
+    x.capture && x.feed_back ? "handed back each turn" : ""].filter(Boolean).join(" · ");
+
+  /* custom plugin editor (Project → Plugins → New plugin / Edit) */
+  let editingPlugin = null;
+  function openPluginEditor(spec = null) {
+    editingPlugin = spec;
+    $("#a-pe-title").textContent = spec ? `Edit ${spec.label}` : "New plugin";
+    $("#a-pe-save").textContent = spec ? "Save" : "Create plugin";
+    $("#a-pe-delete").hidden = !spec;
+    $("#a-pe-icon").value = spec?.icon || "";
+    $("#a-pe-label").value = spec?.label || "";
+    $("#a-pe-description").value = spec?.description || "";
+    $("#a-pe-instructions").value = spec?.instructions || "";
+    $("#a-pe-capture").value = spec?.capture || "";
+    $("#a-pe-feed").checked = spec ? spec.feed_back !== false : true;
+    $("#a-pe-button").checked = spec ? !!spec.button : true;
+    $("#a-pe-error").hidden = true;
+    peHint();
+    $("#a-plugin-editor").showModal();
+    $("#a-pe-label").focus();
+  }
+  function peHint() {
+    const name = $("#a-pe-capture").value.trim().toLowerCase();
+    $("#a-pe-capture-hint").textContent = name
+      ? `The agent writes them as \`\`\`${name} Title … \`\`\` and each one is saved (the same title saves a new version).`
+      : "Leave empty for an instructions-only plugin.";
+    $("#a-pe-feed").closest("label").hidden = !name;
+    $("#a-pe-button").closest("label").hidden = !name;
+  }
+  $("#a-pe-capture").addEventListener("input", peHint);
+  $("#a-pp-new").addEventListener("click", () => openPluginEditor());
+  $("#a-pe-cancel").addEventListener("click", () => $("#a-plugin-editor").close());
+  $("#a-pe-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const capture = $("#a-pe-capture").value.trim().toLowerCase();
+    const body = { label: $("#a-pe-label").value, icon: $("#a-pe-icon").value, description: $("#a-pe-description").value,
+      instructions: $("#a-pe-instructions").value, capture, feed_back: !!capture && $("#a-pe-feed").checked,
+      button: !!capture && $("#a-pe-button").checked };
+    try {
+      const spec = editingPlugin
+        ? await api(`/plugins/custom/${editingPlugin.id}`, { method: "PATCH", body: JSON.stringify(body) })
+        : await api("/plugins/custom", { method: "POST", body: JSON.stringify(body) });
+      $("#a-plugin-editor").close();
+      accessOptions = null; pluginSpecs = null;
+      if (!editingPlugin && openProject) {           // a new plugin starts on in the project it was made from
+        await saveProject({ plugins: { ...(openProject.plugins || {}), [spec.id]: { on: true } } });
+      }
+      toast(editingPlugin ? `Saved ${spec.label}` : `Created ${spec.label}${openProject ? ` and turned it on in ${openProject.name}` : ""}`);
+      renderPlugins(); renderPluginButtons();
+    } catch (err) { $("#a-pe-error").textContent = err.message; $("#a-pe-error").hidden = false; }
+  });
+  $("#a-pe-delete").addEventListener("click", async () => {
+    if (!editingPlugin || !confirm(`Delete the plugin “${editingPlugin.label}”? It's turned off in every project; chats keep the files it saved.`)) return;
+    try {
+      await api(`/plugins/custom/${editingPlugin.id}`, { method: "DELETE" });
+      $("#a-plugin-editor").close();
+      accessOptions = null; pluginSpecs = null;
+      if (openProject?.plugins?.[editingPlugin.id]) {
+        const plugins = { ...openProject.plugins }; delete plugins[editingPlugin.id]; openProject.plugins = plugins;
+      }
+      toast(`Deleted ${editingPlugin.label}`);
+      renderPlugins(); renderPluginButtons();
+    } catch (err) { $("#a-pe-error").textContent = err.message; $("#a-pe-error").hidden = false; }
+  });
+
+  /* plugin buttons next to the paperclip: the prompt ledger and custom plugins with a button, when the chat's
+     project has them on; each shows how many items it holds for this chat */
+  let pluginSpecs = null, pluginCountTimer = 0;
+  async function specs() {
+    if (!pluginSpecs) pluginSpecs = api("/projects/options").then((o) => o.plugins || []).catch(() => { pluginSpecs = null; return []; });
+    return pluginSpecs;
+  }
+  function chatProject() {
+    const id = current;
+    const pid = id && (cache.get(id)?.snap?.project || sessionOf(id)?.project);
+    return pid ? projectOf(pid) : null;
+  }
+  async function renderPluginButtons() {
+    const host = $("#a-plugin-btns");
+    const project = chatProject(), on = project?.plugins || {};
+    const shown = (await specs()).filter((x) => on[x.id]?.on && x.button && current);
+    host.replaceChildren(...shown.map((x) => {
+      const b = el("button", "a-btn ghost a-plugin-btn"); b.type = "button"; b.dataset.plugin = x.id;
+      b.title = x.id === "prompt_ledger" ? "Prompt ledger: the clip prompts of this chat" : `${x.label}: what it saved in this chat`;
+      b.setAttribute("aria-label", b.title);
+      b.append(el("span", "a-plugin-icon", x.icon || "🧩"), el("span", "a-plugin-count", ""));
+      b.addEventListener("click", () => (x.id === "prompt_ledger" ? openLedger(true) : openCollection(x)));
+      return b;
+    }));
+    host.hidden = !shown.length;
+    refreshPluginCounts();
+  }
+  function refreshPluginCounts() {
+    clearTimeout(pluginCountTimer);
+    pluginCountTimer = setTimeout(async () => {
+      const sid = current; if (!sid) return;
+      for (const b of document.querySelectorAll("#a-plugin-btns .a-plugin-btn")) {
+        const pid = b.dataset.plugin, count = $(".a-plugin-count", b);
+        try {
+          const n = pid === "prompt_ledger"
+            ? +((await api(`/tool/${sid}/prompt`, { method: "POST", body: JSON.stringify({ action: "list" }) })).text.match(/^Clips: (\d+)/m)?.[1] || 0)
+            : ((await api(`/tool/${sid}/plugin`, { method: "POST", body: JSON.stringify({ plugin: pid, action: "items" }) })).items || []).length;
+          count.textContent = n ? String(n) : "";
+        } catch { count.textContent = ""; }
+      }
+    }, 400);
+  }
+  // New saves show up as system / terminal events: update the counts when the log grows.
+  new MutationObserver(() => { if (!$("#a-plugin-btns").hidden) refreshPluginCounts(); })
+    .observe($("#a-log"), { childList: true });
+
+  let collectionShown = null;
+  async function openCollection(spec) {
+    collectionShown = spec;
+    const dlg = $("#a-plugin-dialog");
+    $("#a-pg-title").textContent = `${spec.icon || "🧩"} ${spec.label}`;
+    if (!dlg.open) dlg.showModal();
+    $("#a-pg-list").replaceChildren(el("p", "a-access-note", "Loading…"));
+    try {
+      const r = await api(`/tool/${current}/plugin`, { method: "POST", body: JSON.stringify({ plugin: spec.id, action: "items" }) });
+      if (/^error:/.test(r.text || "")) throw new Error(r.text.replace(/^error:\s*/, ""));
+      const list = r.items || [];
+      $("#a-pg-summary").textContent = list.length ? `${list.length} saved in this chat` + (spec.capture ? ` · the agent saves \`\`\`${spec.capture} blocks here` : "")
+        : (spec.capture ? `Nothing saved yet. The agent saves \`\`\`${spec.capture} Title … blocks here.` : "Nothing saved yet.");
+      $("#a-pg-list").replaceChildren(...list.slice().reverse().map((item) => {
+        const box = el("details", "a-ledger-item");
+        const sum = el("summary"), row = el("div", "a-ledger-row");
+        row.append(el("span", "a-ledger-n", String(item.n)), el("span", "a-ledger-sum", item.title),
+          ...(item.versions > 1 ? [el("span", "a-ledger-secs", `v${item.versions}`)] : []));
+        sum.append(row);
+        const body = el("div", "a-ledger-body");
+        body.append(copyButton(() => item.text, item.title, "a-ledger-copy"), el("pre", "a-ledger-prompt", item.text));
+        box.append(sum, body);
+        return box;
+      }));
+    } catch (err) { $("#a-pg-list").replaceChildren(el("p", "a-modal-error", err.message)); }
+  }
+  $("#a-pg-close").addEventListener("click", () => $("#a-plugin-dialog").close());
+  $("#a-pg-refresh").addEventListener("click", () => collectionShown && openCollection(collectionShown));
   const saveModel = () => {
     const [provider, model] = $("#a-pa-model").value ? JSON.parse($("#a-pa-model").value) : ["", ""];
     const reasoning = $("#a-pa-think").value;
@@ -3335,6 +3839,7 @@
 
   /* the open chat's place in a project */
   function renderCrumb(s) {
+    setTimeout(renderPluginButtons, 0);
     const home = s.project && projectOf(s.project);
     const crumb = $("#a-crumb");
     crumb.hidden = !home;
@@ -3627,7 +4132,7 @@
   $("#a-menu").addEventListener("click", () => drawer(!document.body.classList.contains("drawer-open")));
   $("#a-scrim").addEventListener("click", () => drawer(false));
   $("#a-new").addEventListener("click", () => drawer(false));
-  const hint = () => { const home = draftProject && projectOf(draftProject); if (home) { input.placeholder = narrow.matches ? "New chat…" : `New chat in ${home.name}…`; return; } input.placeholder = narrow.matches ? "Ask the Master Agent… (/ for commands)" : `Ask the Master Agent… (/ for commands, ${/Mac|iP/.test(navigator.platform) ? "⌘" : "Ctrl"}+Enter to send)`; };
+  const hint = () => { const home = draftProject && projectOf(draftProject); if (home) { input.placeholder = narrow.matches ? "New chat…" : `New chat in ${home.name}…`; return; } input.placeholder = narrow.matches ? "Ask the Master Agent…" : `Ask the Master Agent… (/ for commands, ${/Mac|iP/.test(navigator.platform) ? "⌘" : "Ctrl"}+Enter to send)`; };
   narrow.addEventListener("change", () => { drawer(false); hint(); }); hint();
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && document.body.classList.contains("drawer-open")) drawer(false); });
   // swipe the drawer left to close it; swipe the viewer left/right for the next/previous output

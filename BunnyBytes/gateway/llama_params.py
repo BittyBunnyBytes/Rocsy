@@ -48,7 +48,7 @@ MTP_TYPES = {"draft-mtp", "draft-mtp-adaptive"}
 
 # flag, label, group, kind, limits/choices, help
 PARAMS = [
-    ("--multi-gpu", "Multi-GPU", "Load", "toggle", None, "Split the model across GPU 0 and GPU 1. Off keeps it on GPU 0 only."),
+    ("--multi-gpu", "Multi-GPU", "Load", "toggle", None, "Split the model across the cards of GPU Queue → GPUs → \"LLM with Multi-GPU on\" (default: every GPU). Off keeps it on the LLM's own card."),
     ("--build", "llama.cpp build", "Load", "choice", [], "Which installed llama.cpp runs this model. Core Backend's choice follows Models → Manager → Core Backend → Use this build."),
     ("--backend", "GPU backend", "Load", "choice", BACKENDS, "rocm: ROCm/HIP (where RDNA Boost's kernels are). vulkan: llama.cpp's Vulkan backend (RADV)."),
     ("--flash-attn", "Attention type", "Load", "choice", ATTENTION_TYPES, "on: flash attention (default, fastest, less VRAM). off: standard attention. auto: llama.cpp decides per model."),

@@ -1,8 +1,8 @@
 diff --git a/Dockerfile b/Dockerfile
-index 60ba5ad9bb..baa23a987c 100644
+index 89752644..00dbe964 100644
 --- a/Dockerfile
 +++ b/Dockerfile
-@@ -402,6 +402,13 @@ RUN /opt/hermes/.venv/bin/python -m docker.build_agent
+@@ -411,6 +411,13 @@ RUN /opt/hermes/.venv/bin/python -m docker.build_agent
  # read-only for the hermes user (go-w from the --chmod above).
  
  USER root
@@ -17,7 +17,7 @@ index 60ba5ad9bb..baa23a987c 100644
      cp /opt/hermes/docker/hermes-exec-shim.sh /opt/hermes/bin/hermes && \
      chmod 0755 /opt/hermes /opt/hermes/bin/hermes && \
 diff --git a/gateway/platforms/api_server_runs.py b/gateway/platforms/api_server_runs.py
-index 599812a117..922208e5da 100644
+index 62284dd1..c60140c2 100644
 --- a/gateway/platforms/api_server_runs.py
 +++ b/gateway/platforms/api_server_runs.py
 @@ -386,6 +386,16 @@ def _make_run_event_callback(self, run_id: str, loop: asyncio.AbstractEventLoop,
@@ -37,7 +37,7 @@ index 599812a117..922208e5da 100644
              _push(_run_event(run_id, event_type, **event_fields))
          elif event_type in {"subagent.start", "subagent.complete"}:
              event = _run_event(run_id, event_type)
-@@ -1081,6 +1091,44 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
+@@ -1086,6 +1096,44 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
              loop.call_soon_threadsafe(run.put_event, _run_event(
                  run_id, "message.interim", text=text, already_streamed=bool(already_streamed)))
  
@@ -82,7 +82,7 @@ index 599812a117..922208e5da 100644
      def _finish(status: str, extra: Optional[dict] = None, **fields: Any) -> None:
          """Terminal status, then best-effort ``run.<status>`` event; key order is wire shape."""
          extra = extra or {}
-@@ -1117,15 +1165,18 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
+@@ -1122,15 +1170,18 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
              def _tool_start(call_id, name, args):
                  from agent.display import build_tool_preview
                  tool_cb("tool.started", name, build_tool_preview(name, args or {}) or "", args, tool_call_id=call_id)
@@ -103,7 +103,7 @@ index 599812a117..922208e5da 100644
                      tool_start_callback=_tool_start, tool_complete_callback=_tool_complete)
              # The canonical turn has no agent object here; the served pair rides on the
              # committed usage/result runtime metadata when the turn recorded one.
-@@ -1134,8 +1185,11 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
+@@ -1139,8 +1190,11 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
          else:
              with self._profile_scope(run.request_profile):
                  agent = self._create_agent(
@@ -118,7 +118,7 @@ index 599812a117..922208e5da 100644
              approval_notify = _make_approval_notify(self, run, _api_server=_api_server)
              result, usage, served_runtime = await _submit_api_worker(
 diff --git a/gateway/run_goals.py b/gateway/run_goals.py
-index 42d38850a9..e184ef42bb 100644
+index 42d38850..e184ef42 100644
 --- a/gateway/run_goals.py
 +++ b/gateway/run_goals.py
 @@ -42,9 +42,9 @@ class GatewayGoalsMixin:
@@ -134,10 +134,10 @@ index 42d38850a9..e184ef42bb 100644
      async def _warm_goals_session_db(self, label: str) -> None:
          """Warm the goals SessionDB cache off-loop (best-effort): a cold cache runs the state.db
 diff --git a/hermes_cli/cli_loops_mixin.py b/hermes_cli/cli_loops_mixin.py
-index 3b5c5cbe78..da1d4bb7f9 100644
+index 1a0e540a..2b41a922 100644
 --- a/hermes_cli/cli_loops_mixin.py
 +++ b/hermes_cli/cli_loops_mixin.py
-@@ -622,9 +622,9 @@ class CLILoopsMixin:
+@@ -625,9 +625,9 @@ class CLILoopsMixin:
              from hermes_cli.config import load_config
              try:
                  goals_cfg = (load_config() or {}).get("goals") or {}
@@ -151,7 +151,7 @@ index 3b5c5cbe78..da1d4bb7f9 100644
          def load():
              from hermes_cli.goals import GoalManager
 diff --git a/hermes_cli/cli_status_bar_mixin.py b/hermes_cli/cli_status_bar_mixin.py
-index 2caf109792..ca190aeb6e 100644
+index 2caf1097..ca190aeb 100644
 --- a/hermes_cli/cli_status_bar_mixin.py
 +++ b/hermes_cli/cli_status_bar_mixin.py
 @@ -990,7 +990,11 @@ class CLIStatusBarMixin:
@@ -168,10 +168,10 @@ index 2caf109792..ca190aeb6e 100644
      def _get_status_bar_field_set(self) -> Optional[frozenset]:
          """Visible status-bar fields from ``display.status_bar.fields`` (module-level
 diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
-index 50117f6fb1..b3a48d85a3 100644
+index 59a9cc85..11ce01d3 100644
 --- a/hermes_cli/config_defaults.py
 +++ b/hermes_cli/config_defaults.py
-@@ -1382,12 +1382,10 @@ DEFAULT_CONFIG = {
+@@ -1381,12 +1381,10 @@ DEFAULT_CONFIG = {
      # every API call for few-shot priming. Never saved to sessions/logs/trajectories.
      "prefill_messages_file": "",
      # Goals — persistent cross-turn /goal loop: after each turn an aux-model judge checks if the
@@ -188,7 +188,7 @@ index 50117f6fb1..b3a48d85a3 100644
      # Loops — /loop re-runs a prompt or slash command on a cadence in-session. Fixed interval fires
      # on the user's clock; self-paced (no interval) starts at the floor and backs off exponentially
 diff --git a/hermes_cli/goal_command.py b/hermes_cli/goal_command.py
-index 0c19ebf364..5a183de34e 100644
+index 0c19ebf3..5a183de3 100644
 --- a/hermes_cli/goal_command.py
 +++ b/hermes_cli/goal_command.py
 @@ -151,8 +151,9 @@ def _set(mgr, arg, *, drafting, last_user_message, render, progress):
@@ -215,7 +215,7 @@ index 0c19ebf364..5a183de34e 100644
  
  
 diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
-index 96ee695e28..e4e6ea6129 100644
+index 96ee695e..e4e6ea61 100644
 --- a/hermes_cli/goals.py
 +++ b/hermes_cli/goals.py
 @@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
@@ -268,7 +268,7 @@ index 96ee695e28..e4e6ea6129 100644
  
      def next_continuation_prompt(self) -> Optional[str]:
 diff --git a/tests/hermes_cli/test_cli_status_bar_goal.py b/tests/hermes_cli/test_cli_status_bar_goal.py
-index fcfddcf528..4cc9d9fe2b 100644
+index fcfddcf5..4cc9d9fe 100644
 --- a/tests/hermes_cli/test_cli_status_bar_goal.py
 +++ b/tests/hermes_cli/test_cli_status_bar_goal.py
 @@ -30,6 +30,13 @@ def _attach_goal(cli_obj, *, active: bool, turns_used: int = 3, max_turns: int =
@@ -303,7 +303,7 @@ index fcfddcf528..4cc9d9fe2b 100644
 +
 +        assert "⊙ goal" in text
 diff --git a/tests/hermes_cli/test_goals.py b/tests/hermes_cli/test_goals.py
-index 32113fbdcd..75c01dd54a 100644
+index 32113fbd..75c01dd5 100644
 --- a/tests/hermes_cli/test_goals.py
 +++ b/tests/hermes_cli/test_goals.py
 @@ -105,6 +105,25 @@ class TestJudgeGoal:
@@ -332,41 +332,8 @@ index 32113fbdcd..75c01dd54a 100644
      def test_set_then_status(self, hermes_home):
          from hermes_cli.goals import GoalManager
  
-diff --git a/tests/tools/test_rocsy_browser_screenshot.py b/tests/tools/test_rocsy_browser_screenshot.py
-new file mode 100644
-index 0000000000..4a1232e85c
---- /dev/null
-+++ b/tests/tools/test_rocsy_browser_screenshot.py
-@@ -0,0 +1,27 @@
-+"""Rocsy: browser_exec's screenshot is copied into the Rocsy workspace for the chat (and only there)."""
-+import os
-+import time
-+
-+import tools.browser_use_cli as cli
-+
-+
-+def test_copied_into_the_rocsy_workspace(tmp_path, monkeypatch):
-+    monkeypatch.setattr(cli, "get_hermes_home", lambda: str(tmp_path))
-+    (tmp_path / "rocsy-workspace").mkdir()
-+    shot = tmp_path / "shot.png"
-+    shot.write_bytes(b"png")
-+    old = tmp_path / "rocsy-workspace/.browser-screenshots"
-+    old.mkdir()
-+    stale = old / "page-old.png"
-+    stale.write_bytes(b"x")
-+    os.utime(stale, (time.time() - 2 * 86400,) * 2)
-+    copy = cli._rocsy_screenshot(str(shot))
-+    assert copy.startswith(str(old)) and copy.endswith(".png") and open(copy, "rb").read() == b"png"
-+    assert not stale.exists()
-+
-+
-+def test_nothing_without_a_rocsy_workspace(tmp_path, monkeypatch):
-+    monkeypatch.setattr(cli, "get_hermes_home", lambda: str(tmp_path))
-+    shot = tmp_path / "shot.jpg"
-+    shot.write_bytes(b"jpg")
-+    assert cli._rocsy_screenshot(str(shot)) == ""
 diff --git a/tools/browser_use_cli.py b/tools/browser_use_cli.py
-index ff9b9cd7a7..3bcc171a0d 100644
+index ff9b9cd7..3bcc171a 100644
 --- a/tools/browser_use_cli.py
 +++ b/tools/browser_use_cli.py
 @@ -325,6 +325,31 @@ def _native_screenshot_result(result: dict[str, Any], path: str) -> Optional[dic
@@ -416,7 +383,7 @@ index ff9b9cd7a7..3bcc171a0d 100644
      return tool_result(result)
  
 diff --git a/tui_gateway/methods_tools.py b/tui_gateway/methods_tools.py
-index b0914c2bcc..a73457d2ab 100644
+index 1fe36999..f137b01a 100644
 --- a/tui_gateway/methods_tools.py
 +++ b/tui_gateway/methods_tools.py
 @@ -803,9 +803,9 @@ def _cmd_goal(rid, params, session, name, arg):
@@ -432,7 +399,7 @@ index b0914c2bcc..a73457d2ab 100644
          from hermes_cli.goal_command import dispatch_goal_command
          result = dispatch_goal_command(
 diff --git a/tui_gateway/prompt_turn.py b/tui_gateway/prompt_turn.py
-index c661ee64dd..a93ed928f9 100644
+index c5658bfb..1630b487 100644
 --- a/tui_gateway/prompt_turn.py
 +++ b/tui_gateway/prompt_turn.py
 @@ -68,9 +68,9 @@ def _active_goal_manager(session: dict):

@@ -2236,11 +2236,32 @@ def build_seedhunter_finalize_workflow(
     return workflow, width, height
 
 
-def resolve_references(store: Any, ids: list[str]) -> list[dict[str, Any]]:
+def resolve_references(store: Any, ids: list[str], trims: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """`trims` ({ref_id: [start, end]}, e.g. GenerationRequest.reference_trims) narrows a video/audio reference to
+    a segment for this request only, measured inside the user's own trim; the stored reference is not changed."""
     result = []
     for ref_id in ids:
         item = store.reference(ref_id)
         if not item:
             raise GenerationError("invalid_reference", "One of the selected references no longer exists.")
+        if trims and ref_id in trims:
+            item = apply_reference_trim(item, trims[ref_id])
         result.append(item)
     return result
+
+
+def apply_reference_trim(item: dict[str, Any], segment: Any) -> dict[str, Any]:
+    try:
+        start, end = (float(x) for x in segment)
+    except (TypeError, ValueError):
+        raise GenerationError("invalid_reference", f"{item.get('alias')}: a segment needs a start and an end.") from None
+    base = max(0.0, item.get("trim_start") or 0.0)
+    length = effective_duration(item) if item.get("duration") is not None else None
+    if not (math.isfinite(start) and math.isfinite(end)) or start < 0 or end <= start:
+        raise GenerationError("invalid_reference", f"{item.get('alias')}@{start:g}-{end:g}: the end must come after the start.")
+    if length is not None:
+        if start >= length - 0.5:
+            raise GenerationError("invalid_reference", f"{item.get('alias')}@{start:g}-{end:g} starts after the "
+                                  f"{length:.1f}s attachment ends.")
+        end = min(end, length)
+    return {**item, "trim_start": round(base + start, 3), "trim_end": round(base + end, 3)}

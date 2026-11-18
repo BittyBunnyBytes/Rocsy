@@ -12,6 +12,34 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+
+
+def _pin_voice_gpu() -> None:
+    """Queue page -> GPUs -> Voice: with two or more cards, this worker and the engine processes
+    it starts see only that card (as cuda:0). Must run before torch loads."""
+    if os.environ.get("ROCR_VISIBLE_DEVICES") or os.environ.get("HIP_VISIBLE_DEVICES"):
+        return
+    import time
+    import urllib.request
+    url = os.environ.get("BUNNY_LOCK_URL", f"http://127.0.0.1:{os.environ.get('LOCK_PORT', '8600')}").rstrip("/")
+    for _ in range(5):
+        try:
+            with urllib.request.urlopen(f"{url}/v2/gpus", timeout=2) as resp:
+                layout = json.loads(resp.read().decode("utf-8"))
+            break
+        except (OSError, ValueError):
+            time.sleep(2)
+    else:
+        return
+    if len(layout.get("cards") or []) < 2:
+        return
+    value = next((r.get("visible") for r in layout.get("roles") or [] if r.get("role") == "voice"), "")
+    if value:
+        os.environ["ROCR_VISIBLE_DEVICES"] = value
+
+
+_pin_voice_gpu()
+
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field

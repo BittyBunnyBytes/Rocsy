@@ -12,4 +12,10 @@ pywebpush==2.0.3
 numpy==2.4.4
 starlette==1.7.0
 Pillow==13.0.0
-pyarrow==21.0.0
+pyarrow==26.0.1
+# fastapi pulls in opentelemetry-api; 1.45.1 has a published advisory.
+opentelemetry-api>=1.45.2
+# Raise packages the rocm/pytorch base image ships with known advisories (torch has no upper bounds on them).
+fsspec>=2026.6.0
+filelock>=4.2.1
+setuptools>=84.1.0

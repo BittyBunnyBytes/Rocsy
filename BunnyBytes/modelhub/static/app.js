@@ -89,13 +89,14 @@ function recLine(rec) {
   return line;
 }
 
-const CATEGORY = {image: 'Image', video: 'Video', llm: 'LLM', audio: 'Audio', other: 'Other'};
+const CATEGORY = {image: 'Image', video: 'Video', llm: 'LLM', audio: 'Audio', '3d': '3D', other: 'Other'};
 const SOURCE = {civitai: 'Civitai', civitai_red: 'Civitai Red', hf: 'Hugging Face', local: 'Made here'};
 const ICONS = {
   image: '<path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h13A2.5 2.5 0 0 1 21 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 18.5z"/><circle cx="9" cy="9.5" r="1.8"/><path d="M20.5 16l-5-5L6 20.5"/>',
   video: '<rect x="3" y="6" width="13" height="12" rx="2.5"/><path d="M16 10.5l5-3v9l-5-3"/>',
   llm: '<path d="M4 5h16v10H9l-5 4z"/><path d="M8 9h8M8 12h5"/>',
   audio: '<path d="M9 18V6l11-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
+  '3d': '<path d="M12 2.8 20 7.4v9.2L12 21.2 4 16.6V7.4z"/><path d="M4 7.4 12 12l8-4.6M12 12v9.2"/>',
   other: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',
 };
 function placeholder(category) {
@@ -736,7 +737,9 @@ async function search(reset) {
       state.seen.add(key);
       return true;
     });
-    if (!state.seen.size && !state.cursor) $('results').append(el('p', 'empty', 'Nothing found. Try another category or source.'));
+    if (!state.seen.size && !state.cursor) $('results').append(el('p', 'empty', state.category === '3d' && state.source !== 'hf'
+      ? 'Civitai has no downloadable 3D models (its 3D bases are for on-site generation). Switch the source to Hugging Face for Hunyuan3D, TRELLIS.2 and others.'
+      : 'Nothing found. Try another category or source.'));
     const batch = document.createDocumentFragment();
     fresh.filter(item => (!state.fitsOnly || fitsHere(item)) && !(state.hideInstalled && item.installed)
         && (!state.supportedOnly || item.supported))
@@ -1918,6 +1921,7 @@ async function loadCore(fresh = false) {
     renderCoreExtras();
     renderVoiceEngines();
     renderSwap();
+    loadGroupExtras();
   } catch (error) {
     $('core-builds').replaceChildren(el('p', 'empty error', error.message));
     $('core-releases').replaceChildren();
@@ -2220,6 +2224,7 @@ async function loadComfyUpdate() {
     renderComfyUpdate(state.coreExtras);
     renderHermes(state.coreExtras, 'hermes-updates'); renderRea(state.coreExtras, 'rea-updates', true);
     renderSwapUpdate();
+    loadRocsyUpdate();
     const hermes = state.coreExtras.hermes;
     if (state.view === 'manager' && state.sub === 'updates') {
       const busy = hermes.download_running || hermes.update_running || state.coreExtras.personal_hermes?.update_running ||
@@ -3970,7 +3975,7 @@ function lastUsed(item) {
 
 // Each kind gets one colour, used in the storage bar, the kind chips, group heads and flat rows.
 const KIND_COLORS = {
-  'LLMs': 'var(--blue)', 'MTP prediction heads': '#d58cf0', 'Vision heads': '#6fd3e8', 'Video models': 'var(--violet)', 'Image models': 'var(--green)', 'LoRAs': 'var(--pink)',
+  'LLMs': 'var(--blue)', 'MTP prediction heads': '#d58cf0', 'Vision heads': '#6fd3e8', 'Video models': 'var(--violet)', 'Image models': 'var(--green)', '3D models': '#e79a4f', 'LoRAs': 'var(--pink)',
   'Trainer models': '#ff8f6b', 'Trainer LoRAs & epochs': '#f5a3c7',
   'Text encoders & VAEs': 'var(--amber)', 'Upscalers & other': 'var(--teal)', 'Other models': 'var(--muted)',
 };
@@ -4034,31 +4039,63 @@ function renderDrives(data, totalFiles) {
   }));
 }
 
-function renderStorage(data, total) {
-  const box = $('inst-storage');
-  const whole = total + (data.free || 0);
+// One storage bar (disk use by kind + free space) per drive once a second drive is in use; one bar otherwise.
+function storageBar(groups, free, total) {
+  const whole = total + (free || 0) || 1;
   const bar = el('div', 'storage-bar');
-  const legend = el('div', 'storage-legend');
-  data.groups.filter(g => g.size).forEach(group => {
-    const pct = group.size / whole * 100;
+  groups.filter(g => g.size).forEach(group => {
     const seg = el('button', 'storage-seg' + (state.instKind && state.instKind !== group.name ? ' is-dim' : ''));
     seg.type = 'button';
-    seg.style.width = `${pct}%`;
+    seg.style.width = `${group.size / whole * 100}%`;
     seg.style.background = kindColor(group.name);
-    seg.title = `${group.name} · ${size(group.size)} (${Math.round(group.size / total * 100)}% of models)`;
+    seg.title = `${group.name} · ${size(group.size)} (${Math.round(group.size / (total || 1) * 100)}% of models)`;
     seg.addEventListener('click', () => pickKind(group.name));
     bar.append(seg);
   });
-  const free = el('div', 'storage-seg is-free');
-  free.style.width = `${(data.free || 0) / whole * 100}%`;
-  free.title = `${size(data.free)} free on the drive`;
-  bar.append(free);
+  if (free) {
+    const rest = el('div', 'storage-seg is-free');
+    rest.style.width = `${free / whole * 100}%`;
+    rest.title = `${size(free)} free on the drive`;
+    bar.append(rest);
+  }
+  return bar;
+}
+function storageLegend(total, free) {
+  const legend = el('div', 'storage-legend');
   const used = el('span', 'storage-total');
-  used.append(el('strong', '', size(total)), document.createTextNode(' models'));
-  const left = el('span', 'storage-total');
-  left.append(el('strong', '', size(data.free)), document.createTextNode(' free'));
-  legend.append(used, left);
-  box.replaceChildren(bar, legend);
+  used.append(el('strong', '', size(total) || '0 MB'), document.createTextNode(' models'));
+  legend.append(used);
+  if (free) {
+    const left = el('span', 'storage-total');
+    left.append(el('strong', '', size(free)), document.createTextNode(' free'));
+    legend.append(left);
+  }
+  return legend;
+}
+function renderStorage(data, total) {
+  const box = $('inst-storage');
+  if (!multiDrive(data)) {
+    box.replaceChildren(storageBar(data.groups, data.free || 0, total), storageLegend(total, data.free || 0));
+    return;
+  }
+  box.replaceChildren(...data.drives.map((drive, n) => {
+    const groups = data.groups.map(g => {
+      const mine = g.items.filter(i => i.drive === drive.id);
+      return {name: g.name, size: mine.reduce((sum, i) => sum + i.size, 0)};
+    });
+    const used = groups.reduce((sum, g) => sum + g.size, 0);
+    const free = drive.online ? drive.free || 0 : 0;
+    const block = el('div', 'storage-drive' + (state.instDrive && state.instDrive !== drive.id ? ' is-dim' : '') + (drive.online ? '' : ' is-offline'));
+    block.style.setProperty('--kind', DRIVE_COLORS[n % DRIVE_COLORS.length]);
+    const head = el('button', 'storage-drive-head');
+    head.type = 'button';
+    head.title = `Show only ${drive.label}\n${driveFacts(drive)}`;
+    head.append(el('span', 'kind-dot'), el('strong', '', drive.label),
+      el('span', 'hint', drive.online ? `${plural(drive.count, 'file')}${drive.id !== 'comfy' && drive.path ? ` · ${drive.path.replace(HOME_RE, '~/')}` : ''}` : 'offline'));
+    head.addEventListener('click', () => pickDrive(drive.id));
+    block.append(head, storageBar(groups, free, used), storageLegend(used, free));
+    return block;
+  }));
 }
 
 function renderKinds(data, counts) {
@@ -4405,10 +4442,11 @@ function installedRow(item, biggest, flat = false, showSub = false) {
   if (BASE_GROUPS.includes(item.group)) actions.append(basePicker(item));
   if (item.removable !== false && item.movable === false) actions.append(remove);
   else if (item.removable !== false) {
-    const move = el('button', 'secondary-button small', 'Move');
+    const moving = Boolean(state.moving?.has(item.path));
+    const move = el('button', 'secondary-button small' + (moving ? ' is-moving' : ''), moving ? 'Moving…' : 'Move');
     move.type = 'button';
-    move.title = 'Store this file on another drive or folder (Settings → Storage)';
-    move.disabled = Boolean(state.moving?.has(item.path));
+    move.title = moving ? 'Already being moved: progress is shown above the list' : 'Store this file on another drive or folder (Settings → Storage)';
+    move.disabled = moving;
     move.addEventListener('click', () => openMove([item]));
     actions.append(move, remove);
   }
@@ -4422,7 +4460,7 @@ const MOVE_LIVE = ['queued', 'copying', 'verifying'];
 let movePoll = null;
 
 async function openMove(items) {
-  items = items.filter(i => i.removable !== false);
+  items = items.filter(i => i.removable !== false && !state.moving.has(i.path));   // ones already moving are skipped
   if (!items.length) return;
   const dialog = $('move-dialog');
   const total = items.reduce((n, i) => n + i.size, 0);
@@ -4482,6 +4520,7 @@ async function openMove(items) {
     if (failed.length) toast(failed.join('; '), 'error');
     else toast(items.length === 1 ? 'Moving… the file stays usable until the switch' : `Moving ${items.length} files, one at a time…`, 'ok');
     if (state.instSelecting) { state.instSelected.clear(); syncSelection(); }
+    renderInstalled();   // their buttons now say "Moving…"
     watchMoves();
   };
 }
@@ -4522,13 +4561,15 @@ async function watchMoves() {
     if (done.some(j => j.state === 'failed')) toast(`Move failed: ${done.filter(j => j.state === 'failed').map(j => j.error).join('; ')}`, 'error');
     loadInstalled();
   }
+  const fresh = live.filter(j => !state.moving.has(j.path));   // moves started elsewhere / before this page loaded
   live.forEach(j => state.moving.add(j.path));
+  if (fresh.length && !finished.length) renderInstalled();
   if (live.length) movePoll = setTimeout(watchMoves, 1500);
 }
 
 // Manual base association ("Other models" file that is really MiniMax H3): the
 // picker reassigns it, which also moves the file into that base's folder.
-const BASE_GROUPS = ['Video models', 'Image models', 'Audio models', 'Other models'];
+const BASE_GROUPS = ['Video models', 'Image models', 'Audio models', '3D models', 'Other models'];
 function baseOptions(current) {
   const seen = new Set(), out = [];
   const add = b => { if (b && !seen.has(b)) { seen.add(b); out.push(b); } };
@@ -5156,3 +5197,185 @@ function startDrafterSearch() {
   scanCoreOnRefresh();
   setInterval(() => { if (!document.hidden) refreshState(); }, 3000);
 })();
+
+
+// ---- Rocsy self-update, Trainer tools, SillyTavern (hostctl selfupdate.py / trainertools.py / sillytavern.py) ----
+const groupApi = route => api('core/extras/group/' + route);
+const groupPost = route => post('core/extras/group/' + route, {});
+let groupTimer = null;
+const groupLog = {key: '', text: ''};
+
+function groupLogButton(key) {
+  const button = el('button', 'link-button', groupLog.key === key ? 'Hide log' : 'Log');
+  button.type = 'button';
+  button.addEventListener('click', async () => {
+    if (groupLog.key === key) { groupLog.key = ''; renderGroupExtras(); return; }
+    groupLog.key = key;
+    try { groupLog.text = (await groupApi(key + '/log')).log || '(empty)'; } catch (error) { groupLog.text = error.message; }
+    renderGroupExtras();
+  });
+  return button;
+}
+
+function groupLogPre(key) {
+  if (groupLog.key !== key) return null;
+  const pre = el('pre', 'core-log', groupLog.text);
+  requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
+  return pre;
+}
+
+async function groupAction(route, confirmText) {
+  if (confirmText && !confirm(confirmText)) return;
+  try { toast((await groupPost(route)).message || 'Started', 'ok'); } catch (error) { toast(error.message, 'error'); }
+  setTimeout(loadGroupExtras, 800);
+  if (route.startsWith('rocsy-update')) setTimeout(loadRocsyUpdate, 800);
+}
+
+function groupButton(label, route, disabled, confirmText, primary) {
+  const button = el('button', primary ? 'primary-button' : 'secondary-button', label);
+  button.type = 'button';
+  button.disabled = !!disabled;
+  button.addEventListener('click', () => groupAction(route, confirmText));
+  return button;
+}
+
+async function loadRocsyUpdate(force = false) {
+  const box = $('rocsy-updates');
+  if (!box) return;
+  try {
+    state.rocsyUpdate = force ? await groupPost('rocsy-update/check') : await groupApi('rocsy-update');
+  } catch (error) { box.replaceChildren(el('p', 'empty error', `Rocsy update check: ${error.message}`)); return; }
+  renderRocsyUpdate();
+}
+
+function renderRocsyUpdate() {
+  const u = state.rocsyUpdate, box = $('rocsy-updates');
+  if (!u || !box) return;
+  const row = el('div', 'lib-row core-build');
+  const info = el('div', 'core-info');
+  info.append(el('strong', '', `Rocsy${u.version ? ` · v${u.version.replace(/^v/, '')}` : ''}`),
+    el('p', `hint${u.error ? ' error' : ''}`, u.running ? 'Updating… the site restarts during the update; come back in a few minutes.' :
+      !u.allowed ? u.blocked + (u.latest ? ` Latest release: ${u.latest}.` : '') :
+      u.error ? `Couldn't check GitHub: ${u.error}` :
+      u.update_available ? `Update available: ${u.latest}` : `Up to date${u.latest ? ` (latest release ${u.latest})` : ''}`));
+  if (u.release_url && u.update_available) {
+    const link = el('a', 'hint', 'What’s new'); link.href = u.release_url; link.target = '_blank'; link.rel = 'noopener';
+    info.append(link);
+  }
+  const actions = el('div', 'dl-actions');
+  if (u.allowed && u.update_available)
+    actions.append(groupButton(`Update Rocsy to ${u.latest}`, 'rocsy-update/start', u.running,
+      `Update Rocsy to ${u.latest}?\n\nThe release installer is downloaded, its SHA-256 checked, then it runs in Update mode: new app files and rebuilt containers; your settings, passwords, data and services are kept. Rocsy restarts during the update, so running generations are interrupted.`, true));
+  const check = el('button', 'link-button', 'Check'); check.type = 'button';
+  check.addEventListener('click', () => loadRocsyUpdate(true));
+  actions.append(check, groupLogButton('rocsy-update'));
+  row.append(info, actions);
+  box.replaceChildren(...[row, groupLogPre('rocsy-update')].filter(Boolean));
+}
+
+async function loadGroupExtras(checkTools = false) {
+  clearTimeout(groupTimer);
+  if (!$('core-sillytavern')) return;
+  try {
+    [state.trainerTools, state.sillytavern] = await Promise.all([
+      checkTools ? groupPost('trainer-tools/check') : groupApi('trainer-tools'), groupApi('sillytavern')]);
+  } catch (error) {
+    $('core-trainer-tools').replaceChildren(el('p', 'empty error', error.message));
+    $('core-sillytavern').replaceChildren(el('p', 'empty error', error.message));
+    return;
+  }
+  if (groupLog.key) try { groupLog.text = (await groupApi(groupLog.key + '/log')).log || '(empty)'; } catch { /* keep */ }
+  renderGroupExtras();
+  const busy = state.sillytavern?.job || state.trainerTools?.updating;
+  if (state.view === 'manager' && state.sub === 'core') groupTimer = setTimeout(loadGroupExtras, busy ? 3000 : 30000);
+}
+
+function renderGroupExtras() {
+  renderTrainerTools();
+  renderSillyTavern();
+  renderRocsyUpdate();
+}
+
+const TOOL_STATUS = {current: 'Up to date', behind: 'Update available', modified: 'Newer upstream · has local edits (update by hand)',
+  diverged: 'Has commits of its own', detached: 'Pinned to a commit', ahead: 'Ahead of upstream', local: 'No upstream',
+  newer: 'Newer upstream version (Rocsy pins a tested one)', missing: 'Not installed', error: 'Couldn’t check'};
+
+function renderTrainerTools() {
+  const box = $('core-trainer-tools'), data = state.trainerTools;
+  if (!box || !data) return;
+  if (!data.checked) { box.replaceChildren(el('p', 'empty', 'Not checked yet. Check for updates asks each tool’s upstream (git, GitHub, PyPI).')); return; }
+  const rows = [];
+  for (const tool of data.tools) {
+    const row = el('div', 'lib-row core-build');
+    const info = el('div', 'core-info');
+    const version = tool.version || tool.commit || '';
+    info.append(el('strong', '', `${tool.label}${version ? ` · ${version}` : ''}`));
+    let detail = TOOL_STATUS[tool.status] || tool.status;
+    if (tool.status === 'behind' && tool.behind) detail += ` (${tool.behind} commit${tool.behind === 1 ? '' : 's'} behind)`;
+    if (tool.status === 'modified' && tool.modified_files) detail += ` · ${tool.modified_files} edited file(s)`;
+    if (tool.status === 'newer' && tool.latest) detail += ` · ${tool.latest}`;
+    if (tool.packages?.length) detail += ' · ' + tool.packages.map(p => `${p.name} ${p.pinned} → ${p.latest}`).join(', ');
+    if (tool.error) detail += ` · ${tool.error}`;
+    info.append(el('p', `hint${tool.status === 'error' ? ' error' : ''}`, `${tool.covers} · ${detail}`));
+    const actions = el('div', 'dl-actions');
+    if (tool.updatable) actions.append(groupButton(data.updating === tool.id ? 'Updating…' : 'Update', `trainer-tools/update/${tool.id}`,
+      !!data.updating, `Update ${tool.label}?\n\nIts checkout is fast-forwarded to upstream. If its requirements changed, reinstall it from the Trainer page before the next run.`));
+    row.append(info, actions);
+    rows.push(row);
+  }
+  const foot = el('p', 'hint', `Checked ${new Date(data.checked * 1000).toLocaleString()}${data.available ? ` · ${data.available} with something newer` : ''}`);
+  const logRow = el('div', 'dl-actions'); logRow.append(groupLogButton('trainer-tools'));
+  box.replaceChildren(...[...rows, foot, logRow, groupLogPre('trainer-tools')].filter(Boolean));
+}
+
+function renderSillyTavern() {
+  const box = $('core-sillytavern'), st = state.sillytavern;
+  if (!box || !st) return;
+  const busy = !!st.job;
+  const row = el('div', 'lib-row core-build');
+  const info = el('div', 'core-info');
+  const detail = busy ? `${{install: 'Installing', update: 'Updating', off: 'Turning off', 'addon-install': 'Installing an add-on', 'addon-remove': 'Removing an add-on'}[st.job] || 'Working'}…` :
+    !st.shipped ? 'This Rocsy has no SillyTavern folder.' :
+    !st.installed ? 'Not installed' :
+    !st.enabled ? 'Turned off · your chats and settings are kept' :
+    st.container !== 'running' ? `Installed · container ${st.container || 'not created'}` :
+    st.update_available ? `Update available: ${st.latest}` :
+    st.latest_error ? `Running · couldn't check for updates (${st.latest_error})` : `Running · up to date${st.latest ? ` (${st.latest})` : ''}`;
+  info.append(el('strong', '', `SillyTavern${st.version ? ` · ${st.version}` : ''}`), el('p', 'hint', detail));
+  const actions = el('div', 'dl-actions');
+  if (!st.enabled) actions.append(groupButton(st.installed ? 'Turn on' : 'Install SillyTavern', 'sillytavern/install', busy || !st.shipped,
+    'Install SillyTavern?\n\nIts official image is pulled (about 0.5 GB), it starts at /SillyTavern and the gateway is recreated once (this page reloads).', true));
+  else {
+    if (st.container === 'running') { const open = el('a', 'secondary-button', 'Open'); open.href = '/SillyTavern/'; open.target = '_blank'; actions.append(open); }
+    actions.append(groupButton(st.update_available ? `Update to ${st.latest}` : 'Pull latest image', 'sillytavern/update', busy));
+    actions.append(groupButton('Turn off', 'sillytavern/off', busy,
+      'Turn SillyTavern off?\n\nIts container is removed and /SillyTavern goes away when the gateway is recreated. Your chats, characters and settings are kept.'));
+  }
+  actions.append(groupLogButton('sillytavern'));
+  row.append(info, actions);
+  const addonsHead = el('div', 'engine-subsection');
+  addonsHead.append(el('h3', '', 'Rocsy add-ons for SillyTavern'),
+    el('p', '', 'Optional packages installed into SillyTavern’s third-party extensions. Reload SillyTavern after installing or removing one.'));
+  const addonRows = (st.addons || []).map(addon => {
+    const line = el('div', 'lib-row core-build');
+    const text = el('div', 'core-info');
+    text.append(el('strong', '', addon.label), el('p', 'hint',
+      addon.installed ? 'Installed' : addon.available ? 'Not installed' : 'Coming soon · this package is empty for now'));
+    const buttons = el('div', 'dl-actions');
+    if (addon.installed) buttons.append(groupButton('Remove', `sillytavern/addon/${addon.id}/remove`, busy));
+    else buttons.append(groupButton('Install', `sillytavern/addon/${addon.id}/install`, busy || !addon.available || !st.installed));
+    line.append(text, buttons);
+    return line;
+  });
+  addonsHead.append(...addonRows);
+  box.replaceChildren(...[row, groupLogPre('sillytavern'), addonsHead].filter(Boolean));
+}
+
+document.getElementById('trainer-tools-check')?.addEventListener('click', async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = 'Checking…';
+  await loadGroupExtras(true);
+  button.disabled = false;
+  button.textContent = 'Check for updates';
+});

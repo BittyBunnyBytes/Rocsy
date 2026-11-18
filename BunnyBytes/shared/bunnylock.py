@@ -53,6 +53,8 @@ REQUEST_TIMEOUT = 10.0
 CONNECT_WAIT = 5.0          # enqueue waits this long for the stream on a fresh start
 REGISTRATION_WAIT = 30.0    # a grant can beat its own enqueue response: wait for it
 PROGRESS_GAP = 0.25         # at most 4 progress pushes per second per turn
+RELEASE_RETRIES = (1, 2, 4, 8, 15, 30, 30)   # seconds between tries when the queue can't be reached
+SEEN_KEPT = 4096            # handled grant tokens remembered (only matters across a reconnect)
 
 
 class PendingStore(dict):
@@ -137,7 +139,7 @@ class BunnyLock:
         self._tasks: list[asyncio.Task] = []
         self._connected: asyncio.Event | None = None
         self._held: set[str] = set()                   # tokens we hold (heartbeated)
-        self._seen: set[str] = set()                   # grants already handled (re-sent on reconnect)
+        self._seen: dict[str, None] = {}               # grants already handled (re-sent on reconnect), oldest first
         self._adopted: set[str] = set()                # jobs kept from the previous process
         self._enqueuing: dict[str, asyncio.Event] = {}
         self._waiters: dict[str, _Waiter] = {}
@@ -204,14 +206,18 @@ class BunnyLock:
 
     async def enqueue(self, job_id: str, label: str, *, is_continuous: bool = False, priority: bool = False,
                       group: str | None = None, uses_llm: bool | None = None, model: str | None = None,
-                      config: str | None = None, vram_mb: int | None = None) -> dict[str, Any] | None:
+                      config: str | None = None, vram_mb: int | None = None,
+                      gpu_role: str | None = None) -> dict[str, Any] | None:
         """Queue a job. Returns {"entry_id", "state", "position"}, or None when the
         queue can't be reached (the job cannot be queued; tell the user).
         uses_llm=False marks a job that never needs the LLM: right after an LLM
         turn the queue keeps the model unloaded while it renders.
         model / config (e.g. "1024x1024", "720p 121f") file the job's measured VRAM
         peak more precisely; vram_mb is the app's own guess (it can only raise the
-        recorded peak). All optional: without them the peak is kept per app."""
+        recorded peak). All optional: without them the peak is kept per app.
+        gpu_role: the job runs on another GPU role than its app's usual one
+        (Video's two-GPU H3 modes: "comfyui_multi"); the queue then plans its VRAM
+        on those cards."""
         self.start()   # no-op once running
         if self._connected and not self._connected.is_set():
             with suppress(asyncio.TimeoutError):
@@ -222,6 +228,7 @@ class BunnyLock:
                 "app": self.app, "instance": self.instance, "job_id": job_id, "label": label,
                 "is_continuous": is_continuous, "priority": priority, "group": group, "uses_llm": uses_llm,
                 "model": model, "config": config, "vram_mb": vram_mb,
+                **({"gpu_role": gpu_role} if gpu_role else {}),
             })
             if response is None or response.status_code >= 400:
                 if response is not None:
@@ -248,7 +255,23 @@ class BunnyLock:
         self._progress_at.pop(token, None)
         self._progress_later.pop(token, None)
         response = await asyncio.shield(self._post("/v2/release", {"token": token, "llm_settle": llm_settle}))
+        if response is None and self._client is not None:
+            # The queue didn't answer (restarting?). Nothing heartbeats this turn any more, so it would
+            # sit on the GPU until its lease runs out (90 s): keep trying to hand it back.
+            self._spawn(self._release_again(token, llm_settle))
         return bool(response is not None and response.status_code == 200)
+
+    async def _release_again(self, token: str, llm_settle: bool) -> None:
+        for wait in RELEASE_RETRIES:
+            await asyncio.sleep(wait)
+            response = await self._post("/v2/release", {"token": token, "llm_settle": llm_settle})
+            if response is not None:      # 200 = handed back now, 404 = the queue already moved on
+                return
+
+    def _remember(self, token: str) -> None:
+        self._seen[token] = None
+        while len(self._seen) > SEEN_KEPT:
+            self._seen.pop(next(iter(self._seen)))
 
     async def dequeue(self, entry_id: str | None) -> None:
         if entry_id:
@@ -313,13 +336,16 @@ class BunnyLock:
         self._others.pop(token, None)
         self._progress_at.pop(token, None)
         self._progress_later.pop(token, None)
-        try:
-            response = httpx.post(f"{self.url}/v2/release", json={"token": token, "llm_settle": llm_settle},
-                                  headers=self._headers, timeout=REQUEST_TIMEOUT)
-            return response.status_code == 200
-        except httpx.HTTPError as exc:
-            log.warning("bunny-lock release failed: %s", exc)
-            return False
+        for wait in (1, 2, None):   # a queue that is restarting answers again within seconds
+            try:
+                response = httpx.post(f"{self.url}/v2/release", json={"token": token, "llm_settle": llm_settle},
+                                      headers=self._headers, timeout=REQUEST_TIMEOUT)
+                return response.status_code == 200
+            except httpx.HTTPError as exc:
+                log.warning("bunny-lock release failed: %s", exc)
+                if wait is not None:
+                    time.sleep(wait)
+        return False
 
     # ------------------------------------------------------------ waiting
 
@@ -327,7 +353,8 @@ class BunnyLock:
     async def lease(self, job_id: str, label: str, *, priority: bool = False, uses_llm: bool | None = None,
                     llm_settle: bool = False, group: str | None = None, is_continuous: bool = False,
                     on_wait: Callable[[dict[str, Any]], Any] | None = None, timeout: float | None = None,
-                    model: str | None = None, config: str | None = None, vram_mb: int | None = None):
+                    model: str | None = None, config: str | None = None, vram_mb: int | None = None,
+                    gpu_role: str | None = None):
         """Wait for the GPU, hold it for the block, then hand it back.
         Raises LockUnavailable when the queue can't be reached, LeaseCancelled
         when the queue page cancelled the entry while it waited."""
@@ -336,7 +363,8 @@ class BunnyLock:
         token: str | None = None
         try:
             entry = await self.enqueue(job_id, label, priority=priority, uses_llm=uses_llm, group=group,
-                                       is_continuous=is_continuous, model=model, config=config, vram_mb=vram_mb)
+                                       is_continuous=is_continuous, model=model, config=config, vram_mb=vram_mb,
+                                       gpu_role=gpu_role)
             if entry is None:
                 raise LockUnavailable("The GPU queue is not reachable.")
             waiter.entry_id = entry.get("entry_id")
@@ -417,7 +445,7 @@ class BunnyLock:
             if token in self._held:
                 await self._post("/v2/ack", {"token": token})
             return
-        self._seen.add(token)
+        self._remember(token)
         registering = self._enqueuing.get(job_id)
         if registering is not None:
             with suppress(asyncio.TimeoutError):
@@ -443,7 +471,7 @@ class BunnyLock:
     async def _handle_adopt(self, entry_id: str, job_id: str, active: bool, token: str | None) -> None:
         """The app restarted: an entry of its previous process is on offer."""
         if token:
-            self._seen.add(token)   # a re-sent grant for it must not start the job twice
+            self._remember(token)   # a re-sent grant for it must not start the job twice
         keep = False
         try:
             if self.on_adopt is not None:
@@ -462,7 +490,7 @@ class BunnyLock:
                            settle: float = 5.0) -> None:
         """After a restart: saved jobs the queue did not offer back (it was down or
         reset, or the app was away too long) are queued again, at the back.
-        A saved job's "queue_model" / "queue_config" keep its VRAM peak key."""
+        A saved job's "queue_model" / "queue_config" keep its VRAM peak key, "gpu_role" its cards."""
         while self._connected is None or not self._connected.is_set():
             await asyncio.sleep(1)
         await asyncio.sleep(settle)
@@ -472,7 +500,8 @@ class BunnyLock:
                 continue
             while job_id in pending:
                 entry = await self.enqueue(job_id, str(item.get("label") or job_id), group=item.get("group"), uses_llm=False,
-                                           model=item.get("queue_model"), config=item.get("queue_config"))
+                                           model=item.get("queue_model"), config=item.get("queue_config"),
+                                           gpu_role=item.get("gpu_role"))
                 if entry:
                     on_entry(job_id, entry)
                     log.info("Queued %s again after the restart", job_id)
@@ -510,7 +539,56 @@ class BunnyLock:
     async def _heartbeat_loop(self) -> None:
         while True:
             await asyncio.sleep(self.heartbeat_seconds)
-            for token in list(self._held):
-                response = await self._post("/v2/heartbeat", {"token": token, "instance": self.instance}, timeout=6)
-                if response is not None and response.status_code == 404:
-                    self._held.discard(token)   # the turn is gone (expired or released elsewhere)
+            try:
+                for token in list(self._held):
+                    response = await self._post("/v2/heartbeat", {"token": token, "instance": self.instance}, timeout=6)
+                    if response is not None and response.status_code == 404:
+                        self._held.discard(token)   # the turn is gone (expired or released elsewhere)
+            except Exception:  # noqa: BLE001 - if this loop ever died, every held turn would expire after 90 s
+                log.exception("bunny-lock heartbeat failed; trying again")
+
+
+# ---------------------------------------------------------------- GPU layout
+# The queue keeps which GPUs each kind of work runs on (Queue page -> GPUs,
+# lock/src/gpu.rs). Launchers ask it once at start-up; with one card (or the
+# queue unreachable) nothing is set and everything sees every GPU, as before.
+
+def gpu_layout(url: str | None = None, timeout: float = 3.0) -> dict[str, Any] | None:
+    """GET /v2/gpus: {"cards": [...], "roles": [...], "multi_available", "prefer_multi_gpu", ...}."""
+    base = (url or os.environ.get("BUNNY_LOCK_URL") or os.environ.get("LOCK_URL") or "http://127.0.0.1:8600").rstrip("/")
+    try:
+        response = httpx.get(f"{base}/v2/gpus", timeout=timeout)
+        return response.json() if response.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
+def visible_devices(role: str, url: str | None = None, timeout: float = 3.0) -> str:
+    """ROCR_VISIBLE_DEVICES for a GPU role ("comfyui", "llama", "voice", "trainer", ...)
+    as GPU UUIDs in order (the first is device 0 in the process); "" = leave it unset."""
+    for item in (gpu_layout(url, timeout) or {}).get("roles") or []:
+        if item.get("role") == role:
+            return str(item.get("visible") or "")
+    return ""
+
+
+def pin_gpus(role: str, url: str | None = None) -> str:
+    """Call before torch / ROCm loads: restrict this process (and its children) to the
+    role's GPUs. An explicit ROCR_VISIBLE_DEVICES / HIP_VISIBLE_DEVICES wins. With a
+    single card nothing is changed. Returns the value set ("" = unchanged)."""
+    if os.environ.get("ROCR_VISIBLE_DEVICES") or os.environ.get("HIP_VISIBLE_DEVICES"):
+        return ""
+    layout = None
+    for attempt in range(5):   # the queue may still be starting with the rest of the stack
+        layout = gpu_layout(url, timeout=2.0)
+        if layout is not None:
+            break
+        time.sleep(2)
+    layout = layout or {}
+    if len(layout.get("cards") or []) < 2:
+        return ""
+    value = next((str(r.get("visible") or "") for r in layout.get("roles") or [] if r.get("role") == role), "")
+    if value:
+        os.environ["ROCR_VISIBLE_DEVICES"] = value
+        log.info("GPU role %s: ROCR_VISIBLE_DEVICES=%s", role, value)
+    return value

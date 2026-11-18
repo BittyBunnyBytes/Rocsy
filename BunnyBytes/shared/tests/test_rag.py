@@ -135,3 +135,28 @@ class AgenticRagTest(RagBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ModelTest(RagBase):
+    def test_glb_is_a_model_with_a_summary(self):
+        import struct as _s
+        gl = {"asset": {"version": "2.0"}, "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}],
+                                                       "extras": {"targetNames": ["Smile", "Blink"]}}],
+              "accessors": [{"count": 30}, {"count": 36}], "skins": [{"joints": [0, 1, 2]}],
+              "animations": [{"name": "Idle"}, {"name": "Wave"}],
+              "nodes": [{"name": "Rig", "extras": {"mascot_emotions": json.dumps({"Happy": {}, "Sad": {}})}}]}
+        js = json.dumps(gl).encode(); js += b" " * (-len(js) % 4)
+        body = _s.pack("<I", len(js)) + b"JSON" + js
+        key, entry = pin(self.root, "mascot.glb", b"glTF" + _s.pack("<II", 2, 12 + len(body)) + body, "Mascot 3D")
+        pins = json.loads(self.index.read_text()); pins[key] = entry; self.index.write_text(json.dumps(pins))
+        out = self.rag.resolve("use @{Mascot 3D}")
+        self.assertEqual([m["kind"] for m in out["media"]], ["model"])
+        line = self.rag.media_line(out["media"][0])
+        for part in ("GLB 3D model", "12 triangles", "3 bones", "Idle, Wave", "Smile, Blink", "Happy, Sad"):
+            self.assertIn(part, line)
+
+    def test_broken_model_still_resolves(self):
+        key, entry = pin(self.root, "junk.fbx", b"nope", "Junk")
+        pins = json.loads(self.index.read_text()); pins[key] = entry; self.index.write_text(json.dumps(pins))
+        out = self.rag.resolve("@{Junk}")
+        self.assertEqual(self.rag.media_line(out["media"][0]), "@{Junk} is a FBX 3D model, file junk.fbx")

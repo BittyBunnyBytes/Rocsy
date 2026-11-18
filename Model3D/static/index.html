@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1115">
+  <title>3D Models</title>
+  <link rel="stylesheet" href="{{P}}/static/app.css?v={{V}}">
+  <script type="module" src="{{P}}/static/lib/model-viewer.min.js"></script>
+  <script defer src="{{P}}/static/app.js?v={{V}}" data-prefix="{{P}}" id="m3d-script"></script>
+</head>
+<body>
+  <header class="topbar"><span class="brand">3D Models</span><span class="exp-pill" title="3D builds are still experimental: results and rigs may need fixing">Experimental</span></header>
+  <main class="layout">
+    <form id="form" class="panel">
+      <h2>Make a model</h2>
+      <label class="field">Model
+        <select id="model" name="model"></select>
+      </label>
+      <p id="model-note" class="muted small"></p>
+
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" class="tab on" data-source="picture" aria-selected="true">Picture</button>
+        <button type="button" role="tab" class="tab" data-source="prompt" aria-selected="false">Prompt</button>
+        <button type="button" role="tab" class="tab" data-source="repaint" aria-selected="false">Repaint</button>
+      </div>
+
+      <div id="mesh-box" hidden>
+        <label class="field">Your 3D model (.glb, .obj or .stl)
+          <input type="file" id="mesh" accept=".glb,.obj,.stl">
+        </label>
+        <label class="field">Which way is up in the file
+          <select id="mesh-up" name="mesh_up">
+            <option value="y" selected>Y up (GLB / glTF, most game engines)</option>
+            <option value="z">Z up (Blender exports, STL, CAD)</option>
+          </select>
+        </label>
+        <p class="muted small">Keeps the shape and paints it. Add a picture of the object from the front, or leave the picture empty and describe the colours below: the Image studio then paints over a front view of your model.</p>
+      </div>
+
+      <div id="views" class="views"></div>
+
+      <div id="prompt-box" hidden>
+        <label class="field"><span id="prompt-label">Describe the object</span>
+          <textarea id="prompt" name="prompt" rows="4" maxlength="1500" placeholder="A cute ceramic fox figurine with an orange glaze"></textarea>
+        </label>
+        <label class="field" id="image-model-row">Picture made with
+          <select id="image-model" name="image_model"></select>
+        </label>
+        <p class="muted small">The Image studio draws the picture first (its own GPU turn), then it becomes a 3D model.</p>
+      </div>
+
+      <label class="field">Name <input id="title" name="title" placeholder="Taken from the picture" maxlength="80"></label>
+
+      <label class="check" id="character-row"><input type="checkbox" id="character"><span>Character: T-pose, skeleton and animations <span class="muted small">(players, NPCs, creatures on two legs)</span></span></label>
+      <label class="field" id="rig-method-row" hidden>Skeleton
+        <select id="rig-method" name="rig_method"></select>
+      </label>
+      <label class="check" id="paint-row"><input type="checkbox" name="paint" id="paint" checked> Paint the model with the picture's colours</label>
+
+      <label class="check" id="sides-row"><input type="checkbox" id="all-sides"><span>Paint all sides <span class="muted small">(the Image studio draws the back and both sides too: 3 more pictures)</span></span></label>
+
+      <label class="check" id="rembg-row"><input type="checkbox" name="remove_background" id="rembg"><span>Remove the background first <span class="muted small">(RMBG-1.4; downloads once)</span></span></label>
+
+      <details class="advanced">
+        <summary>Settings</summary>
+        <label class="field">Detail
+          <select name="octree">
+            <option value="256" selected>Normal (256)</option>
+            <option value="384">High (384)</option>
+            <option value="512">Very high (512, slow, more VRAM)</option>
+            <option value="128">Draft (128)</option>
+          </select>
+        </label>
+        <label class="field">Steps <input type="number" name="steps" value="30" min="5" max="100"></label>
+        <label class="field">Guidance (CFG) <input type="number" name="cfg" value="5" min="1" max="15" step="0.5"></label>
+        <label class="field">Shape tokens
+          <select name="latent_tokens">
+            <option value="3072" selected>3072</option>
+            <option value="4096">4096</option>
+            <option value="2048">2048</option>
+          </select>
+        </label>
+        <label class="field">Surface threshold <input type="number" name="threshold" value="0.6" min="-1" max="1" step="0.05"></label>
+        <label class="field">Seed <input type="number" name="seed" value="-1" min="-1"> <span class="muted small">-1 = random</span></label>
+        <label class="field">Texture size
+          <select name="texture">
+            <option value="2048" selected>2048</option>
+            <option value="4096">4096 (sharper, slower)</option>
+            <option value="1024">1024</option>
+          </select>
+        </label>
+        <label class="field">Painted mesh triangles <input type="number" name="faces" value="150000" min="20000" max="500000" step="10000"></label>
+      </details>
+
+      <button type="submit" id="go" class="primary">Make 3D model</button>
+      <p id="form-msg" class="msg" role="status"></p>
+    </form>
+
+    <section class="panel viewer-panel">
+      <div id="viewer-empty" class="viewer-empty">Pick a finished model to look at it here.</div>
+      <model-viewer id="viewer" camera-controls auto-rotate touch-action="pan-y" interaction-prompt="none"
+                    shadow-intensity="0.8" exposure="1.05" environment-image="neutral" hidden>
+      </model-viewer>
+      <button id="viewer-tap" class="viewer-tap" type="button" hidden>
+        <img id="viewer-poster" alt="">
+        <span>Tap to load the 3D model <small id="viewer-size"></small></span>
+      </button>
+      <div id="anim-bar" class="anim-bar" hidden>
+        <label class="anim-pick">Animation
+          <select id="anim"></select>
+        </label>
+        <button type="button" id="anim-play">Pause</button>
+      </div>
+      <div id="viewer-bar" class="viewer-bar" hidden>
+        <strong id="viewer-title"></strong>
+        <span id="viewer-meta" class="muted small"></span>
+        <button type="button" id="paint-toggle" class="paint-toggle" aria-pressed="true" hidden>Paint: on</button>
+        <a id="viewer-download" class="button" download>Download GLB</a>
+      </div>
+    </section>
+
+    <section class="panel jobs-panel">
+      <h2>Models</h2>
+      <ul id="jobs" class="jobs"></ul>
+      <p id="jobs-empty" class="muted">Nothing yet.</p>
+    </section>
+  </main>
+
+  <dialog id="redo-dialog" class="dialog">
+    <form method="dialog" id="redo-form">
+      <h2>Redo <span id="redo-title"></span></h2>
+      <p class="muted small">Makes it again as a new model; the old one stays.</p>
+      <label class="check"><input type="checkbox" name="new_seed" checked> New shape (different seed)</label>
+      <label class="check" id="redo-picture-row"><input type="checkbox" name="new_picture"> Draw a new picture too</label>
+      <label class="check" id="redo-paint-row"><input type="checkbox" name="paint"> Paint it</label>
+      <label class="field">Detail
+        <select name="octree">
+          <option value="128">Draft (128)</option><option value="256">Normal (256)</option>
+          <option value="384">High (384)</option><option value="512">Very high (512)</option>
+        </select>
+      </label>
+      <label class="field">Steps <input type="number" name="steps" min="5" max="100"></label>
+      <label class="field">Texture size
+        <select name="texture"><option value="1024">1024</option><option value="2048">2048</option><option value="4096">4096</option></select>
+      </label>
+      <div class="dialog-actions">
+        <button type="button" data-close>Cancel</button>
+        <button type="submit" class="primary small-btn" value="go">Redo</button>
+      </div>
+      <p class="msg" id="redo-msg" role="status"></p>
+    </form>
+  </dialog>
+
+  <dialog id="physics-dialog" class="dialog dialog-wide">
+    <form method="dialog" id="physics-form">
+      <h2>Physics for <span id="physics-title"></span></h2>
+      <p class="muted small">Pick the loose parts that should swing on their own. They get their own bones, the motion is simulated against every animation and baked in, and the file also carries VRM spring bones for engines that simulate live.</p>
+      <div id="physics-presets" class="physics-parts"></div>
+      <fieldset class="brush-box">
+        <legend><label class="check"><input type="checkbox" id="brush-on"><span>Brush: paint over the parts that move</span></label></legend>
+        <div class="brush-stage" id="brush-stage">
+          <img id="brush-img" alt="">
+          <canvas id="brush-canvas"></canvas>
+        </div>
+        <div class="brush-tools">
+          <label class="field-inline">Brush <input type="range" id="brush-size" min="6" max="80" value="28"></label>
+          <button type="button" id="brush-erase" aria-pressed="false">Erase</button>
+          <button type="button" id="brush-clear">Clear</button>
+          <label class="field-inline">Material <select id="brush-material"></select></label>
+        </div>
+        <p class="muted small">Painting goes through the model, so brushing the front of a skirt also picks its back.</p>
+      </fieldset>
+      <details class="advanced"><summary>Fine-tune (all parts)</summary>
+        <label class="field">Stiffness <input type="range" id="ph-stiffness" min="0" max="1" step="0.05"><span class="muted small" id="ph-stiffness-v">material default</span></label>
+        <label class="field">Gravity <input type="range" id="ph-gravity" min="0" max="1" step="0.05"><span class="muted small" id="ph-gravity-v">material default</span></label>
+        <label class="field">Drag <input type="range" id="ph-drag" min="0" max="1" step="0.05"><span class="muted small" id="ph-drag-v">material default</span></label>
+        <button type="button" id="ph-reset">Use material defaults</button>
+      </details>
+      <div class="dialog-actions">
+        <button type="button" id="physics-remove">Remove physics</button>
+        <button type="button" data-close>Cancel</button>
+        <button type="submit" class="primary small-btn" value="go">Apply</button>
+      </div>
+      <p class="msg" id="physics-msg" role="status"></p>
+    </form>
+  </dialog>
+
+  <dialog id="rig-dialog" class="dialog">
+    <form method="dialog" id="rig-form">
+      <h2>Rig <span id="rig-title"></span></h2>
+      <p class="muted small">Adds a skeleton, skin weights and preview animations. The plain model is kept, so you can re-rig any time.</p>
+      <div id="rig-choices"></div>
+      <div class="dialog-actions">
+        <button type="button" data-close>Cancel</button>
+        <button type="submit" class="primary small-btn" value="go">Rig</button>
+      </div>
+      <p class="msg" id="rig-msg" role="status"></p>
+    </form>
+  </dialog>
+
+  <dialog id="edit-dialog" class="dialog">
+    <form method="dialog" id="edit-form">
+      <h2>Edit <span id="edit-title"></span></h2>
+      <p class="muted small">Hunyuan3D can't edit a mesh directly, so the Image studio (Qwen Image 2.1) edits the model's picture from your instruction, and the model is made from the edited picture.</p>
+      <img id="edit-picture" class="edit-picture" alt="">
+      <label class="field">What should change?
+        <textarea name="instruction" rows="3" maxlength="800" required placeholder="Make it glossy blue with gold trim"></textarea>
+      </label>
+      <label class="check"><input type="radio" name="keep_shape" value="true" checked> Colours only: keep this exact shape and repaint it</label>
+      <label class="check"><input type="radio" name="keep_shape" value="false"> Shape and colours: rebuild the model from the edited picture</label>
+      <div class="dialog-actions">
+        <button type="button" data-close>Cancel</button>
+        <button type="submit" class="primary small-btn" value="go">Edit</button>
+      </div>
+      <p class="msg" id="edit-msg" role="status"></p>
+    </form>
+  </dialog>
+</body>
+</html>

@@ -71,6 +71,10 @@ impl Config {
                 base("MUS_UPSTREAM", "http://127.0.0.1:8200") + "/Music",
             ),
             (
+                "Model3D".to_owned(),
+                base("M3D_UPSTREAM", "http://127.0.0.1:8320") + "/Model3D",
+            ),
+            (
                 "Krea".to_owned(),
                 base("KREA_UPSTREAM", "http://127.0.0.1:8300") + "/Image",
             ),

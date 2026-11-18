@@ -1,0 +1,12 @@
+{
+    "display_name": "Rocsy Addons",
+    "loading_order": 950,
+    "requires": [],
+    "optional": ["tts", "connection-manager"],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Rocsy",
+    "version": "1.0.0",
+    "homePage": "https://github.com/BittyBunnyBytes/Rocsy",
+    "auto_update": false
+}

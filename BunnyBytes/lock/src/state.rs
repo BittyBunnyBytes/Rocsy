@@ -85,6 +85,17 @@ pub struct Settings {
     /// vram_key -> MiB set by hand (replaces the recorded peak).
     #[serde(default)]
     pub vram_overrides: BTreeMap<String, u64>,
+    /// GPU role -> card ids in order (gpu.rs); a missing role = its default.
+    #[serde(default)]
+    pub gpu_roles: BTreeMap<String, Vec<String>>,
+    /// With two or more GPUs, every service uses its multi-GPU mode where it
+    /// has one (LLMs split across the cards, Video's H3 split weights).
+    #[serde(default)]
+    pub prefer_multi_gpu: bool,
+    /// The card id chosen as primary (the default card of every role); None =
+    /// automatic (LOCK_VRAM_DEVICE, else the card with the most VRAM).
+    #[serde(default)]
+    pub primary_gpu: Option<String>,
 }
 
 fn yes() -> bool {
@@ -103,6 +114,9 @@ impl Default for Settings {
             vram_reserve_mb: default_reserve(),
             vram_total_mb: 0,
             vram_overrides: BTreeMap::new(),
+            gpu_roles: BTreeMap::new(),
+            prefer_multi_gpu: false,
+            primary_gpu: None,
         }
     }
 }
@@ -254,12 +268,27 @@ impl Shared {
 
     /// Run one queue call, then write exactly the rows it changed.
     pub fn with_queue<R>(&self, f: impl FnOnce(&mut Queue, DateTime<Utc>) -> R) -> R {
-        let mut guard = lock(&self.queue);
-        let QueueBox { queue, store } = &mut *guard;
-        let result = f(queue, Utc::now());
-        let dirty = queue.take_dirty();
-        if let Err(e) = store.sync(&dirty, |id| queue.get(id).cloned()) {
-            tracing::error!("could not save the queue: {e}");
+        let (result, reaped) = {
+            let mut guard = lock(&self.queue);
+            let QueueBox { queue, store } = &mut *guard;
+            let result = f(queue, Utc::now());
+            let dirty = queue.take_dirty();
+            if let Err(e) = store.sync(&dirty, |id| queue.get(id).cloned()) {
+                tracing::error!("could not save the queue: {e}");
+            }
+            (result, queue.take_reaped())
+        };
+        // Leases that ran out and were found by this call rather than the tick:
+        // the same log line and metric as the tick's reap (queue lock released).
+        for e in &reaped {
+            METRICS.expired.inc();
+            tracing::warn!(
+                "{} ({}/{}) lease ran out without a release",
+                short(&e.entry_id),
+                e.app,
+                short(&e.job_id)
+            );
+            self.note_freed(Some(e));
         }
         result
     }
@@ -275,6 +304,7 @@ impl Shared {
         while let Some(entry) = pending.pop_front() {
             pending.extend(self.grant(entry));
         }
+        self.forget_gone_marks();
         self.maybe_prepare();
         self.publish_queue();
     }
@@ -393,6 +423,17 @@ impl Shared {
             lock(&self.prepared).insert(next.entry_id);
             METRICS.prepares.inc();
         }
+    }
+
+    /// Timing marks of entries that left the queue without a grant or release
+    /// (dequeued or cancelled while waiting, dropped with their app) would
+    /// otherwise stay for as long as the queue runs.
+    fn forget_gone_marks(&self) {
+        let ids: HashSet<String> =
+            self.read_queue(|q| q.entries().iter().map(|e| e.entry_id.clone()).collect());
+        let mut marks = lock(&self.marks);
+        marks.enqueued.retain(|id, _| ids.contains(id));
+        marks.granted.retain(|id, _| ids.contains(id));
     }
 
     pub fn note_enqueued(&self, entry_id: &str) {

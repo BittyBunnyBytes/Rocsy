@@ -1,0 +1,5823 @@
+/* Rocsy Visual Overhaul for SillyTavern. Every rule is scoped to body.rvo, so the classic layout is untouched
+   when it is switched off. Themes set SillyTavern's own SmartTheme variables on <body> (they inherit over the
+   values SillyTavern writes on <html>), plus a few --rvo-* tokens for the Rocsy chrome. */
+
+/* ------------------------------------------------------------------ themes */
+
+body.rvo {
+    --rvo-side: 280px;
+    --rvo-head: 56px;
+    --rvo-column: 820px;
+    --rvo-radius: 14px;
+    --rvo-font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+    --topBarBlockSize: var(--rvo-head);
+}
+
+body.rvo[data-rvo-theme="rocsy"] {
+    --rvo-bg: #0f1519;
+    --rvo-panel: #131b20;
+    --rvo-raised: #18222a;
+    --rvo-hover: #1e2a33;
+    --rvo-line: #2a3843;
+    --rvo-text: #eef3f6;
+    --rvo-muted: #a1adb6;
+    --rvo-faint: #6f7d88;
+    --rvo-accent: #e9a04f;
+    --rvo-accent-ink: #1a1206;
+    --rvo-user: #22303a;
+    --rvo-shadow: rgba(0, 0, 0, .45);
+}
+
+body.rvo[data-rvo-theme="midnight"] {
+    --rvo-bg: #0b0d12;
+    --rvo-panel: #11141b;
+    --rvo-raised: #171b24;
+    --rvo-hover: #1d2230;
+    --rvo-line: #262c3a;
+    --rvo-text: #e8eaf0;
+    --rvo-muted: #9aa2b4;
+    --rvo-faint: #697186;
+    --rvo-accent: #7aa2ff;
+    --rvo-accent-ink: #0a1020;
+    --rvo-user: #1c2333;
+    --rvo-shadow: rgba(0, 0, 0, .5);
+}
+
+body.rvo[data-rvo-theme="light"] {
+    --rvo-bg: #f7f7f5;
+    --rvo-panel: #efefec;
+    --rvo-raised: #ffffff;
+    --rvo-hover: #e6e6e2;
+    --rvo-line: #d9d9d4;
+    --rvo-text: #1d2125;
+    --rvo-muted: #59616a;
+    --rvo-faint: #8a9199;
+    --rvo-accent: #b8641a;
+    --rvo-accent-ink: #ffffff;
+    --rvo-user: #e9e3d8;
+    --rvo-shadow: rgba(0, 0, 0, .12);
+}
+
+@media (prefers-color-scheme: light) {
+    body.rvo[data-rvo-theme="system"] {
+        --rvo-bg: #f7f7f5; --rvo-panel: #efefec; --rvo-raised: #ffffff; --rvo-hover: #e6e6e2; --rvo-line: #d9d9d4;
+        --rvo-text: #1d2125; --rvo-muted: #59616a; --rvo-faint: #8a9199; --rvo-accent: #b8641a; --rvo-accent-ink: #ffffff;
+        --rvo-user: #e9e3d8; --rvo-shadow: rgba(0, 0, 0, .12);
+    }
+}
+
+@media (prefers-color-scheme: dark) {
+    body.rvo[data-rvo-theme="system"] {
+        --rvo-bg: #0f1519; --rvo-panel: #131b20; --rvo-raised: #18222a; --rvo-hover: #1e2a33; --rvo-line: #2a3843;
+        --rvo-text: #eef3f6; --rvo-muted: #a1adb6; --rvo-faint: #6f7d88; --rvo-accent: #e9a04f; --rvo-accent-ink: #1a1206;
+        --rvo-user: #22303a; --rvo-shadow: rgba(0, 0, 0, .45);
+    }
+}
+
+/* Rocsy themes drive SillyTavern's own colours, so every panel, popup and input follows. */
+body.rvo:not([data-rvo-theme="sillytavern"]) {
+    --SmartThemeBodyColor: var(--rvo-text);
+    --SmartThemeEmColor: var(--rvo-muted);
+    --SmartThemeUnderlineColor: var(--rvo-accent);
+    --SmartThemeQuoteColor: var(--rvo-accent);
+    --SmartThemeBlurTintColor: var(--rvo-panel);
+    --SmartThemeChatTintColor: var(--rvo-bg);
+    --SmartThemeUserMesBlurTintColor: var(--rvo-user);
+    --SmartThemeBotMesBlurTintColor: transparent;
+    --SmartThemeShadowColor: transparent;
+    --SmartThemeBorderColor: var(--rvo-line);
+    --SmartThemeBlurStrength: 0px;
+    --black30a: var(--rvo-hover);
+    --black50a: var(--rvo-raised);
+    --black70a: var(--rvo-shadow);
+    --grey30: var(--rvo-faint);
+    --SmartThemeCheckboxTickColor: var(--rvo-accent-ink);
+    color-scheme: dark;
+    background: var(--rvo-bg);
+    font-family: var(--rvo-font);
+}
+
+/* Checkboxes in Rocsy themes: an empty box when off, accent with a contrasting tick when on. SillyTavern paints
+   them in the text colour, which in the light theme made a black box whose (dark) tick couldn't be seen. */
+body.rvo:not([data-rvo-theme="sillytavern"]) input[type="checkbox"] {
+    background-color: var(--rvo-panel);
+    border: 1.5px solid var(--rvo-faint);
+    outline: 0;
+    box-shadow: none;
+    filter: none;
+}
+
+body.rvo:not([data-rvo-theme="sillytavern"]) input[type="checkbox"]:checked {
+    background-color: var(--rvo-accent);
+    border-color: var(--rvo-accent);
+}
+
+body.rvo[data-rvo-theme="light"],
+body.rvo[data-rvo-theme="system"] {
+    color-scheme: light dark;
+}
+
+/* "SillyTavern theme": keep the user's SmartTheme colours, derive the Rocsy chrome from them. */
+body.rvo[data-rvo-theme="sillytavern"] {
+    --rvo-bg: var(--SmartThemeChatTintColor);
+    --rvo-panel: var(--SmartThemeBlurTintColor);
+    --rvo-raised: var(--SmartThemeBlurTintColor);
+    --rvo-hover: var(--black30a);
+    --rvo-line: var(--SmartThemeBorderColor);
+    --rvo-text: var(--SmartThemeBodyColor);
+    --rvo-muted: var(--SmartThemeEmColor);
+    --rvo-faint: var(--SmartThemeEmColor);
+    --rvo-accent: var(--SmartThemeQuoteColor);
+    --rvo-accent-ink: var(--SmartThemeBlurTintColor);
+    --rvo-user: var(--SmartThemeUserMesBlurTintColor);
+    --rvo-shadow: var(--SmartThemeShadowColor);
+}
+
+/* ------------------------------------------------------------- page shell */
+
+body.rvo:not(.rvo-bg) #bg1,
+body.rvo:not(.rvo-bg) #bg_custom {
+    display: none !important;
+}
+
+body.rvo #top-bar {
+    display: none !important;
+}
+
+/* SillyTavern's icon strip is replaced by the sidebar; its drawers stay and open as sheets. */
+body.rvo #top-settings-holder {
+    position: fixed;
+    inset: 0 auto auto 0;
+    width: 0;
+    height: 0;
+    z-index: 4010;
+}
+
+body.rvo #top-settings-holder > .drawer > .drawer-toggle {
+    display: none;
+}
+
+body.rvo #sheld {
+    left: calc(var(--rvo-side) + 0px) !important;
+    right: 0 !important;
+    top: var(--rvo-head) !important;
+    width: auto !important;
+    max-width: none !important;
+    height: calc(100dvh - var(--rvo-head)) !important;
+    max-height: none !important;
+    margin: 0 !important;
+    background: var(--rvo-bg);
+    transition: left .2s ease;
+}
+
+body.rvo.rvo-collapsed {
+    --rvo-side: 0px;
+}
+
+/* ---------------------------------------------------------------- sidebar */
+
+#rvo-sidebar {
+    display: none;
+}
+
+body.rvo #rvo-sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: 280px;
+    z-index: 3500;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 10px;
+    background: var(--rvo-panel);
+    border-right: 1px solid var(--rvo-line);
+    color: var(--rvo-text);
+    font-family: var(--rvo-font);
+    transition: transform .2s ease;
+}
+
+body.rvo.rvo-collapsed #rvo-sidebar {
+    transform: translateX(-100%);
+}
+
+.rvo-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 6px 10px;
+}
+
+.rvo-brand strong {
+    flex: 1;
+    font-size: 15px;
+    letter-spacing: .01em;
+}
+
+.rvo-logo {
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    background: var(--rvo-raised);
+    box-shadow: inset 0 0 0 1px var(--rvo-line);
+    text-decoration: none;
+    cursor: pointer;
+    transition: box-shadow .15s, transform .15s;
+}
+
+.rvo-logo:hover,
+.rvo-logo:focus-visible {
+    box-shadow: inset 0 0 0 1px var(--rvo-accent);
+    transform: scale(1.06);
+    outline: none;
+}
+
+.rvo-logo svg { display: block; }
+.rvo-logo .rvo-mark-sun { fill: #e1a744; }
+.rvo-logo .rvo-mark-bird { fill: var(--rvo-text, #f2f7fb); }
+
+body.rvo .rvo-icon-button {
+    display: inline-grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--rvo-muted);
+    cursor: pointer;
+    font-size: 15px;
+}
+
+body.rvo .rvo-icon-button:hover,
+body.rvo .rvo-nav:hover,
+body.rvo .rvo-chat:hover,
+body.rvo .rvo-settings summary:hover {
+    background: var(--rvo-hover);
+    color: var(--rvo-text);
+}
+
+body.rvo .rvo-icon-button:focus-visible,
+body.rvo .rvo-nav:focus-visible,
+body.rvo .rvo-chat:focus-visible,
+body.rvo .rvo-primary:focus-visible {
+    outline: 2px solid var(--rvo-accent);
+    outline-offset: 1px;
+}
+
+body.rvo .rvo-primary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 0;
+    border-radius: 11px;
+    background: var(--rvo-accent);
+    color: var(--rvo-accent-ink);
+    font: 600 14px var(--rvo-font);
+    cursor: pointer;
+}
+
+body.rvo .rvo-primary:hover {
+    filter: brightness(1.06);
+}
+
+body.rvo .rvo-nav,
+body.rvo .rvo-settings summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--rvo-muted);
+    font: 500 14px var(--rvo-font);
+    text-align: left;
+    cursor: pointer;
+}
+
+.rvo-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0 2px;
+    padding: 0 10px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 10px;
+    background: var(--rvo-bg);
+    color: var(--rvo-faint);
+}
+
+body.rvo .rvo-search input {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--rvo-text);
+    font: 14px var(--rvo-font);
+}
+
+.rvo-recents {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    margin: 0 -4px;
+    padding: 0 4px;
+    scrollbar-width: thin;
+}
+
+.rvo-group-label {
+    padding: 12px 10px 4px;
+    color: var(--rvo-faint);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+
+body.rvo .rvo-chat {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 7px 8px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--rvo-text);
+    text-align: left;
+    cursor: pointer;
+}
+
+body.rvo .rvo-chat.active {
+    background: var(--rvo-raised);
+    box-shadow: inset 2px 0 0 var(--rvo-accent);
+}
+
+.rvo-avatar {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: var(--rvo-raised);
+}
+
+.rvo-avatar-group {
+    display: inline-grid;
+    place-items: center;
+    color: var(--rvo-muted);
+    font-size: 13px;
+}
+
+.rvo-chat-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.rvo-chat-who {
+    font: 600 13.5px var(--rvo-font);
+}
+
+.rvo-chat-preview {
+    overflow: hidden;
+    color: var(--rvo-muted);
+    font: 12.5px var(--rvo-font);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.rvo-empty {
+    padding: 14px 10px;
+    color: var(--rvo-faint);
+    font-size: 13px;
+}
+
+.rvo-settings {
+    border-top: 1px solid var(--rvo-line);
+    padding-top: 6px;
+}
+
+body.rvo .rvo-settings summary {
+    list-style: none;
+}
+
+body.rvo .rvo-settings summary::-webkit-details-marker {
+    display: none;
+}
+
+body.rvo .rvo-settings summary::after {
+    content: "\f078";
+    margin-left: auto;
+    font: 900 11px "Font Awesome 6 Free";
+    transition: transform .15s;
+}
+
+body.rvo .rvo-settings[open] summary::after {
+    transform: rotate(180deg);
+}
+
+.rvo-settings-list {
+    display: grid;
+    gap: 1px;
+    padding: 2px 0 4px 8px;
+}
+
+body.rvo .rvo-settings-list .rvo-nav {
+    padding: 6px 10px;
+    font-size: 13.5px;
+}
+
+.rvo-footer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--rvo-line);
+}
+
+.rvo-theme-row {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-left: 10px;
+    color: var(--rvo-muted);
+}
+
+body.rvo .rvo-theme-row select {
+    flex: 1;
+    margin: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 8px;
+    background: var(--rvo-bg);
+    color: var(--rvo-text);
+    font: 13px var(--rvo-font);
+}
+
+/* ----------------------------------------------------------------- header */
+
+#rvo-header {
+    display: none;
+}
+
+body.rvo #rvo-header {
+    position: fixed;
+    top: 0;
+    left: var(--rvo-side);
+    right: 0;
+    height: var(--rvo-head);
+    z-index: 3400;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    background: var(--rvo-bg);
+    border-bottom: 1px solid var(--rvo-line);
+    color: var(--rvo-text);
+    font-family: var(--rvo-font);
+    transition: left .2s ease;
+}
+
+body.rvo:not(.rvo-collapsed) .rvo-menu {
+    display: none;
+}
+
+.rvo-title {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+body.rvo .rvo-title-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--rvo-text);
+    text-align: left;
+    cursor: pointer;
+}
+
+body.rvo button.rvo-title-text:hover {
+    background: var(--rvo-hover);
+}
+
+.rvo-title-text strong {
+    font-size: 15px;
+}
+
+.rvo-title-text small {
+    overflow: hidden;
+    color: var(--rvo-faint);
+    font-size: 12px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.rvo-header-actions {
+    display: flex;
+    gap: 2px;
+}
+
+/* ------------------------------------------------------------------- chat */
+
+body.rvo #chat {
+    padding: 18px 16px 8px;
+    background: transparent !important;
+    scrollbar-gutter: stable;
+}
+
+body.rvo #chat > .mes,
+body.rvo #chat > .last_mes {
+    width: 100%;
+    max-width: var(--rvo-column);
+    margin-inline: auto;
+}
+
+body.rvo.rvo-wide {
+    --rvo-column: 1100px;
+}
+
+body.rvo .mes {
+    padding: 14px 4px !important;
+    border: 0 !important;
+    border-radius: 0;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+body.rvo .mes .avatar img {
+    width: 34px !important;
+    height: 34px !important;
+    border-radius: 50% !important;
+    box-shadow: none;
+}
+
+body.rvo .mes .ch_name .name_text {
+    font: 600 14px var(--rvo-font);
+}
+
+body.rvo .mes_text {
+    font-family: var(--rvo-font);
+    line-height: 1.6;
+}
+
+/* The user's turns sit in a bubble on the right, the character's read as the page. */
+body.rvo .mes[is_user="true"] {
+    flex-direction: row-reverse;
+}
+
+body.rvo .mes[is_user="true"] .mes_block {
+    align-items: flex-end;
+}
+
+body.rvo .mes[is_user="true"] .ch_name {
+    flex-direction: row-reverse;
+}
+
+body.rvo .mes[is_user="true"] .mes_text {
+    align-self: flex-end;
+    max-width: min(80%, 640px);
+    padding: 10px 14px !important;
+    border-radius: 18px 18px 6px 18px;
+    background: var(--rvo-user);
+}
+
+/* Clutter: ids, timers, token counts and the per-message buttons only when wanted. */
+body.rvo:not(.rvo-details) .mesIDDisplay,
+body.rvo:not(.rvo-details) .mes_timer,
+body.rvo:not(.rvo-details) .tokenCounterDisplay,
+body.rvo:not(.rvo-details) .timestamp {
+    display: none !important;
+}
+
+@media (hover: hover) {
+    body.rvo .mes .mes_buttons,
+    body.rvo .mes .extraMesButtonsHint {
+        opacity: 0;
+        transition: opacity .15s;
+    }
+
+    body.rvo .mes:hover .mes_buttons,
+    body.rvo .mes:hover .extraMesButtonsHint,
+    body.rvo .mes:focus-within .mes_buttons {
+        opacity: 1;
+    }
+}
+
+body.rvo .swipe_left,
+body.rvo .swipe_right {
+    opacity: .5;
+}
+
+body.rvo .swipe_left:hover,
+body.rvo .swipe_right:hover {
+    opacity: 1;
+}
+
+/* --------------------------------------------------------------- composer */
+
+body.rvo #form_sheld {
+    width: calc(100% - 32px);
+    max-width: var(--rvo-column);
+    margin: 4px auto 14px;
+}
+
+body.rvo #send_form {
+    padding: 6px 8px;
+    border: 1px solid var(--rvo-line) !important;
+    border-radius: 22px !important;
+    background: var(--rvo-raised) !important;
+    box-shadow: 0 6px 24px var(--rvo-shadow);
+}
+
+body.rvo #send_form:focus-within {
+    border-color: color-mix(in srgb, var(--rvo-accent) 55%, var(--rvo-line)) !important;
+}
+
+body.rvo #send_textarea {
+    background: transparent !important;
+    border: 0 !important;
+    color: var(--rvo-text);
+    font: 15px/1.5 var(--rvo-font);
+}
+
+body.rvo #send_but,
+body.rvo #mes_stop {
+    border-radius: 50%;
+}
+
+body.rvo #send_but:not(.displayNone) {
+    display: grid !important;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    background: var(--rvo-accent);
+    color: var(--rvo-accent-ink);
+    font-size: 14px;
+    opacity: 1;
+}
+
+/* ---------------------------------------------------- settings as sheets */
+
+body.rvo #top-settings-holder .drawer-content,
+body.rvo #left-nav-panel,
+body.rvo #right-nav-panel {
+    position: fixed !important;
+    top: calc(var(--rvo-head) + 8px) !important;
+    right: 10px !important;
+    left: auto !important;
+    bottom: auto !important;
+    width: min(640px, calc(100vw - var(--rvo-side) - 20px)) !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    max-height: calc(100dvh - var(--rvo-head) - 18px) !important;
+    margin: 0 !important;
+    border: 1px solid var(--rvo-line) !important;
+    border-radius: var(--rvo-radius) !important;
+    background: var(--rvo-panel) !important;
+    box-shadow: 0 18px 60px var(--rvo-shadow) !important;
+    z-index: 4010 !important;
+}
+
+body.rvo #top-settings-holder .drawer-content.openDrawer,
+body.rvo #left-nav-panel.openDrawer,
+body.rvo #right-nav-panel.openDrawer {
+    height: calc(100dvh - var(--rvo-head) - 18px) !important;
+    overflow-y: auto;
+}
+
+body.rvo .rvo-sheet-head {
+    position: sticky;
+    top: -5px;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: -5px -5px 6px;
+    padding: 8px 8px 8px 16px;
+    border-bottom: 1px solid var(--rvo-line);
+    background: var(--rvo-panel);
+    font: 600 15px var(--rvo-font);
+}
+
+.rvo-sheet-head {
+    display: none;
+}
+
+/* Reasoning: a "Thought for …" pill with a brain icon; while the model thinks, the icon pulses and the
+   label shimmers. The chevron turns when it opens. */
+body.rvo .mes_reasoning_summary {
+    border: 0 !important;
+    background: transparent !important;
+    padding: 2px 0 !important;
+}
+
+body.rvo .mes_reasoning_header {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 12px 5px 10px !important;
+    border: 1px solid var(--rvo-line) !important;
+    border-radius: 999px !important;
+    background: var(--rvo-raised) !important;
+    color: var(--rvo-muted) !important;
+    font: 500 13px var(--rvo-font);
+    transition: border-color .15s, color .15s;
+}
+
+body.rvo .mes_reasoning_header::before {
+    content: "\f5dc";
+    font: 900 13px "Font Awesome 6 Free";
+    color: var(--rvo-accent);
+}
+
+body.rvo .mes_reasoning_summary:hover .mes_reasoning_header {
+    border-color: color-mix(in srgb, var(--rvo-accent) 45%, var(--rvo-line)) !important;
+    color: var(--rvo-text) !important;
+}
+
+body.rvo .mes_reasoning_arrow {
+    font-size: 10px !important;
+    opacity: .7;
+    transition: transform .2s ease;
+}
+
+body.rvo .mes_reasoning_details:not([open]) .mes_reasoning_arrow {
+    transform: rotate(180deg);
+}
+
+body.rvo .mes[data-reasoning-state="thinking"] .mes_reasoning_header {
+    border-color: color-mix(in srgb, var(--rvo-accent) 55%, var(--rvo-line)) !important;
+}
+
+body.rvo .mes[data-reasoning-state="thinking"] .mes_reasoning_header::before {
+    animation: rvo-pulse 1.4s ease-in-out infinite;
+}
+
+body.rvo .mes[data-reasoning-state="thinking"] .mes_reasoning_header_title {
+    background: linear-gradient(90deg, var(--rvo-muted) 0%, var(--rvo-text) 45%, var(--rvo-accent) 50%, var(--rvo-text) 55%, var(--rvo-muted) 100%);
+    background-size: 220% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent !important;
+    animation: rvo-shimmer 2.2s linear infinite;
+}
+
+@keyframes rvo-pulse {
+    0%, 100% { opacity: .55; transform: scale(.92); }
+    50% { opacity: 1; transform: scale(1.08); }
+}
+
+@keyframes rvo-shimmer {
+    from { background-position: 110% 0; }
+    to { background-position: -110% 0; }
+}
+
+body.rvo .mes_reasoning {
+    margin: 6px 0 4px;
+    padding: 4px 0 4px 14px !important;
+    border: 0 !important;
+    border-left: 2px solid color-mix(in srgb, var(--rvo-accent) 35%, var(--rvo-line)) !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    color: var(--rvo-muted) !important;
+    font: italic 14px/1.55 var(--rvo-font);
+}
+
+body.rvo .mes_text pre,
+body.rvo .mes_text code {
+    border-radius: 8px;
+    background: var(--rvo-raised) !important;
+}
+
+#rvo-scrim {
+    display: none;
+}
+
+body.rvo:has(#top-settings-holder .drawer-content.openDrawer:not(.pinnedOpen)) #rvo-scrim,
+body.rvo.rvo-side-open #rvo-scrim {
+    display: block;
+    position: fixed;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100dvh !important;   /* explicit: SillyTavern's phone styles collapse an inset-only box */
+    z-index: 3900;
+    background: rgba(0, 0, 0, .35);
+}
+
+body.rvo.rvo-side-open #rvo-scrim {
+    z-index: 3450;
+}
+
+body.rvo .drawer-content .menu_button,
+body.rvo .popup .menu_button {
+    border-radius: 9px;
+}
+
+body.rvo .text_pole,
+body.rvo select,
+body.rvo textarea:not(#send_textarea) {
+    border-radius: 8px;
+}
+
+/* SillyTavern's own popups follow the theme. */
+body.rvo .popup,
+body.rvo #options .options-content,
+body.rvo #extensionsMenu {
+    border: 1px solid var(--rvo-line) !important;
+    border-radius: var(--rvo-radius) !important;
+    background: var(--rvo-panel) !important;
+    box-shadow: 0 18px 60px var(--rvo-shadow) !important;
+}
+
+/* ---------------------------------------------------------- jump to latest */
+
+#rvo-jump {
+    display: none;
+}
+
+body.rvo #rvo-jump {
+    position: absolute;
+    right: 50%;
+    bottom: calc(var(--bottomFormBlockSize) + 40px);
+    transform: translate(50%, 10px);
+    z-index: 40;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 50%;
+    background: var(--rvo-raised);
+    color: var(--rvo-text);
+    box-shadow: 0 6px 20px var(--rvo-shadow);
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .15s, transform .15s;
+}
+
+body.rvo #rvo-jump.show {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(50%, 0);
+}
+
+/* The "back to Rocsy" wand only shows in the classic layout. */
+body.rvo #rvo-restore {
+    display: none !important;
+}
+
+/* ------------------------------------------------------------------ phone */
+
+@media (max-width: 900px) {
+    body.rvo {
+        --rvo-side: 0px;
+    }
+
+    body.rvo #rvo-sidebar {
+        top: 0 !important;
+        bottom: 0 !important;
+        height: 100dvh !important;
+        width: min(300px, 86vw) !important;
+        z-index: 4100;
+        transform: translateX(-100%);
+        box-shadow: 0 0 40px var(--rvo-shadow);
+    }
+
+    body.rvo.rvo-side-open #rvo-scrim {
+        z-index: 4050;
+    }
+
+    body.rvo.rvo-side-open #rvo-sidebar {
+        transform: none;
+    }
+
+    body.rvo .rvo-menu {
+        display: inline-grid !important;
+    }
+
+    body.rvo .rvo-brand .rvo-icon-button {
+        display: none;
+    }
+
+    body.rvo #top-settings-holder .drawer-content,
+    body.rvo #left-nav-panel,
+    body.rvo #right-nav-panel {
+        right: 6px !important;
+        width: calc(100vw - 12px) !important;
+    }
+
+    body.rvo #chat {
+        padding-inline: 8px;
+    }
+
+    body.rvo #form_sheld {
+        width: calc(100% - 16px);
+    }
+
+    body.rvo .mes[is_user="true"] .mes_text {
+        max-width: 88%;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.rvo .mes[data-reasoning-state="thinking"] .mes_reasoning_header::before,
+    body.rvo .mes[data-reasoning-state="thinking"] .mes_reasoning_header_title {
+        animation: none;
+    }
+
+    body.rvo #sheld,
+    body.rvo #rvo-sidebar,
+    body.rvo #rvo-header,
+    body.rvo #rvo-jump {
+        transition: none;
+    }
+}
+
+/* Pages (Library, Characters) in place of the chat. Hidden ones must stay hidden even though the Library's own
+   styles give its container display: flex. */
+body:not(.rvo) .rvo-page,
+body.rvo:not([data-rvo-page="library"]) #rvo-library,
+body.rvo:not([data-rvo-page="characters"]) #rvo-characters,
+body.rvo:not([data-rvo-page="lorebooks"]) #rvo-lorebooks {
+    display: none !important;
+}
+
+body.rvo[data-rvo-page="library"] #rvo-library,
+body.rvo[data-rvo-page="characters"] #rvo-characters,
+body.rvo[data-rvo-page="lorebooks"] #rvo-lorebooks {
+    position: fixed;
+    top: var(--rvo-head);
+    left: var(--rvo-side);
+    right: 0;
+    bottom: 0;
+    z-index: 3300;
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    background: var(--rvo-bg);
+    color: var(--rvo-text);
+    font-family: var(--rvo-font);
+    transition: left .2s ease;
+}
+
+body.rvo[data-rvo-page="characters"] #rvo-characters,
+body.rvo[data-rvo-page="lorebooks"] #rvo-lorebooks {
+    display: block;
+    overflow-y: auto;
+}
+
+body.rvo.rvo-page-open #sheld {
+    visibility: hidden;
+}
+
+body.rvo #rvo-sidebar .rvo-nav[aria-current="page"] {
+    background: var(--rvo-hover, rgba(255, 255, 255, .08));
+    color: var(--rvo-text);
+    font-weight: 600;
+}
+
+body.rvo .rvo-library-close {
+    margin-left: auto;
+}
+
+body.rvo.rvo-page-open #rvo-header .rvo-header-actions {
+    display: none;
+}
+
+/* Characters: gallery and character page. */
+.rvo-cwrap {
+    box-sizing: border-box;
+    max-width: 1500px;
+    margin: 0 auto;
+    padding: 18px 24px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.rvo-ctools {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+body.rvo .rvo-cinput {
+    height: 38px;
+    padding: 0 12px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 10px;
+    background: var(--rvo-panel);
+    color: var(--rvo-text);
+    font: 14px var(--rvo-font);
+}
+
+body.rvo input.rvo-cinput {
+    flex: 1;
+    min-width: 200px;
+}
+
+body.rvo .rvo-cbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 36px;
+    padding: 0 14px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 10px;
+    background: var(--rvo-panel);
+    color: var(--rvo-text);
+    font: 500 13.5px var(--rvo-font);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+body.rvo .rvo-cbtn:hover {
+    background: var(--rvo-hover);
+}
+
+body.rvo .rvo-cbtn.primary {
+    background: var(--rvo-accent);
+    border-color: transparent;
+    color: var(--rvo-accent-ink);
+    font-weight: 600;
+}
+
+.rvo-ccount {
+    color: var(--rvo-faint);
+    font-size: 12px;
+}
+
+.rvo-tagbar,
+.rvo-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.rvo-tagbar {
+    max-height: 76px;
+    overflow-y: auto;
+}
+
+.rvo-tag {
+    padding: 2px 9px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--tag-bg, var(--rvo-raised)) 55%, transparent);
+    color: var(--rvo-text);
+    font: 12px var(--rvo-font);
+    white-space: nowrap;
+}
+
+.rvo-tagbar .rvo-tag {
+    cursor: pointer;
+    padding: 4px 11px;
+}
+
+.rvo-tagbar .rvo-tag[aria-pressed="true"] {
+    border-color: var(--rvo-accent);
+    box-shadow: inset 0 0 0 1px var(--rvo-accent);
+}
+
+.rvo-cgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 14px;
+}
+
+.rvo-ccard {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--rvo-line);
+    border-radius: 14px;
+    background: var(--rvo-panel);
+    overflow: hidden;
+    min-width: 0;
+}
+
+body.rvo .rvo-ccard-open {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.rvo-ccard-pic {
+    display: block;
+    aspect-ratio: 3 / 4;
+    background: var(--rvo-raised);
+    overflow: hidden;
+}
+
+.rvo-ccard-pic img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform .25s ease;
+}
+
+.rvo-ccard:hover .rvo-ccard-pic img {
+    transform: scale(1.03);
+}
+
+.rvo-ccard-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px 4px;
+    min-width: 0;
+}
+
+.rvo-ccard-name {
+    font: 600 15px var(--rvo-font);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rvo-ccard-text {
+    color: var(--rvo-muted);
+    font: 12.5px/1.45 var(--rvo-font);
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.rvo-ccard-body .rvo-tags {
+    max-height: 48px;
+    overflow: hidden;
+}
+
+.rvo-ccard-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px 10px;
+}
+
+.rvo-ccard .rvo-ccard-actions .rvo-cbtn.primary {
+    flex: 1;
+    justify-content: center;
+}
+
+
+body.rvo .rvo-back {
+    align-self: flex-start;
+}
+
+
+
+
+
+
+.rvo-muted {
+    color: var(--rvo-muted);
+}
+
+
+
+
+
+
+@media (max-width: 700px) {
+    .rvo-cwrap {
+        padding: 12px 12px 30px;
+    }
+
+    .rvo-cgrid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+    }
+
+
+
+    body.rvo .rvo-ctools .rvo-cbtn span {
+        display: none;
+    }
+}
+
+/* Characters gallery: AO3-style tag sidebar next to the grid (a Filters button opens it on narrow screens). */
+.rvo-cwrap-filters {
+    max-width: 1720px;
+}
+
+.rvo-cbody {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: 20px;
+    align-items: start;
+}
+
+.rvo-cmain {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+}
+
+.rvo-cfilter {
+    position: sticky;
+    top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: calc(100vh - 150px);
+    max-height: calc(100dvh - 150px);
+    overflow-y: auto;
+    padding: 14px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 14px;
+    background: var(--rvo-panel);
+    overscroll-behavior: contain;
+}
+
+.rvo-cfilter-head h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    color: var(--rvo-text);
+    font: 600 14px var(--rvo-font);
+}
+
+body.rvo input.rvo-cinput.rvo-cfilter-find {
+    flex: none;
+    width: 100%;
+    min-width: 0;
+    height: 34px;
+    box-sizing: border-box;
+}
+
+.rvo-cfilter-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.rvo-cfilter-group {
+    border-top: 1px solid var(--rvo-line);
+    padding-top: 6px;
+}
+
+.rvo-cfilter-group:first-child {
+    border-top: none;
+    padding-top: 0;
+}
+
+.rvo-cfilter-group > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 5px 2px;
+    color: var(--rvo-text);
+    font: 600 12.5px var(--rvo-font);
+    letter-spacing: .02em;
+    text-transform: uppercase;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+
+.rvo-cfilter-group > summary::-webkit-details-marker {
+    display: none;
+}
+
+.rvo-cfilter-group > summary::before {
+    content: "\25B8";
+    margin-right: 2px;
+    color: var(--rvo-faint);
+    transition: transform .15s;
+}
+
+.rvo-cfilter-group[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.rvo-cfilter-group > summary > span {
+    flex: 1;
+}
+
+.rvo-cfilter-group ul {
+    margin: 2px 0 4px;
+    padding: 0;
+    list-style: none;
+}
+
+.rvo-cfilter-tag {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    border-radius: 8px;
+}
+
+.rvo-cfilter-tag:hover {
+    background: var(--rvo-hover);
+}
+
+.rvo-cfilter-tag label {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    padding: 4px 4px;
+    color: var(--rvo-muted);
+    font: 13px var(--rvo-font);
+    cursor: pointer;
+}
+
+.rvo-cfilter-tag input {
+    flex: none;
+    margin: 0;
+    accent-color: var(--rvo-accent);
+}
+
+.rvo-cfilter-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--tag-bg, var(--rvo-line));
+}
+
+.rvo-cfilter-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rvo-cfilter-tag input:checked ~ .rvo-cfilter-name {
+    color: var(--rvo-text);
+    font-weight: 600;
+}
+
+.rvo-cfilter-tag.excluded .rvo-cfilter-name {
+    color: var(--rvo-faint);
+    text-decoration: line-through;
+}
+
+.rvo-cfilter-n {
+    flex: none;
+    color: var(--rvo-faint);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+}
+
+body.rvo .rvo-cfilter-ex {
+    flex: none;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--rvo-faint);
+    cursor: pointer;
+    opacity: 0;
+}
+
+.rvo-cfilter-tag:hover .rvo-cfilter-ex,
+body.rvo .rvo-cfilter-ex:focus-visible,
+body.rvo .rvo-cfilter-ex.on {
+    opacity: 1;
+}
+
+body.rvo .rvo-cfilter-ex:hover {
+    background: var(--rvo-raised);
+    color: var(--rvo-text);
+}
+
+body.rvo .rvo-cfilter-ex.on {
+    color: #d9534f;
+}
+
+body.rvo .rvo-cfilter-more {
+    margin: 0 0 4px 26px;
+    padding: 2px 0;
+    border: none;
+    background: none;
+    color: var(--rvo-accent);
+    font: 500 12.5px var(--rvo-font);
+    cursor: pointer;
+}
+
+.rvo-cfilter-empty {
+    margin: 4px 2px;
+    font-size: 13px;
+}
+
+/* Picked filters above the grid; each one comes off with a click. */
+.rvo-cactive {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.rvo-cactive[hidden] {
+    display: none;
+}
+
+body.rvo .rvo-cactive-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-color: var(--rvo-accent);
+    cursor: pointer;
+}
+
+body.rvo .rvo-cactive-tag.excluded {
+    border-color: #d9534f;
+    text-decoration: line-through;
+}
+
+.rvo-cactive-tag .fa-xmark {
+    opacity: .7;
+}
+
+body.rvo .rvo-cfilter-toggle {
+    display: none;
+}
+
+.rvo-cfilter-count {
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--rvo-accent);
+    color: var(--rvo-accent-ink);
+    font: 600 11px/18px var(--rvo-font);
+    text-align: center;
+}
+
+.rvo-cfilter-count[hidden] {
+    display: none;
+}
+
+@media (hover: none) {
+    body.rvo .rvo-cfilter-ex {
+        opacity: 1;
+    }
+}
+
+@media (max-width: 900px) {
+    .rvo-cbody {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.rvo .rvo-cfilter-toggle {
+        display: inline-flex;
+    }
+
+    .rvo-cfilter {
+        position: static;
+        order: -1;
+        display: none;
+        max-height: 60vh;
+        max-height: 60dvh;
+    }
+
+    .rvo-filters-open .rvo-cfilter {
+        display: flex;
+    }
+
+    body.rvo .rvo-ctools .rvo-cfilter-toggle span {
+        display: inline;
+    }
+}
+
+/* Chat history by character: a row per character with a new-chat button; the row unfolds its chats. */
+.rvo-person {
+    border-radius: 10px;
+}
+
+.rvo-person.open {
+    background: color-mix(in srgb, var(--rvo-raised) 45%, transparent);
+    margin-bottom: 4px;
+}
+
+.rvo-person-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+body.rvo .rvo-person-main {
+    flex: 1;
+    min-width: 0;
+}
+
+body.rvo .rvo-person.current > .rvo-person-row .rvo-person-main {
+    box-shadow: inset 2px 0 0 var(--rvo-accent);
+}
+
+.rvo-person-main .rvo-chat-text,
+.rvo-history .rvo-chat-text {
+    flex: 1;
+}
+
+.rvo-chat-who,
+.rvo-history-title {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+}
+
+.rvo-chat-who > span,
+.rvo-history-title > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rvo-when {
+    margin-left: auto;
+    flex: none;
+    color: var(--rvo-faint);
+    font: 11.5px var(--rvo-font);
+}
+
+.rvo-caret {
+    flex: none;
+    color: var(--rvo-faint);
+    font-size: 11px;
+    transition: transform .15s;
+}
+
+.rvo-person.open .rvo-caret {
+    transform: rotate(180deg);
+}
+
+body.rvo .rvo-person-act {
+    flex: none;
+    opacity: .5;
+}
+
+body.rvo .rvo-person-row:hover .rvo-person-act,
+body.rvo .rvo-person-act:focus-visible {
+    opacity: 1;
+}
+
+.rvo-history-row {
+    display: flex;
+    align-items: center;
+}
+
+body.rvo .rvo-history-row .rvo-history {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+}
+
+.rvo-history .rvo-chat-text,
+.rvo-person-main .rvo-chat-text {
+    min-width: 0;
+    overflow: hidden;
+}
+
+.rvo-recents {
+    overflow-x: hidden;
+}
+
+body.rvo .rvo-history-rename {
+    flex: none;
+    width: 26px;
+    height: 26px;
+    opacity: 0;
+    font-size: 11px;
+}
+
+body.rvo .rvo-history-row:hover .rvo-history-rename,
+body.rvo .rvo-history-rename:focus-visible {
+    opacity: .8;
+}
+
+.rvo-history-name.by-agent::after {
+    content: " ✦";
+    color: var(--rvo-accent);
+    font-size: 10px;
+}
+
+body.rvo input.rvo-rename {
+    width: 100%;
+    min-width: 0;
+    padding: 3px 6px;
+    border: 1px solid var(--rvo-accent);
+    border-radius: 6px;
+    background: var(--rvo-bg);
+    color: var(--rvo-text);
+    font: 500 12.5px var(--rvo-font);
+}
+
+.rvo-person-chats {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+    padding: 0 4px 6px 30px;
+}
+
+body.rvo .rvo-history {
+    padding: 6px 8px;
+}
+
+.rvo-history-title {
+    font: 500 12.5px var(--rvo-font);
+}
+
+.rvo-person-chats .rvo-empty {
+    padding: 6px 8px;
+}
+
+@media (hover: none) {
+    body.rvo .rvo-person-act,
+    body.rvo .rvo-history-rename {
+        opacity: 1;
+    }
+}
+
+/* Character editor (a page of the site). */
+.rvo-editor {
+    box-sizing: border-box;
+    max-width: 1300px;
+    margin: 0 auto;
+    padding: 0 24px 60px;
+}
+
+.rvo-ebar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    background: var(--rvo-bg);
+    backdrop-filter: blur(16px) saturate(1.2);
+    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    box-shadow: 0 12px 16px -12px var(--rvo-bg);
+    border-bottom: 1px solid var(--rvo-line);
+}
+
+.rvo-estatus {
+    color: var(--rvo-faint);
+    font-size: 12.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.rvo-estatus[data-kind="dirty"],
+.rvo-estatus[data-kind="saving"] {
+    color: var(--rvo-muted);
+}
+
+.rvo-estatus[data-kind="saved"]::before {
+    content: "\2713  ";
+    color: #4cc38a;
+}
+
+.rvo-estatus[data-kind="error"] {
+    color: #e8735f;
+}
+
+.rvo-ebar-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.rvo-emore {
+    position: relative;
+}
+
+body.rvo .rvo-emore > summary {
+    list-style: none;
+    padding: 0 12px;
+}
+
+.rvo-emore > summary::-webkit-details-marker {
+    display: none;
+}
+
+.rvo-emenu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    min-width: 220px;
+    display: flex;
+    flex-direction: column;
+    padding: 6px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 12px;
+    background: var(--rvo-panel);
+    box-shadow: 0 16px 40px var(--rvo-shadow);
+    z-index: 10;
+}
+
+body.rvo .rvo-emenu button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--rvo-text);
+    font: 13.5px var(--rvo-font);
+    text-align: left;
+    cursor: pointer;
+}
+
+body.rvo .rvo-emenu button:hover {
+    background: var(--rvo-hover);
+}
+
+body.rvo .rvo-emenu button.danger {
+    color: #e8735f;
+}
+
+
+.rvo-enav {
+    position: sticky;
+    top: 74px;
+    flex: none;
+    width: 190px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+body.rvo .rvo-enav > button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--rvo-muted);
+    font: 13.5px var(--rvo-font);
+    text-align: left;
+    cursor: pointer;
+}
+
+body.rvo .rvo-enav > button:hover,
+body.rvo .rvo-enav > button.on {
+    background: var(--rvo-hover);
+    color: var(--rvo-text);
+}
+
+.rvo-emacros {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--rvo-line);
+}
+
+body.rvo .rvo-macro {
+    padding: 2px 8px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 7px;
+    background: var(--rvo-panel);
+    color: var(--rvo-text);
+    font: 12px ui-monospace, monospace;
+    cursor: pointer;
+}
+
+
+.rvo-esections {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+}
+
+.rvo-esection {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    scroll-margin-top: 80px;
+}
+
+.rvo-esection > h3 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    font: 600 17px var(--rvo-font);
+    color: var(--rvo-text);
+}
+
+.rvo-esection > h3 i {
+    color: var(--rvo-accent);
+}
+
+.rvo-efield {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.rvo-elabel {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font: 13.5px var(--rvo-font);
+    color: var(--rvo-text);
+}
+
+.rvo-tokens {
+    color: var(--rvo-faint);
+    font-size: 11.5px;
+}
+
+body.rvo .rvo-einput {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 10px;
+    background: var(--rvo-panel);
+    color: var(--rvo-text);
+    font: 14px/1.55 var(--rvo-font);
+    resize: vertical;
+}
+
+body.rvo .rvo-einput:focus {
+    outline: none;
+    border-color: var(--rvo-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--rvo-accent) 25%, transparent);
+}
+
+body.rvo select.rvo-einput {
+    padding: 8px 10px;
+}
+
+body.rvo .rvo-enum {
+    width: auto;
+    min-width: 90px;
+}
+
+.rvo-erow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.rvo-echeck {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font: 14px var(--rvo-font);
+}
+
+
+
+
+
+.rvo-etags {
+    align-items: center;
+}
+
+.rvo-etags .rvo-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+body.rvo .rvo-tagx {
+    padding: 0 2px;
+    border: 0;
+    background: none;
+    color: var(--rvo-muted);
+    font-size: 10px;
+    cursor: pointer;
+}
+
+body.rvo input.rvo-taginput {
+    width: 160px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12.5px;
+}
+
+.rvo-cardtags {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+}
+
+body.rvo .rvo-tagadd {
+    cursor: pointer;
+    opacity: .75;
+}
+
+body.rvo .rvo-tagadd:hover {
+    opacity: 1;
+}
+
+.rvo-greetings {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.rvo-greeting {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 12px;
+}
+
+.rvo-gtools {
+    margin-left: auto;
+    display: flex;
+    gap: 2px;
+}
+
+body.rvo .rvo-greetings > .rvo-cbtn {
+    align-self: flex-start;
+}
+
+@media (max-width: 900px) {
+    .rvo-editor {
+        padding: 0 12px 40px;
+    }
+
+
+    .rvo-enav {
+        position: static;
+        width: 100%;
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+
+    body.rvo .rvo-enav > button span {
+        display: none;
+    }
+
+
+
+    body.rvo .rvo-ebar-actions .rvo-cbtn span {
+        display: none;
+    }
+}
+
+/* Character page and editor: the Library's card-details look (blurred hero, main column, sticky side cards). */
+.rvo-details {
+    max-width: 1300px;
+    gap: 16px;
+}
+
+.rvo-dtop {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+body.rvo .rvo-dtop .rvo-fmt {
+    margin-left: auto;
+}
+
+.rvo-dhero {
+    position: relative;
+    display: flex;
+    gap: 22px;
+    align-items: flex-end;
+    padding: 22px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 18px;
+    overflow: hidden;
+    isolation: isolate;
+    background: #111;
+    color: #fff;
+}
+
+/* A dark wash over the blurred picture keeps the white header text readable on bright pictures. */
+.rvo-dhero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(90deg, rgba(0, 0, 0, .15) 0%, rgba(0, 0, 0, .45) 45%, rgba(0, 0, 0, .55) 100%);
+    pointer-events: none;
+}
+
+.rvo-dhero .rvo-dkicker,
+.rvo-dhero .rvo-dcreator,
+.rvo-dhero .rvo-dtagline {
+    text-shadow: 0 1px 8px rgba(0, 0, 0, .6);
+}
+
+/* The header is always dark: its small text stays light in every theme (themes colour <small> grey). */
+.rvo-dhero small,
+.rvo-dhero .rvo-dkicker {
+    color: rgba(255, 255, 255, .82);
+}
+
+.rvo-dhero-bg {
+    position: absolute;
+    inset: -40px;
+    z-index: -2;
+    background-size: cover;
+    background-position: center 25%;
+    filter: blur(38px) saturate(1.3) brightness(.45);
+    transform: scale(1.1);
+}
+
+.rvo-dpic {
+    position: relative;
+    flex: none;
+    width: 220px;
+    aspect-ratio: 3 / 4;
+    border-radius: 14px;
+    overflow: hidden;
+    background: rgba(0, 0, 0, .35);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, .55);
+}
+
+.rvo-dpic img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.rvo-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, .6);
+    color: #f5c451;
+    font-size: 12px;
+}
+
+.rvo-dhead {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+}
+
+.rvo-dkicker {
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    font: 600 11px var(--rvo-font);
+    opacity: .75;
+}
+
+.rvo-dhead h2 {
+    margin: 0;
+    font: 700 30px/1.15 var(--rvo-font);
+    color: #fff;
+    text-shadow: 0 2px 18px rgba(0, 0, 0, .5);
+    overflow-wrap: anywhere;
+}
+
+.rvo-dcreator {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font: 13.5px var(--rvo-font);
+    opacity: .85;
+}
+
+.rvo-dtagline {
+    margin: 0;
+    color: rgba(255, 255, 255, .85);
+    font: 14.5px/1.5 var(--rvo-font);
+}
+
+.rvo-dhero .rvo-tag {
+    color: rgba(255, 255, 255, .9);
+    border-color: rgba(255, 255, 255, .25);
+    background: color-mix(in srgb, var(--tag-bg, #000) 40%, rgba(0, 0, 0, .3));
+}
+
+.rvo-dhero .rvo-tag[role="button"] {
+    cursor: pointer;
+}
+
+.rvo-dhero .rvo-tag[role="button"]:hover {
+    border-color: rgba(255, 255, 255, .6);
+}
+
+.rvo-dactions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding-top: 4px;
+}
+
+body.rvo .rvo-dhero .rvo-cbtn:not(.primary) {
+    border-color: rgba(255, 255, 255, .22);
+    background: rgba(0, 0, 0, .35);
+    color: #fff;
+}
+
+body.rvo .rvo-dhero .rvo-cbtn:not(.primary):hover {
+    background: rgba(255, 255, 255, .14);
+}
+
+.rvo-dcols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 18px;
+    align-items: start;
+}
+
+.rvo-dmain {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.rvo-dsection,
+.rvo-dmain .rvo-esection {
+    padding: 12px 16px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 14px;
+    background: var(--rvo-panel);
+}
+
+.rvo-dsection > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    list-style: none;
+    font: 700 13px var(--rvo-font);
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--rvo-muted);
+}
+
+.rvo-dsection > summary::-webkit-details-marker {
+    display: none;
+}
+
+.rvo-dsection > summary::after {
+    content: "\f078";
+    margin-left: auto;
+    font: 900 10px "Font Awesome 6 Free";
+    color: var(--rvo-faint);
+    transition: transform .15s;
+}
+
+.rvo-dsection[open] > summary::after {
+    transform: rotate(180deg);
+}
+
+.rvo-dsection[open] > summary {
+    margin-bottom: 10px;
+}
+
+.rvo-dsection > summary i,
+.rvo-dmain .rvo-esection > h3 i {
+    color: var(--rvo-accent);
+}
+
+.rvo-dsub {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 0;
+    border-top: 1px dashed var(--rvo-line);
+}
+
+.rvo-dtext {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: 14px/1.6 var(--rvo-font);
+    color: var(--rvo-text);
+}
+
+.rvo-dtext.rvo-folded {
+    max-height: 420px;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+    mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+
+body.rvo .rvo-showmore {
+    align-self: flex-start;
+    margin-top: 6px;
+    padding: 2px 10px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--rvo-muted);
+    font: 12.5px var(--rvo-font);
+    cursor: pointer;
+}
+
+.rvo-formatted {
+    white-space: normal;
+}
+
+.rvo-formatted p { margin: 0 0 .7em; }
+.rvo-formatted h1, .rvo-formatted h2, .rvo-formatted h3, .rvo-formatted h4 { margin: .8em 0 .4em; font-size: 1.05em; }
+.rvo-formatted ul, .rvo-formatted ol { margin: .3em 0 .7em; padding-left: 1.4em; }
+.rvo-formatted blockquote { margin: .5em 0; padding: .3em .9em; border-left: 3px solid var(--rvo-accent); color: var(--rvo-muted); }
+.rvo-formatted code, .rvo-formatted pre { font-family: ui-monospace, monospace; font-size: .92em; background: var(--rvo-raised); border-radius: 6px; }
+.rvo-formatted code { padding: 0 4px; }
+.rvo-formatted pre { padding: 8px 10px; overflow-x: auto; white-space: pre-wrap; }
+.rvo-formatted a { color: var(--rvo-accent); }
+.rvo-formatted em { color: var(--rvo-muted); }
+.rvo-formatted table { border-collapse: collapse; margin: .5em 0; }
+.rvo-formatted th, .rvo-formatted td { border: 1px solid var(--rvo-line); padding: 3px 8px; }
+.rvo-formatted hr { border: 0; border-top: 1px solid var(--rvo-line); }
+.rvo-formatted img { display: block; max-width: 100%; max-height: 420px; margin: .5em 0; border-radius: 10px; background: var(--rvo-raised); }
+
+.rvo-dside {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.rvo-dcard {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 14px;
+    background: var(--rvo-panel);
+    min-width: 0;
+}
+
+.rvo-dcard h4 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font: 700 13px var(--rvo-font);
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--rvo-muted);
+}
+
+.rvo-dcard h4 i {
+    color: var(--rvo-accent);
+}
+
+.rvo-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.rvo-stat {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto auto;
+    column-gap: 9px;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--rvo-raised);
+}
+
+.rvo-stat i {
+    grid-row: span 2;
+    color: var(--rvo-accent);
+    font-size: 15px;
+}
+
+.rvo-stat strong {
+    font: 600 15px var(--rvo-font);
+    font-variant-numeric: tabular-nums;
+}
+
+.rvo-stat small {
+    color: var(--rvo-muted);
+    font-size: 11px;
+}
+
+.rvo-facts {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 5px 12px;
+    margin: 0;
+    font: 13px var(--rvo-font);
+}
+
+.rvo-facts dt {
+    color: var(--rvo-muted);
+}
+
+.rvo-facts dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.rvo-dchats {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 420px;
+    overflow-y: auto;
+}
+
+body.rvo .rvo-dchats .rvo-history {
+    border-radius: 10px;
+}
+
+/* Editor in the same look: the hero takes name / creator / version / tags / picture. */
+body.rvo .rvo-editor.rvo-details {
+    display: flex;
+    flex-direction: column;
+    max-width: 1300px;
+}
+
+.rvo-ehero {
+    align-items: center;
+}
+
+body.rvo .rvo-epicbtn {
+    padding: 0;
+    border: 0;
+    cursor: pointer;
+    color: #fff;
+}
+
+.rvo-epicover {
+    position: absolute;
+    inset: auto 0 0 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px;
+    background: linear-gradient(transparent, rgba(0, 0, 0, .75));
+    font: 600 13px var(--rvo-font);
+    opacity: .85;
+    transition: opacity .15s;
+}
+
+.rvo-epicbtn:hover .rvo-epicover,
+.rvo-epicbtn:focus-visible .rvo-epicover {
+    opacity: 1;
+}
+
+body.rvo .rvo-hinput {
+    box-sizing: border-box;
+    min-width: 0;
+    padding: 4px 8px;
+    margin-left: -8px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: #fff;
+    font: 13.5px var(--rvo-font);
+}
+
+body.rvo .rvo-hinput:hover {
+    border-color: rgba(255, 255, 255, .2);
+}
+
+body.rvo .rvo-hinput:focus {
+    outline: none;
+    border-color: rgba(255, 255, 255, .5);
+    background: rgba(0, 0, 0, .3);
+}
+
+body.rvo .rvo-hinput::placeholder {
+    color: rgba(255, 255, 255, .45);
+}
+
+body.rvo .rvo-hname {
+    width: 100%;
+    font: 700 30px/1.2 var(--rvo-font);
+    text-shadow: 0 2px 18px rgba(0, 0, 0, .5);
+}
+
+body.rvo .rvo-hcreator {
+    flex: 1;
+    max-width: 260px;
+    margin-left: 0;
+}
+
+body.rvo .rvo-hversion {
+    width: 90px;
+    margin-left: 0;
+}
+
+.rvo-hsep {
+    opacity: .6;
+}
+
+.rvo-ehero .rvo-efield {
+    gap: 6px;
+}
+
+.rvo-ehero .rvo-elabel,
+.rvo-ehero .rvo-muted {
+    color: rgba(255, 255, 255, .75);
+}
+
+.rvo-ehero .rvo-elabel strong {
+    color: #fff;
+}
+
+body.rvo .rvo-ehero input.rvo-taginput {
+    border-color: rgba(255, 255, 255, .25);
+    background: rgba(0, 0, 0, .3);
+    color: #fff;
+}
+
+body.rvo .rvo-ehero .rvo-tagx {
+    color: rgba(255, 255, 255, .7);
+}
+
+.rvo-dmain .rvo-esection {
+    gap: 14px;
+    scroll-margin-top: 80px;
+}
+
+.rvo-dmain .rvo-esection > h3 {
+    font: 700 13px var(--rvo-font);
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--rvo-muted);
+}
+
+.rvo-eside {
+    top: 74px;
+}
+
+#rvo-edit-settings {
+    scroll-margin-top: 80px;
+}
+
+.rvo-eside .rvo-enav {
+    position: static;
+    width: auto;
+}
+
+.rvo-eside .rvo-emacros {
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.rvo-editor .rvo-ebar {
+    margin-bottom: 0;
+}
+
+@media (max-width: 1000px) {
+    .rvo-dcols {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .rvo-dside,
+    .rvo-eside {
+        position: static;
+    }
+
+    .rvo-eside {
+        order: -1;
+    }
+}
+
+@media (max-width: 700px) {
+    .rvo-dhero {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 14px;
+    }
+
+    .rvo-dpic {
+        width: 100%;
+        max-width: 300px;
+        align-self: center;
+    }
+
+    .rvo-dhead h2,
+    body.rvo .rvo-hname {
+        font-size: 24px;
+    }
+
+    .rvo-eside .rvo-enav {
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+
+    body.rvo .rvo-dtop .rvo-fmt span {
+        display: none;
+    }
+}
+
+/* Lorebooks page: one row per World Info book with an "All chats" switch. */
+.rvo-lwrap {
+    max-width: 980px;
+}
+
+.rvo-lnote {
+    margin: 0;
+    color: var(--rvo-muted);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.rvo-llist {
+    display: grid;
+    gap: 8px;
+}
+
+.rvo-lbook {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px 8px 8px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 12px;
+    background: var(--rvo-raised);
+}
+
+.rvo-lbook.on {
+    border-color: color-mix(in srgb, var(--rvo-accent) 55%, var(--rvo-line));
+}
+
+.rvo-lbook.focus {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--rvo-accent) 45%, transparent);
+}
+
+body.rvo .rvo-lbook-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 4px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--rvo-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+body.rvo .rvo-lbook-main:hover {
+    background: var(--rvo-hover);
+}
+
+.rvo-lbook-icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--rvo-accent) 18%, transparent);
+    color: var(--rvo-accent);
+    font-size: 18px;
+}
+
+.rvo-lbook-text {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+}
+
+.rvo-lbook-text strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14.5px;
+}
+
+.rvo-lmeta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+    color: var(--rvo-faint);
+    font-size: 12px;
+}
+
+.rvo-lmeta > span + span::before {
+    content: "·";
+    margin-right: 10px;
+}
+
+.rvo-lswitch {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--rvo-muted);
+    font-size: 12.5px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.rvo-lswitch input {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+}
+
+.rvo-lslider {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    border-radius: 999px;
+    background: var(--rvo-line);
+    transition: background .15s;
+}
+
+.rvo-lslider::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--rvo-text);
+    transition: transform .15s;
+}
+
+.rvo-lswitch input:checked + .rvo-lslider {
+    background: var(--rvo-accent);
+}
+
+.rvo-lswitch input:checked + .rvo-lslider::after {
+    transform: translateX(16px);
+    background: var(--rvo-accent-ink, #fff);
+}
+
+.rvo-lswitch input:focus-visible + .rvo-lslider {
+    outline: 2px solid var(--rvo-accent);
+    outline-offset: 2px;
+}
+
+body.rvo .rvo-ldelete:hover {
+    color: #e5484d;
+}
+
+.rvo-lempty {
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    padding: 48px 16px;
+    color: var(--rvo-muted);
+    text-align: center;
+}
+
+.rvo-lempty > i {
+    font-size: 36px;
+    color: var(--rvo-accent);
+}
+
+.rvo-lempty strong {
+    color: var(--rvo-text);
+    font-size: 16px;
+}
+
+@media (max-width: 700px) {
+    .rvo-lbook {
+        flex-wrap: wrap;
+        row-gap: 4px;
+    }
+
+    body.rvo .rvo-lbook-main {
+        flex-basis: 100%;
+    }
+
+    .rvo-lswitch {
+        margin-left: 4px;
+        margin-right: auto;
+    }
+}
+
+/* Lorebooks: activation settings, one book's page and its entry editor (all in-site). */
+.rvo-lsettings {
+    border: 1px solid var(--rvo-line);
+    border-radius: 12px;
+    background: var(--rvo-raised);
+}
+
+.rvo-lsettings > summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    cursor: pointer;
+    font-weight: 600;
+    list-style: none;
+}
+
+.rvo-lsettings > summary::-webkit-details-marker {
+    display: none;
+}
+
+.rvo-lsettings > summary small {
+    color: var(--rvo-faint);
+    font-weight: 400;
+}
+
+.rvo-lset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px 16px;
+    padding: 4px 14px 14px;
+}
+
+.rvo-lfield {
+    display: grid;
+    gap: 4px;
+    align-content: start;
+    min-width: 0;
+    font-size: 13px;
+}
+
+.rvo-lfield > span {
+    color: var(--rvo-muted);
+    font-weight: 600;
+    font-size: 12.5px;
+}
+
+.rvo-lfield > small,
+.rvo-le-sub > small {
+    color: var(--rvo-faint);
+    font-size: 11.5px;
+    line-height: 1.4;
+}
+
+.rvo-lfield.wide {
+    grid-column: 1 / -1;
+}
+
+.rvo-lset-checks,
+.rvo-le-checks {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+}
+
+.rvo-lcheck {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.rvo-lset-checks .rvo-lcheck small {
+    display: none;
+}
+
+.rvo-lcheck input {
+    accent-color: var(--rvo-accent);
+    width: 16px;
+    height: 16px;
+    margin: 0;
+}
+
+.rvo-lbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.rvo-lstatus {
+    color: var(--rvo-faint);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rvo-lbar-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 2px;
+}
+
+.rvo-lhero {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.rvo-lbook-icon.big {
+    width: 54px;
+    height: 54px;
+    font-size: 24px;
+    border-radius: 14px;
+}
+
+.rvo-lhero h2 {
+    margin: 0;
+    font-size: 22px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.rvo-lusage {
+    display: grid;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 12px;
+    background: var(--rvo-raised);
+}
+
+.rvo-lusage h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 13px;
+    color: var(--rvo-muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+.rvo-lusage-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 24px;
+}
+
+.rvo-lswitch:has(input:disabled) {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
+.rvo-lchars {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.rvo-lchip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 4px 3px 3px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 999px;
+    font-size: 12.5px;
+}
+
+.rvo-lchip img {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+body.rvo .rvo-lchip-x {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--rvo-faint);
+    cursor: pointer;
+}
+
+body.rvo .rvo-lchip-x:hover {
+    background: var(--rvo-hover);
+    color: var(--rvo-text);
+}
+
+.rvo-lchars > select {
+    width: auto;
+    max-width: 240px;
+}
+
+.rvo-ltools .rvo-lsort {
+    width: auto;
+    flex: none;
+}
+
+.rvo-lentries {
+    display: grid;
+    gap: 8px;
+}
+
+.rvo-lentry {
+    border: 1px solid var(--rvo-line);
+    border-radius: 12px;
+    background: var(--rvo-raised);
+    min-width: 0;
+}
+
+.rvo-lentry.off .rvo-le-name {
+    opacity: .5;
+}
+
+.rvo-lentry.open {
+    border-color: color-mix(in srgb, var(--rvo-accent) 40%, var(--rvo-line));
+}
+
+.rvo-le-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px 6px 12px;
+}
+
+body.rvo .rvo-le-toggle {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 4px;
+    border: 0;
+    background: none;
+    color: var(--rvo-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.rvo-le-strategy {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #3fb950;
+}
+
+.rvo-le-strategy.constant {
+    background: #4c8dff;
+}
+
+.rvo-le-strategy.vectorized {
+    background: #b07cff;
+}
+
+.rvo-le-name {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+}
+
+.rvo-le-name strong,
+.rvo-le-name small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rvo-le-name small {
+    color: var(--rvo-faint);
+    font-size: 12px;
+}
+
+.rvo-le-pos {
+    flex: none;
+    color: var(--rvo-faint);
+    font-size: 12px;
+}
+
+.rvo-le-body {
+    display: grid;
+    gap: 14px;
+    padding: 4px 14px 14px;
+    border-top: 1px solid var(--rvo-line);
+    padding-top: 14px;
+}
+
+.rvo-le-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(170px, 42%), 1fr));
+    gap: 12px 14px;
+    align-items: start;
+}
+
+.rvo-le-posx {
+    display: contents;
+}
+
+.rvo-le-contenthead {
+    display: flex;
+    justify-content: space-between;
+}
+
+.rvo-le-tokens {
+    color: var(--rvo-faint);
+    font-weight: 400;
+}
+
+body.rvo .rvo-lfield .rvo-cinput {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+body.rvo textarea.rvo-le-content {
+    height: auto;
+    padding: 10px 12px;
+    width: 100%;
+    min-height: 120px;
+    resize: vertical;
+    font: 13.5px/1.55 var(--rvo-font);
+    box-sizing: border-box;
+}
+
+.rvo-le-more {
+    display: grid;
+    gap: 12px;
+}
+
+.rvo-le-more > summary {
+    cursor: pointer;
+    color: var(--rvo-muted);
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.rvo-le-more[open] > summary {
+    margin-bottom: 12px;
+}
+
+.rvo-le-more > * + * {
+    margin-top: 12px;
+}
+
+.rvo-le-sub {
+    display: grid;
+    gap: 6px;
+}
+
+.rvo-le-sub > strong {
+    font-size: 12.5px;
+    color: var(--rvo-muted);
+}
+
+.rvo-le-charlist {
+    max-height: 160px;
+    overflow-y: auto;
+}
+
+.rvo-le-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.rvo-le-actions .rvo-le-move {
+    width: auto;
+    margin-right: auto;
+}
+
+body.rvo .rvo-cbtn.danger:hover {
+    color: #e5484d;
+    border-color: #e5484d;
+}
+
+@media (max-width: 700px) {
+    .rvo-le-pos {
+        display: none;
+    }
+
+    .rvo-le-grid,
+    .rvo-lset-grid {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .rvo-lbar .rvo-cbtn span {
+        display: inline;
+    }
+
+    .rvo-lhero h2 {
+        font-size: 19px;
+    }
+}
+
+/* ------------------------------------------------------- phone fixes (2026-11-14) */
+
+@media (max-width: 900px) {
+    /* ST's phone CSS collapses inset-only fixed boxes to height 0: give the pages an explicit height. */
+    body.rvo[data-rvo-page="library"] #rvo-library,
+    body.rvo[data-rvo-page="characters"] #rvo-characters,
+    body.rvo[data-rvo-page="lorebooks"] #rvo-lorebooks {
+        left: 0 !important;
+        height: calc(100dvh - var(--rvo-head)) !important;
+        max-height: none !important;
+        width: 100% !important;
+    }
+
+    /* The drawer must hide what is behind it, even with a translucent SillyTavern theme. */
+    body.rvo #rvo-sidebar {
+        background: var(--rvo-panel-solid, var(--rvo-panel));
+        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(20px);
+    }
+}
+
+body.rvo {
+    --rvo-panel-solid: var(--rvo-panel);
+    --rvo-bg-solid: var(--rvo-bg);
+}
+
+@supports (color: rgb(from red r g b)) {
+    body.rvo[data-rvo-theme="sillytavern"] {
+        --rvo-panel-solid: rgb(from var(--SmartThemeBlurTintColor) r g b / 1);
+        --rvo-bg-solid: rgb(from var(--SmartThemeChatTintColor) r g b / 1);
+    }
+}
+
+/* ---------------------------------------------------------------- Autotag */
+.rvo-at-intro h2 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 6px;
+    font: 700 24px var(--rvo-font);
+    color: var(--rvo-text);
+}
+
+.rvo-at-intro h2 i {
+    color: var(--rvo-accent);
+}
+
+.rvo-at-intro p {
+    margin: 0;
+    max-width: 900px;
+    font: 14px/1.55 var(--rvo-font);
+}
+
+.rvo-at-select {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.rvo-at-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.rvo-at-row {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 14px;
+    background: var(--rvo-panel);
+}
+
+.rvo-at-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.rvo-at-head > input[type="checkbox"] {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: var(--rvo-accent);
+}
+
+.rvo-at-pic {
+    flex: none;
+    width: 46px;
+    height: 46px;
+    border-radius: 10px;
+    object-fit: cover;
+    object-position: center 20%;
+    background: var(--rvo-raised);
+}
+
+.rvo-at-who {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+
+body.rvo .rvo-at-name {
+    align-self: flex-start;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--rvo-text);
+    font: 600 15px var(--rvo-font);
+    cursor: pointer;
+    text-align: left;
+}
+
+body.rvo .rvo-at-name:hover {
+    color: var(--rvo-accent);
+}
+
+.rvo-at-state {
+    color: var(--rvo-faint);
+    font: 12.5px var(--rvo-font);
+    overflow-wrap: anywhere;
+}
+
+.rvo-at-state.ready {
+    color: var(--rvo-accent);
+}
+
+.rvo-at-state.applied::before {
+    content: "\2713  ";
+    color: #4cc38a;
+}
+
+.rvo-at-state.error {
+    color: #e8735f;
+}
+
+.rvo-at-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+}
+
+.rvo-at-group {
+    display: grid;
+    grid-template-columns: 90px minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+}
+
+.rvo-at-gname {
+    padding-top: 4px;
+    color: var(--rvo-muted);
+    font: 600 11px var(--rvo-font);
+    letter-spacing: .05em;
+    text-transform: uppercase;
+}
+
+body.rvo .rvo-at-tag {
+    cursor: pointer;
+    opacity: .45;
+    text-decoration: line-through;
+    font: 12.5px var(--rvo-font);
+    padding: 3px 10px;
+}
+
+body.rvo .rvo-at-tag.on {
+    opacity: 1;
+    text-decoration: none;
+}
+
+body.rvo .rvo-at-tag[data-group="ao3"].on {
+    background: color-mix(in srgb, #8f1d21 55%, transparent);
+    border-color: color-mix(in srgb, #c0393f 70%, transparent);
+}
+
+body.rvo .rvo-at-tag[data-group="danbooru"].on {
+    background: color-mix(in srgb, #1d5a99 55%, transparent);
+    border-color: color-mix(in srgb, #3a86d4 70%, transparent);
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+}
+
+body.rvo .rvo-at-tag[data-group="st"].on {
+    background: color-mix(in srgb, #5b3f8c 55%, transparent);
+    border-color: color-mix(in srgb, #8a69c4 70%, transparent);
+}
+
+body.rvo .rvo-at-tag.has {
+    border-style: dashed;
+}
+
+body.rvo .rvo-at-tag:disabled {
+    cursor: default;
+}
+
+.rvo-at-runbox .rvo-cbtn {
+    justify-content: center;
+}
+
+.rvo-at-bar {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--rvo-raised);
+    overflow: hidden;
+}
+
+.rvo-at-bar > span {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: var(--rvo-accent);
+    transition: width .3s;
+}
+
+.rvo-at-check {
+    align-items: flex-start;
+}
+
+.rvo-at-check > input {
+    margin-top: 3px;
+    accent-color: var(--rvo-accent);
+}
+
+.rvo-at-check > span {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.rvo-autotag .rvo-dside .rvo-erow .rvo-enum {
+    min-width: 0;
+    width: 76px;
+}
+
+@media (max-width: 1000px) {
+    .rvo-autotag .rvo-dside {
+        order: -1;
+    }
+}
+
+@media (max-width: 700px) {
+    .rvo-at-group {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+    }
+}
+
+body.rvo .rvo-at-tag[data-group="content"].on {
+    background: color-mix(in srgb, #8a5a12 60%, transparent);
+    border-color: color-mix(in srgb, #d19a3b 70%, transparent);
+    font-weight: 600;
+}
+
+/* ------------------------------------------------ settings pages (2026-11-14) */
+/* Model & connection, Response settings, Persona, Groups, Quick Replies, Regex, Memory, Expressions & images. */
+body:not(.rvo) .rvo-spage,
+body.rvo:not(.rvo-page-open) .rvo-spage,
+body.rvo .rvo-spage:not([data-active]) {
+    display: none !important;
+}
+
+body.rvo.rvo-page-open .rvo-spage[data-active] {
+    position: fixed;
+    top: var(--rvo-head);
+    left: var(--rvo-side);
+    right: 0;
+    bottom: 0;
+    z-index: 3300;
+    display: block;
+    overflow-y: auto;
+    background: var(--rvo-bg);
+    color: var(--rvo-text);
+    font-family: var(--rvo-font);
+    transition: left .2s ease;
+}
+
+@media (max-width: 900px) {
+    body.rvo.rvo-page-open .rvo-spage[data-active] {
+        left: 0 !important;
+        width: 100% !important;
+        height: calc(100dvh - var(--rvo-head)) !important;
+        max-height: none !important;
+    }
+}
+
+.rvo-swrap {
+    max-width: 980px;
+}
+
+.rvo-ssection > .rvo-sbody {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 4px 14px 14px;
+}
+
+body.rvo .rvo-sarea {
+    height: auto;
+    min-height: 60px;
+    padding: 8px 12px;
+    line-height: 1.45;
+    resize: vertical;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+body.rvo .rvo-lfield select.rvo-cinput,
+body.rvo .rvo-lfield input.rvo-cinput {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.rvo-srow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.rvo-srow > .rvo-cinput {
+    flex: 1;
+    min-width: 160px;
+}
+
+.rvo-srange {
+    flex: 1;
+    min-width: 90px;
+    accent-color: var(--rvo-accent);
+}
+
+body.rvo .rvo-srow input.rvo-snum,
+body.rvo input.rvo-snum {
+    flex: 0 0 92px;
+    width: 92px;
+    min-width: 0;
+}
+
+.rvo-sbtns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.rvo-lfield.rvo-sbtns,
+.rvo-lfield.rvo-sbtn {
+    grid-column: 1 / -1;
+    display: flex;
+}
+
+.rvo-lfield.rvo-sbtn {
+    grid-column: auto;
+}
+
+.rvo-mcheck {
+    align-self: center;
+    flex-wrap: wrap;
+}
+
+.rvo-mcheck.wide {
+    grid-column: 1 / -1;
+}
+
+.rvo-mcheck > small {
+    flex-basis: 100%;
+    padding-left: 23px;
+    color: var(--rvo-faint);
+    font-size: 11.5px;
+}
+
+.rvo-swarn,
+.rvo-sstatus {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 12px;
+    background: var(--rvo-raised);
+    font-size: 13.5px;
+    line-height: 1.45;
+}
+
+.rvo-swarn[hidden] {
+    display: none;
+}
+
+.rvo-swarn {
+    border-color: color-mix(in srgb, var(--rvo-accent) 55%, var(--rvo-line));
+    background: color-mix(in srgb, var(--rvo-accent) 10%, var(--rvo-raised));
+}
+
+.rvo-swarn > span,
+.rvo-sstatus > div {
+    flex: 1;
+    min-width: 0;
+}
+
+.rvo-swarn > i {
+    color: var(--rvo-accent);
+}
+
+.rvo-sstatus > i {
+    font-size: 20px;
+    color: #d0675d;
+}
+
+.rvo-sstatus.ok > i {
+    color: #57b97a;
+}
+
+.rvo-sstatus > div {
+    display: grid;
+    gap: 2px;
+}
+
+.rvo-sstatus small {
+    color: var(--rvo-muted);
+    overflow-wrap: anywhere;
+}
+
+.rvo-sh4 {
+    margin: 6px 0 0;
+    color: var(--rvo-muted);
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+.rvo-faint {
+    color: var(--rvo-faint);
+}
+
+.rvo-serror {
+    color: #e0786d;
+    font-size: 12px;
+}
+
+.rvo-serror:empty {
+    display: none;
+}
+
+/* Lists of prompts, quick replies and regex scripts. */
+.rvo-plist {
+    display: grid;
+    gap: 6px;
+}
+
+.rvo-prompt {
+    border: 1px solid var(--rvo-line);
+    border-radius: 12px;
+    background: var(--rvo-panel);
+    opacity: .72;
+}
+
+.rvo-prompt.on,
+.rvo-prompt.open,
+.rvo-qr {
+    opacity: 1;
+}
+
+.rvo-prompt.open {
+    background: var(--rvo-raised);
+}
+
+.rvo-prompt > .rvo-lset-grid {
+    padding: 4px 12px 12px;
+}
+
+.rvo-phead,
+.rvo-qrlink {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px 6px 12px;
+    min-width: 0;
+}
+
+.rvo-pfixed {
+    display: inline-flex;
+    width: 40px;
+    justify-content: center;
+    color: var(--rvo-faint);
+}
+
+body.rvo .rvo-pname {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    gap: 1px;
+    padding: 4px 6px;
+    border: 0;
+    background: none;
+    color: var(--rvo-text);
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+}
+
+body.rvo .rvo-pname:disabled {
+    cursor: default;
+}
+
+.rvo-pname strong,
+.rvo-pname small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rvo-pname strong {
+    font-size: 13.5px;
+    font-weight: 600;
+}
+
+.rvo-pname small {
+    color: var(--rvo-faint);
+    font-size: 11.5px;
+}
+
+.rvo-phead .rvo-icon-button:disabled {
+    opacity: .3;
+    cursor: default;
+}
+
+/* Persona and group galleries. */
+.rvo-pgrid,
+.rvo-ggrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 10px;
+}
+
+.rvo-pcard,
+.rvo-gcard {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 14px;
+    background: var(--rvo-panel);
+    min-width: 0;
+}
+
+.rvo-pcard.on,
+.rvo-gcard.on {
+    border-color: color-mix(in srgb, var(--rvo-accent) 70%, var(--rvo-line));
+}
+
+.rvo-pcard > .rvo-cbtn,
+.rvo-gcard > .rvo-cbtn {
+    align-self: flex-end;
+}
+
+body.rvo .rvo-pcard-main,
+body.rvo .rvo-gcard-main {
+    display: flex;
+    gap: 12px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--rvo-text);
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+    min-width: 0;
+}
+
+.rvo-pcard-main > img {
+    flex: 0 0 64px;
+    width: 64px;
+    height: 64px;
+    border-radius: 12px;
+    object-fit: cover;
+    background: var(--rvo-raised);
+}
+
+.rvo-pcard-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.rvo-pcard-text small {
+    color: var(--rvo-muted);
+    font-size: 12px;
+}
+
+.rvo-pcard-desc {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    color: var(--rvo-faint);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.rvo-pbadges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.rvo-pbadges em {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--rvo-hover);
+    color: var(--rvo-muted);
+    font-size: 11px;
+    font-style: normal;
+}
+
+.rvo-phero {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    padding: 14px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 14px;
+    background: var(--rvo-raised);
+}
+
+body.rvo .rvo-ppic {
+    position: relative;
+    flex: 0 0 112px;
+    width: 112px;
+    height: 112px;
+    padding: 0;
+    border: 0;
+    border-radius: 16px;
+    overflow: hidden;
+    background: var(--rvo-panel);
+    cursor: pointer;
+}
+
+.rvo-ppic img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.rvo-ppic > span {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, .6);
+    color: #fff;
+}
+
+.rvo-phero-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+body.rvo input.rvo-pname-input {
+    height: 44px;
+    font-size: 19px;
+    font-weight: 600;
+}
+
+.rvo-pswitches {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    margin: 0 6px;
+}
+
+.rvo-pbadge-on {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #57b97a;
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.rvo-pconns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.rvo-pconn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 4px 3px 4px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 999px;
+    background: var(--rvo-panel);
+    font-size: 13px;
+}
+
+.rvo-pconn img {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.rvo-pconn .rvo-icon-button {
+    width: 24px;
+    height: 24px;
+}
+
+/* Groups. */
+.rvo-gpics {
+    flex: 0 0 64px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 64px;
+    height: 64px;
+    gap: 2px;
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--rvo-raised);
+}
+
+.rvo-gpics.big {
+    flex-basis: 112px;
+    width: 112px;
+    height: 112px;
+    border-radius: 16px;
+}
+
+.rvo-gpics img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    min-height: 0;
+}
+
+.rvo-gpics.n1 {
+    grid-template-columns: 1fr;
+}
+
+.rvo-gpics.n2 img,
+.rvo-gpics.n3 img:first-child {
+    grid-row: span 2;
+}
+
+.rvo-gmembers {
+    display: grid;
+    gap: 4px;
+}
+
+.rvo-gmember {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 12px;
+    background: var(--rvo-panel);
+}
+
+.rvo-gmember.muted {
+    opacity: .6;
+}
+
+.rvo-gmember > img {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    object-fit: cover;
+}
+
+.rvo-gmember-name {
+    flex: 1;
+    display: grid;
+    min-width: 0;
+}
+
+.rvo-gmember-name strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rvo-gmember-name small {
+    color: var(--rvo-faint);
+}
+
+.rvo-gadd > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 2px;
+    cursor: pointer;
+    color: var(--rvo-muted);
+    font-weight: 600;
+    list-style: none;
+}
+
+.rvo-gpick {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.rvo-gpick-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 6px;
+    max-height: 340px;
+    overflow-y: auto;
+}
+
+body.rvo .rvo-gpick-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px 5px 5px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 10px;
+    background: var(--rvo-panel);
+    color: var(--rvo-text);
+    font: 13px var(--rvo-font);
+    text-align: left;
+    cursor: pointer;
+    min-width: 0;
+}
+
+body.rvo .rvo-gpick-item:hover {
+    background: var(--rvo-hover);
+}
+
+.rvo-gpick-item img {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    object-fit: cover;
+}
+
+.rvo-gpick-item span {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rvo-gchats {
+    display: grid;
+    gap: 4px;
+}
+
+body.rvo .rvo-gchat {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 10px;
+    background: var(--rvo-panel);
+    color: var(--rvo-text);
+    font: 13px var(--rvo-font);
+    text-align: left;
+    cursor: pointer;
+}
+
+body.rvo .rvo-gchat:hover {
+    background: var(--rvo-hover);
+}
+
+.rvo-gchat > span {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rvo-gchat small {
+    color: var(--rvo-faint);
+}
+
+.rvo-gchat.on {
+    border-color: color-mix(in srgb, var(--rvo-accent) 60%, var(--rvo-line));
+}
+
+/* Regex tabs and tester. */
+.rvo-stabs {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+body.rvo .rvo-stab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 14px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 999px;
+    background: var(--rvo-panel);
+    color: var(--rvo-muted);
+    font: 500 13px var(--rvo-font);
+    cursor: pointer;
+}
+
+body.rvo .rvo-stab.on {
+    background: var(--rvo-accent);
+    border-color: transparent;
+    color: var(--rvo-accent-ink);
+}
+
+body.rvo .rvo-stab:disabled {
+    opacity: .45;
+    cursor: default;
+}
+
+.rvo-stab small {
+    opacity: .75;
+}
+
+.rvo-stest {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.rvo-stest-out {
+    min-height: 40px;
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px dashed var(--rvo-line);
+    border-radius: 10px;
+    background: var(--rvo-panel);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: 13px/1.45 var(--rvo-font);
+}
+
+@media (max-width: 700px) {
+    .rvo-phero {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    body.rvo .rvo-ppic,
+    .rvo-gpics.big {
+        align-self: center;
+    }
+
+    .rvo-pgrid,
+    .rvo-ggrid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ⋯ menu while open: moved to <body> so the hero's overflow: hidden can't clip it (menufix 2026-11-14). */
+body.rvo .rvo-emenu.rvo-emenu-float {
+    position: fixed;
+    left: auto;
+    z-index: 10050;
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
+}
+
+/* Inputs in column layouts keep their height (the global input.rvo-cinput {flex: 1} is meant for tool rows). */
+body.rvo .rvo-phero-text > input.rvo-cinput,
+body.rvo .rvo-gpick > input.rvo-cinput,
+body.rvo .rvo-sbody > input.rvo-cinput,
+body.rvo .rvo-lfield > input.rvo-cinput {
+    flex: 0 0 auto;
+}
+
+/* Extensions page (2026-11-14). */
+.rvo-sh3 {
+    margin: 10px 0 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--rvo-text);
+}
+
+.rvo-extlink {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 12px;
+    background: var(--rvo-raised);
+}
+
+.rvo-extlink > strong {
+    flex: 1;
+    min-width: 0;
+}
+
+.rvo-extmode {
+    justify-content: flex-end;
+}
+
+.rvo-extgrid {
+    padding: 0;
+}
+
+/* An extension's own controls, borrowed from SillyTavern's Extensions panel. */
+.rvo-adopt {
+    padding: 4px 2px;
+    color: var(--rvo-text);
+}
+
+.rvo-adopt > .inline-drawer-content {
+    display: block !important;
+}
+
+/* ------------------------------------- Personas, Lorebooks, Extensions: visual pass (2026-11-14) */
+
+/* Page banner: icon, title, line of text, stat tiles. */
+.rvo-sbanner {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 16px;
+    align-items: center;
+    padding: 18px 20px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 18px;
+    background:
+        radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--rvo-accent) 16%, transparent), transparent 60%),
+        var(--rvo-raised);
+}
+
+.rvo-sbanner-icon {
+    display: grid;
+    place-items: center;
+    width: 54px;
+    height: 54px;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--rvo-accent) 22%, transparent);
+    color: var(--rvo-accent);
+    font-size: 24px;
+}
+
+.rvo-sbanner-text h2 {
+    margin: 0;
+    font-size: 22px;
+    line-height: 1.2;
+}
+
+.rvo-sbanner-text p {
+    margin: 3px 0 0;
+    color: var(--rvo-muted);
+    font-size: 13px;
+    line-height: 1.5;
+    max-width: 70ch;
+}
+
+.rvo-sbanner > .rvo-stats {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    margin-top: 8px;
+}
+
+.rvo-sbanner .rvo-stat {
+    background: color-mix(in srgb, var(--rvo-bg) 55%, transparent);
+}
+
+.rvo-stat strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Filter chips. */
+.rvo-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+body.rvo .rvo-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 30px;
+    padding: 0 12px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 999px;
+    background: var(--rvo-panel);
+    color: var(--rvo-muted);
+    font: 500 12.5px var(--rvo-font);
+    cursor: pointer;
+}
+
+body.rvo .rvo-chip:hover {
+    color: var(--rvo-text);
+    background: var(--rvo-hover);
+}
+
+body.rvo .rvo-chip.on {
+    border-color: transparent;
+    background: var(--rvo-accent);
+    color: var(--rvo-accent-ink);
+}
+
+.rvo-chip small {
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: color-mix(in srgb, currentColor 16%, transparent);
+    font-size: 11px;
+    text-align: center;
+}
+
+/* Groups of cards with a heading. */
+.rvo-lgroup {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.rvo-lgroup + .rvo-lgroup {
+    margin-top: 8px;
+}
+
+.rvo-lgroup-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    color: var(--rvo-muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+}
+
+.rvo-lgroup-title i {
+    color: var(--rvo-accent);
+}
+
+.rvo-lgroup-title small {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--rvo-hover);
+    font-size: 11px;
+    letter-spacing: 0;
+}
+
+/* Lorebooks as cards. */
+.rvo-lgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+    gap: 10px;
+}
+
+.rvo-lgrid .rvo-lbook {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 10px;
+    border-radius: 14px;
+    background: var(--rvo-panel);
+    transition: border-color .15s, transform .15s;
+}
+
+.rvo-lgrid .rvo-lbook:hover {
+    border-color: color-mix(in srgb, var(--rvo-accent) 40%, var(--rvo-line));
+}
+
+.rvo-lbook-icon[style*="--rvo-hue"] {
+    background: hsl(var(--rvo-hue) 45% 45% / .22);
+    color: hsl(var(--rvo-hue) 70% 70%);
+}
+
+body.rvo[data-rvo-theme="light"] .rvo-lbook-icon[style*="--rvo-hue"] {
+    color: hsl(var(--rvo-hue) 55% 35%);
+}
+
+.rvo-lpills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 3px;
+}
+
+.rvo-lpills em {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--rvo-hover);
+    color: var(--rvo-muted);
+    font-size: 11px;
+    font-style: normal;
+}
+
+.rvo-lpills em i {
+    font-size: 10px;
+    color: var(--rvo-accent);
+}
+
+.rvo-lavatars,
+.rvo-faces {
+    display: flex;
+    align-items: center;
+    padding-left: 6px;
+}
+
+.rvo-lavatars img,
+.rvo-faces img {
+    width: 26px;
+    height: 26px;
+    margin-left: -6px;
+    border: 2px solid var(--rvo-panel);
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.rvo-lavatars span,
+.rvo-faces span {
+    margin-left: 4px;
+    color: var(--rvo-faint);
+    font-size: 11.5px;
+}
+
+.rvo-lbook-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding-top: 6px;
+    border-top: 1px solid var(--rvo-line);
+}
+
+.rvo-lbook-actions .rvo-lswitch {
+    margin-right: auto;
+}
+
+/* A lorebook's page: hero with stats beside "Where it's used". */
+.rvo-lhead {
+    display: grid;
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+    gap: 12px;
+    align-items: stretch;
+}
+
+.rvo-lhead .rvo-lhero {
+    align-items: flex-start;
+    padding: 16px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 14px;
+    background:
+        radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--rvo-accent) 12%, transparent), transparent 60%),
+        var(--rvo-raised);
+}
+
+.rvo-lhero-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.rvo-lstats .rvo-stats {
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+    margin-top: 8px;
+}
+
+.rvo-lstats .rvo-stat {
+    background: color-mix(in srgb, var(--rvo-bg) 55%, transparent);
+    padding: 6px 8px;
+}
+
+@media (max-width: 900px) {
+    .rvo-lhead {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Personas. */
+.rvo-pgallery {
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+}
+
+.rvo-ptile.on {
+    border-color: color-mix(in srgb, var(--rvo-accent) 70%, var(--rvo-line));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--rvo-accent) 40%, transparent);
+}
+
+.rvo-ptile .rvo-ccard-pic {
+    position: relative;
+    aspect-ratio: 1;
+}
+
+.rvo-pflags {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    display: flex;
+    gap: 4px;
+}
+
+.rvo-pflags em {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, .62);
+    color: #fff;
+    font-size: 11.5px;
+    font-style: normal;
+    backdrop-filter: blur(4px);
+}
+
+.rvo-pflags em.in-use {
+    background: color-mix(in srgb, #2f9e5c 85%, black);
+}
+
+.rvo-pflags em .fa-star {
+    color: #f3c04f;
+}
+
+.rvo-ptitle {
+    color: var(--rvo-accent);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.rvo-ptile .rvo-ccard-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.rvo-ptile .rvo-faces {
+    margin-left: auto;
+}
+
+.rvo-pspot {
+    align-items: center;
+}
+
+.rvo-pspot .rvo-dpic {
+    width: 150px;
+    aspect-ratio: 1;
+}
+
+.rvo-pspot .rvo-dtagline {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.rvo-pspot .rvo-pswitches,
+.rvo-dhero .rvo-pswitches {
+    color: #fff;
+}
+
+.rvo-pspot .rvo-faces img {
+    border-color: rgba(0, 0, 0, .5);
+}
+
+body.rvo .rvo-ppick {
+    padding: 0;
+    border: 0;
+    cursor: pointer;
+    aspect-ratio: 1;
+    width: 180px;
+}
+
+.rvo-ppick img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.rvo-ppick-cam {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, .65);
+    color: #fff;
+}
+
+body.rvo .rvo-dname-input,
+body.rvo .rvo-dtitle-input {
+    width: 100%;
+    max-width: 520px;
+    box-sizing: border-box;
+    padding: 2px 8px;
+    margin-left: -8px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: transparent;
+    color: #fff;
+    font-family: var(--rvo-font);
+}
+
+body.rvo .rvo-dname-input {
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+body.rvo .rvo-dtitle-input {
+    font-size: 14px;
+    color: rgba(255, 255, 255, .8);
+}
+
+body.rvo .rvo-dname-input:hover,
+body.rvo .rvo-dtitle-input:hover,
+body.rvo .rvo-dname-input:focus,
+body.rvo .rvo-dtitle-input:focus {
+    border-color: rgba(255, 255, 255, .25);
+    background: rgba(0, 0, 0, .3);
+    outline: none;
+}
+
+.rvo-dtitle-input::placeholder {
+    color: rgba(255, 255, 255, .5);
+}
+
+.rvo-pside-switches {
+    display: grid;
+    gap: 10px;
+}
+
+.rvo-pconn-group {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--rvo-hover);
+    font-size: 11px;
+}
+
+.rvo-swrap:has(> .rvo-details) {
+    max-width: 1240px;
+}
+
+.rvo-pdetails .rvo-dmain {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.rvo-lfield > span:empty {
+    display: none;
+}
+
+/* Extensions. */
+.rvo-extlist {
+    display: grid;
+    gap: 8px;
+}
+
+.rvo-extcard {
+    border: 1px solid var(--rvo-line);
+    border-radius: 14px;
+    background: var(--rvo-panel);
+    overflow: hidden;
+}
+
+.rvo-extcard:not(.on) {
+    opacity: .7;
+}
+
+.rvo-extcard.open {
+    opacity: 1;
+    border-color: color-mix(in srgb, var(--rvo-accent) 40%, var(--rvo-line));
+    background: var(--rvo-raised);
+}
+
+.rvo-extcard-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    min-width: 0;
+}
+
+.rvo-exticon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: hsl(var(--rvo-hue, 30) 45% 45% / .2);
+    color: hsl(var(--rvo-hue, 30) 70% 70%);
+    font-size: 17px;
+}
+
+body.rvo[data-rvo-theme="light"] .rvo-exticon {
+    color: hsl(var(--rvo-hue, 30) 55% 35%);
+}
+
+body.rvo .rvo-extset.on {
+    background: var(--rvo-hover);
+}
+
+.rvo-extcard-body:empty {
+    display: none;
+}
+
+.rvo-extcard-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 4px 14px 14px;
+    border-top: 1px solid var(--rvo-line);
+}
+
+.rvo-extbody {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+}
+
+.rvo-extbody + .rvo-extbody {
+    border-top: 1px dashed var(--rvo-line);
+}
+
+.rvo-extmode {
+    justify-content: space-between;
+}
+
+.rvo-extgo {
+    justify-content: space-between;
+    padding-top: 10px;
+}
+
+@media (max-width: 700px) {
+    .rvo-sbanner {
+        padding: 14px;
+    }
+
+    .rvo-sbanner-icon {
+        width: 44px;
+        height: 44px;
+        font-size: 20px;
+    }
+
+    .rvo-extset span {
+        display: none;
+    }
+
+    .rvo-pspot .rvo-dpic,
+    body.rvo .rvo-ppick {
+        width: 120px;
+    }
+
+    body.rvo .rvo-dname-input {
+        font-size: 24px;
+    }
+}
+
+/* Mirrored checkboxes: the box beside its (possibly long) label, the hint under the label. */
+.rvo-mcheck {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: start;
+    column-gap: 8px;
+}
+
+.rvo-mcheck > input {
+    margin-top: 2px;
+}
+
+.rvo-mcheck > small {
+    grid-column: 2;
+    padding-left: 0;
+}
+
+/* Lorebook cards stay one column on phones (the older list rules wrap rows). */
+.rvo-lgrid .rvo-lbook {
+    flex-wrap: nowrap;
+}
+
+body.rvo .rvo-lgrid .rvo-lbook-main {
+    flex-basis: auto;
+}
+
+/* ------------------------------------------------------- expression gallery (2026-11-14) */
+#rvo-gallery {
+    position: fixed;
+    inset: 0;
+    z-index: 10100;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    height: 100dvh;
+    background: rgba(6, 8, 10, .94);
+    color: #fff;
+    font-family: var(--rvo-font, system-ui, sans-serif);
+    backdrop-filter: blur(6px);
+    animation: rvo-gal-in .15s ease;
+}
+
+@keyframes rvo-gal-in {
+    from { opacity: 0; }
+}
+
+.rvo-gal-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+}
+
+.rvo-gal-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.rvo-gal-title {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+}
+
+.rvo-gal-label {
+    font-size: 18px;
+    text-transform: capitalize;
+}
+
+.rvo-gal-title small {
+    color: rgba(255, 255, 255, .65);
+}
+
+#rvo-gallery .rvo-icon-button {
+    color: #fff;
+    text-decoration: none;
+}
+
+.rvo-gal-stage {
+    position: relative;
+    display: grid;
+    place-items: center;
+    min-height: 0;
+    padding: 4px 64px;
+}
+
+.rvo-gal-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 12px;
+    filter: drop-shadow(0 18px 40px rgba(0, 0, 0, .6));
+    user-select: none;
+}
+
+body .rvo-gal-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    display: grid;
+    place-items: center;
+    width: 46px;
+    height: 46px;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, .12);
+    color: #fff;
+    font-size: 18px;
+    cursor: pointer;
+}
+
+body .rvo-gal-nav:hover {
+    background: rgba(255, 255, 255, .24);
+}
+
+.rvo-gal-nav.prev {
+    left: 12px;
+}
+
+.rvo-gal-nav.next {
+    right: 12px;
+}
+
+.rvo-gal-strip {
+    display: flex;
+    gap: 8px;
+    padding: 10px 14px 14px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
+body .rvo-gal-thumb {
+    flex: 0 0 74px;
+    display: grid;
+    gap: 3px;
+    padding: 4px;
+    border: 2px solid transparent;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .06);
+    color: rgba(255, 255, 255, .75);
+    cursor: pointer;
+}
+
+body .rvo-gal-thumb.on {
+    border-color: var(--rvo-accent, #e9a04f);
+    background: rgba(255, 255, 255, .14);
+    color: #fff;
+}
+
+.rvo-gal-thumb img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    object-position: top;
+    border-radius: 8px;
+}
+
+.rvo-gal-thumb small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10.5px;
+    text-transform: capitalize;
+}
+
+@media (max-width: 700px) {
+    .rvo-gal-stage {
+        padding: 4px 8px;
+    }
+
+    body .rvo-gal-nav {
+        width: 38px;
+        height: 38px;
+        background: rgba(0, 0, 0, .45);
+    }
+
+    .rvo-gal-nav.prev {
+        left: 6px;
+    }
+
+    .rvo-gal-nav.next {
+        right: 6px;
+    }
+
+    body .rvo-gal-thumb {
+        flex-basis: 60px;
+    }
+}
+
+/* Character page: expressions side card. */
+.rvo-dcard[hidden] {
+    display: none;
+}
+
+.rvo-dcard h4 .rvo-dexpr-n {
+    margin-left: auto;
+    color: var(--rvo-faint);
+    font-weight: 500;
+}
+
+.rvo-dexpr {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+}
+
+body.rvo .rvo-dexpr-cell {
+    display: grid;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 10px;
+    background: var(--rvo-raised);
+    color: var(--rvo-muted);
+    cursor: zoom-in;
+    min-width: 0;
+}
+
+body.rvo .rvo-dexpr-cell:hover {
+    border-color: color-mix(in srgb, var(--rvo-accent) 50%, var(--rvo-line));
+}
+
+.rvo-dexpr-cell img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    object-position: top;
+    border-radius: 7px;
+}
+
+.rvo-dexpr-cell small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10.5px;
+    text-transform: capitalize;
+}
+
+body.rvo .rvo-dexpr-cell.more {
+    place-content: center;
+    text-align: center;
+    cursor: pointer;
+}
+
+.rvo-dexpr-cell.more strong {
+    font-size: 16px;
+    color: var(--rvo-text);
+}
+
+/* The picture fills the stage without spilling over the filmstrip. */
+.rvo-gal-stage {
+    overflow: hidden;
+}
+
+.rvo-gal-img {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: 64px;
+    width: calc(100% - 128px);
+    height: calc(100% - 8px);
+    max-width: none;
+    max-height: none;
+}
+
+@media (max-width: 700px) {
+    .rvo-gal-img {
+        left: 8px;
+        width: calc(100% - 16px);
+    }
+}
+
+/* Character page: linked lorebooks (side card + readable sections). */
+.rvo-dlore[hidden] {
+    display: none;
+}
+
+.rvo-dlore {
+    display: contents;
+}
+
+.rvo-dlbooks {
+    display: grid;
+    gap: 6px;
+}
+
+body.rvo .rvo-dlbook {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 12px;
+    background: var(--rvo-raised);
+    color: var(--rvo-text);
+    text-align: left;
+    cursor: pointer;
+    min-width: 0;
+}
+
+body.rvo .rvo-dlbook:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--rvo-accent) 50%, var(--rvo-line));
+}
+
+body.rvo .rvo-dlbook.missing {
+    opacity: .6;
+    cursor: default;
+}
+
+.rvo-dlbook .rvo-lbook-text {
+    flex: 1;
+}
+
+.rvo-dlbook strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rvo-dlbook > i {
+    color: var(--rvo-faint);
+}
+
+.rvo-dlbook-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    color: var(--rvo-muted);
+}
+
+.rvo-dlbook-meta em,
+.rvo-dlore-tag {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--rvo-accent) 16%, transparent);
+    color: var(--rvo-accent);
+    font: 600 11px var(--rvo-font);
+    font-style: normal;
+}
+
+.rvo-dlore-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.rvo-dlore-q {
+    flex: 1 1 200px;
+    min-width: 0;
+}
+
+.rvo-dlore-bar .rvo-cbtn {
+    margin-left: auto;
+}
+
+.rvo-dlore-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.rvo-dlore-off {
+    opacity: .55;
+}
+
+/* ------------------------------------------------ phone expression sprite (2026-11-14) */
+/* SillyTavern hides its sprite at ≤1000px; Rocsy shows it as a portrait in the chat's top-right corner.
+   body.rvo-mexpr-on is set by the overhaul at ≤1000px, or on any screen with "Also on wide screens" (2026-11-15). */
+#rvo-mexpr {
+    display: none;
+}
+
+body.rvo.rvo-mexpr-on:not(.rvo-page-open):not(.rvo-side-open) #rvo-mexpr:not([hidden]) {
+    display: block;
+    position: fixed;
+    top: calc(var(--rvo-head, 56px) + 10px);
+    right: 10px;
+    z-index: 30;
+    pointer-events: none;
+}
+
+body.rvo-mexpr-on #rvo-mexpr > * {
+    pointer-events: auto;
+}
+
+body.rvo.rvo-mexpr-on .rvo-mexpr-card {
+    position: relative;
+    display: block;
+    width: 84px;
+    height: 112px;
+    padding: 0;
+    border: 1px solid var(--rvo-line);
+    border-radius: 16px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--rvo-panel) 80%, transparent);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+    backdrop-filter: blur(8px);
+    cursor: zoom-in;
+    transition: width .22s ease, height .22s ease, border-radius .22s ease;
+}
+
+body.rvo-mexpr-on .rvo-mexpr-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top center;
+    display: block;
+    transition: opacity .18s ease;
+}
+
+body.rvo-mexpr-on .rvo-mexpr-img.swap {
+    opacity: .35;
+}
+
+body.rvo-mexpr-on .rvo-mexpr-label {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 14px 6px 5px;
+    background: linear-gradient(transparent, rgba(0, 0, 0, .7));
+    color: #fff;
+    font: 600 11px var(--rvo-font);
+    text-align: center;
+    text-transform: capitalize;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+body.rvo-mexpr-on .rvo-mexpr-label:empty {
+    display: none;
+}
+
+body.rvo-mexpr-on #rvo-mexpr[data-state="big"] .rvo-mexpr-card {
+    width: min(72vw, 340px);
+    height: min(50vh, 460px);
+    border-radius: 20px;
+    cursor: zoom-out;
+}
+
+body.rvo-mexpr-on #rvo-mexpr[data-state="big"] .rvo-mexpr-img {
+    object-fit: contain;
+    object-position: bottom center;
+}
+
+body.rvo-mexpr-on #rvo-mexpr[data-state="big"] .rvo-mexpr-label {
+    font-size: 13px;
+}
+
+body.rvo.rvo-mexpr-on .rvo-mexpr-hide,
+body.rvo.rvo-mexpr-on .rvo-mexpr-show {
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--rvo-line);
+    border-radius: 999px;
+    background: var(--rvo-panel);
+    color: var(--rvo-muted);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .3);
+    cursor: pointer;
+    padding: 0;
+}
+
+body.rvo.rvo-mexpr-on .rvo-mexpr-hide {
+    position: absolute;
+    top: -8px;
+    left: -8px;
+    width: 26px;
+    height: 26px;
+    font-size: 12px;
+}
+
+body.rvo.rvo-mexpr-on .rvo-mexpr-show {
+    display: none;
+    width: 34px;
+    height: 34px;
+    font-size: 15px;
+    color: var(--rvo-accent);
+}
+
+body.rvo-mexpr-on #rvo-mexpr[data-state="mini"] .rvo-mexpr-card,
+body.rvo-mexpr-on #rvo-mexpr[data-state="mini"] .rvo-mexpr-hide {
+    display: none;
+}
+
+body.rvo.rvo-mexpr-on #rvo-mexpr[data-state="mini"] .rvo-mexpr-show {
+    display: grid;
+}
+
+body.rvo.rvo-mexpr-on:not(.rvo-page-open):not(.rvo-side-open) #rvo-mexpr[data-state="mini"]:not([hidden]) {
+    right: 4px;
+    top: calc(var(--rvo-head, 56px) + 6px);
+}
+
+/* The expression as the chat background (settings: On phones → The chat background). Lives inside #sheld,
+   behind the messages and the composer. */
+#rvo-mexpr-bg {
+    display: none;
+}
+
+body.rvo #rvo-mexpr .rvo-mexpr-asbg {
+    display: none;
+}
+
+body.rvo.rvo-mexpr-on[data-rvo-mexpr="background"] #rvo-mexpr,
+body.rvo.rvo-mexpr-on[data-rvo-mexpr="off"] #rvo-mexpr {
+    display: none !important;
+}
+
+body.rvo.rvo-mexpr-on[data-rvo-mexpr="background"] #rvo-mexpr-bg:not([hidden]) {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+body.rvo-mexpr-on #rvo-mexpr-bg img {
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    height: 100%;
+    width: 100%;
+    object-fit: contain;
+    object-position: bottom center;
+    transform: translateX(-50%);
+    opacity: var(--rvo-mexpr-dim, .35);
+    transition: opacity .25s ease;
+}
+
+body.rvo-mexpr-on #rvo-mexpr-bg img.swap {
+    opacity: calc(var(--rvo-mexpr-dim, .35) * .4);
+}
+
+body.rvo-mexpr-on #rvo-mexpr-bg img:not([src]) {
+    visibility: hidden;
+}
+
+body.rvo.rvo-mexpr-on[data-rvo-mexpr="background"] #chat,
+body.rvo.rvo-mexpr-on[data-rvo-mexpr="background"] #form_sheld {
+    position: relative;
+    z-index: 1;
+}
+
+body.rvo.rvo-mexpr-on #rvo-mexpr[data-state="big"] .rvo-mexpr-asbg {
+    position: absolute;
+    top: -8px;
+    left: 24px;
+    width: 26px;
+    height: 26px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--rvo-line);
+    border-radius: 999px;
+    background: var(--rvo-panel);
+    color: var(--rvo-muted);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .3);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+/* Wide screens with Rocsy's display on: SillyTavern's own sprite would show twice. */
+body.rvo.rvo-mexpr-on #expression-wrapper {
+    display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.rvo .rvo-mexpr-card,
+    .rvo-mexpr-img {
+        transition: none;
+    }
+}
+
+/* ------------------------------------------------------------ QOL batch (2026-11-15) */
+/* Sidebar chat rows: ⋯ menu (pin, archive, duplicate, export, delete). */
+body.rvo .rvo-history-row .rvo-emore > summary.rvo-cbtn {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    justify-content: center;
+    border: 0;
+    background: transparent;
+    color: var(--rvo-muted);
+    font-size: 11px;
+    opacity: 0;
+}
+
+body.rvo .rvo-history-row:hover .rvo-emore > summary.rvo-cbtn,
+body.rvo .rvo-history-row .rvo-emore[open] > summary.rvo-cbtn,
+body.rvo .rvo-history-row .rvo-emore > summary.rvo-cbtn:focus-visible {
+    opacity: .8;
+}
+
+@media (hover: none) {
+    body.rvo .rvo-history-row .rvo-emore > summary.rvo-cbtn {
+        opacity: .7;
+    }
+}
+
+.rvo-pinmark {
+    color: var(--rvo-accent);
+    font-size: 9px;
+    margin-right: 2px;
+}
+
+/* Chats page */
+.rvo-chattools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin: 12px 0;
+}
+
+body.rvo .rvo-chattools .rvo-chatsearch {
+    flex: 1 1 260px;
+    margin: 0;
+}
+
+body.rvo .rvo-chattools select.rvo-cinput {
+    flex: 0 1 220px;
+    width: auto;
+}
+
+.rvo-chatlist {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.rvo-crow {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px 4px 4px;
+    padding-left: calc(4px + var(--depth, 0) * 26px);
+    border: 1px solid var(--rvo-line);
+    border-radius: 12px;
+    background: var(--rvo-panel);
+    min-width: 0;
+}
+
+.rvo-crow.current {
+    border-color: color-mix(in srgb, var(--rvo-accent) 55%, var(--rvo-line));
+}
+
+.rvo-crow[data-depth] {
+    background: color-mix(in srgb, var(--rvo-panel) 70%, transparent);
+}
+
+body.rvo .rvo-crow-main {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 6px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--rvo-text);
+    font: 13.5px var(--rvo-font);
+    text-align: left;
+    cursor: pointer;
+}
+
+body.rvo .rvo-crow-main:hover {
+    background: var(--rvo-hover);
+}
+
+body.rvo .rvo-crow-static {
+    cursor: default;
+}
+
+body.rvo .rvo-crow-static:hover {
+    background: transparent;
+}
+
+.rvo-crow-main .rvo-avatar {
+    flex: none;
+    width: 38px;
+    height: 38px;
+}
+
+.rvo-ctree {
+    flex: none;
+    width: 26px;
+    text-align: center;
+    color: var(--rvo-faint);
+}
+
+.rvo-crow-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+
+.rvo-crow-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
+.rvo-crow-title {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    max-width: 100%;
+}
+
+.rvo-crow-sub {
+    color: var(--rvo-muted);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rvo-crow-sub strong {
+    color: var(--rvo-text);
+    font-weight: 500;
+}
+
+.rvo-crow .rvo-chat-preview {
+    font-size: 12.5px;
+}
+
+.rvo-cbadge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 7px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 999px;
+    color: var(--rvo-muted);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.rvo-cbadge.on {
+    border-color: var(--rvo-accent);
+    color: var(--rvo-accent);
+}
+
+.rvo-cbadge.warn {
+    border-color: #e8735f;
+    color: #e8735f;
+}
+
+body.rvo .rvo-cfold {
+    width: auto;
+    padding: 0 6px;
+    gap: 3px;
+    display: inline-flex;
+    font-size: 12px;
+}
+
+.rvo-thischat {
+    margin: 12px 0;
+}
+
+.rvo-thischat .rvo-sbtns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* Backups: a look inside */
+.rvo-brow {
+    flex-wrap: wrap;
+}
+
+.rvo-brow > .rvo-crow-main {
+    flex-basis: 240px;
+}
+
+@media (max-width: 600px) {
+    .rvo-crow > .rvo-icon-button[title="Pin"],
+    .rvo-crow > .rvo-icon-button[title="Unpin"] {
+        display: none;
+    }
+}
+
+.rvo-brow.open {
+    border-color: color-mix(in srgb, var(--rvo-accent) 40%, var(--rvo-line));
+}
+
+.rvo-bview {
+    flex: 1 0 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 420px;
+    overflow-y: auto;
+    margin: 2px 4px 6px;
+    padding: 10px;
+    border-radius: 10px;
+    background: var(--rvo-raised);
+}
+
+.rvo-bmsg {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: var(--rvo-panel);
+    font-size: 13px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.rvo-bmsg.user {
+    background: color-mix(in srgb, var(--rvo-accent) 12%, var(--rvo-panel));
+}
+
+.rvo-bmsg strong {
+    font-size: 12px;
+    color: var(--rvo-muted);
+}
+
+/* A message jumped to from the Chats page */
+body.rvo #chat .mes.rvo-flash {
+    animation: rvo-flash 1.6s ease;
+}
+
+@keyframes rvo-flash {
+    0%, 40% { box-shadow: 0 0 0 2px var(--rvo-accent); }
+    100% { box-shadow: 0 0 0 2px transparent; }
+}
+
+/* Backgrounds page */
+.rvo-bggrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(170px, 42%), 1fr));
+    gap: 10px;
+}
+
+.rvo-bggrid.wide {
+    grid-column: 1 / -1;
+}
+
+.rvo-bgtile {
+    position: relative;
+    border: 1px solid var(--rvo-line);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--rvo-panel);
+}
+
+.rvo-bgtile.on {
+    border-color: var(--rvo-accent);
+    box-shadow: 0 0 0 1px var(--rvo-accent);
+}
+
+body.rvo .rvo-bgpick {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--rvo-text);
+    cursor: pointer;
+    text-align: left;
+}
+
+.rvo-bgpick img {
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    object-fit: cover;
+    display: block;
+    background: var(--rvo-raised);
+}
+
+.rvo-bgpick span {
+    padding: 7px 10px 9px;
+    font: 12.5px var(--rvo-font);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rvo-bgcheck {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    color: var(--rvo-accent);
+    font-size: 18px;
+    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, .6));
+}
+
+.rvo-bgacts {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity .15s ease;
+}
+
+.rvo-bgtile:hover .rvo-bgacts,
+.rvo-bgtile:focus-within .rvo-bgacts {
+    opacity: 1;
+}
+
+@media (hover: none) {
+    .rvo-bgacts {
+        opacity: 1;
+    }
+}
+
+body.rvo .rvo-bgacts .rvo-icon-button {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+    background: color-mix(in srgb, var(--rvo-panel) 85%, transparent);
+    color: var(--rvo-text);
+}
+
+/* Settings switches with a hint below */
+.rvo-swfield {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.rvo-adopt .drawer-content,
+.rvo-adopt > div {
+    max-width: 100%;
+}
+
+/* Rocsy's chat menu (the ☰ by the chat box) */
+.rvo-chatmenu {
+    position: fixed;
+    z-index: 10060;
+    min-width: 250px;
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 90px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    padding: 6px;
+    border: 1px solid var(--rvo-line);
+    border-radius: 14px;
+    background: var(--rvo-panel-solid, var(--rvo-panel));
+    box-shadow: 0 18px 44px var(--rvo-shadow, rgba(0, 0, 0, .4));
+}
+
+body.rvo .rvo-chatmenu button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--rvo-text);
+    font: 14px var(--rvo-font);
+    text-align: left;
+    cursor: pointer;
+}
+
+body.rvo .rvo-chatmenu button:hover,
+body.rvo .rvo-chatmenu button:focus-visible {
+    background: var(--rvo-hover);
+    outline: none;
+}
+
+body.rvo .rvo-chatmenu button span {
+    flex: 1;
+}
+
+.rvo-chatmenu kbd,
+.rvo-keys kbd {
+    padding: 1px 6px;
+    border: 1px solid var(--rvo-line);
+    border-bottom-width: 2px;
+    border-radius: 6px;
+    color: var(--rvo-muted);
+    font: 11px ui-monospace, monospace;
+    white-space: nowrap;
+}
+
+.rvo-chatmenu hr {
+    margin: 4px 6px;
+    border: 0;
+    border-top: 1px solid var(--rvo-line);
+}
+
+body.rvo .rvo-chatmenu button.danger {
+    color: #e8735f;
+}
+
+@media (hover: none) {
+    .rvo-chatmenu kbd {
+        display: none;
+    }
+}
+
+/* Keyboard shortcuts list */
+.rvo-keys {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    text-align: left;
+}
+
+.rvo-keys h4 {
+    margin: 0 0 8px;
+}
+
+.rvo-keys dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 12px;
+    margin: 0;
+    align-items: baseline;
+}
+
+.rvo-keys dd {
+    margin: 0;
+    font-size: 13px;
+}
+
+/* Phones: bigger targets for the message buttons and swipe arrows */
+@media (hover: none) and (max-width: 1000px) {
+    body.rvo #chat .mes_buttons .mes_button,
+    body.rvo #chat .extraMesButtons .mes_button,
+    body.rvo #chat .mes_edit_buttons .menu_button {
+        min-width: 38px;
+        min-height: 38px;
+        line-height: 38px;
+        text-align: center;
+        font-size: 16px;
+    }
+
+    body.rvo #chat .swipe_left,
+    body.rvo #chat .swipe_right {
+        min-width: 44px;
+        min-height: 44px;
+        line-height: 44px;
+        text-align: center;
+        font-size: 20px;
+    }
+
+    body.rvo #chat .swipes-counter {
+        font-size: 13px;
+        padding: 0 4px;
+    }
+
+    body.rvo #options_button,
+    body.rvo #send_but,
+    body.rvo #mes_stop {
+        min-width: 40px;
+        min-height: 40px;
+    }
+}
+
+/* "Start a new chat" buttons: a chat bubble with a plus in the accent colour, so they can't be mistaken for Edit (a pen). */
+body.rvo .rvo-icon-button.rvo-newchat {
+    color: var(--rvo-accent);
+    background: color-mix(in srgb, var(--rvo-accent) 14%, transparent);
+}
+body.rvo .rvo-icon-button.rvo-newchat:hover,
+body.rvo .rvo-icon-button.rvo-newchat:focus-visible {
+    color: var(--rvo-accent-ink);
+    background: var(--rvo-accent);
+}
+body.rvo .rvo-cbtn.rvo-newchat {
+    border-color: color-mix(in srgb, var(--rvo-accent) 55%, transparent);
+    color: var(--rvo-accent);
+}
+body.rvo .rvo-cbtn.rvo-newchat:hover {
+    background: color-mix(in srgb, var(--rvo-accent) 16%, transparent);
+}
+body.rvo .rvo-person-act.rvo-newchat { opacity: .85; }

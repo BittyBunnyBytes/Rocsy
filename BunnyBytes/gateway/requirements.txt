@@ -8,3 +8,5 @@ pywebpush
 Pillow==13.0.0
 pyyaml
 starlette==1.7.0
+# fastapi pulls in opentelemetry-api; 1.45.1 has a published advisory.
+opentelemetry-api>=1.45.2

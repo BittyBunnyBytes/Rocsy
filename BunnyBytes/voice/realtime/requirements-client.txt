@@ -1,0 +1,4 @@
+sounddevice
+numpy
+websockets
+soundfile  # only for --input-file / --output-file

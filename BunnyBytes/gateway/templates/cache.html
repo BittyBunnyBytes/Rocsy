@@ -7,12 +7,13 @@
   <link rel="icon" href="/static/icons/rocsy-v2.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/css/site.css?v={{ asset_v('css/site.css') }}">
   <link rel="stylesheet" href="/static/css/cache.css?v={{ asset_v('css/cache.css') }}">
+  <link rel="stylesheet" href="/static/css/model3d.css?v={{ asset_v('css/model3d.css') }}">
   <link rel="stylesheet" href="/static/css/rocsy-bar.css?v={{ asset_v('css/rocsy-bar.css') }}">
   <link rel="stylesheet" href="{{ theme_href('Cache') }}" id="bb-theme">
   <script defer src="/static/cache.js?v={{ asset_v('cache.js') }}"></script>
   {{ data_saver_script() }}
 </head>
-<body class="bb-body cache-body">
+<body class="bb-body cache-body" data-m3d="/static/model3d.js?v={{ asset_v('model3d.js') }}">
   <header class="rb-bar cache-top" data-rb-app="Cache">{{ rocsy_crumb('Cache') }}</header>
 
   <main class="work">

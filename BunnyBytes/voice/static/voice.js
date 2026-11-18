@@ -67,10 +67,13 @@ function avatar(voice, className) {
 }
 
 // ---- Views: Studio | Characters | Add character (Video style tabs) ----
-const VIEWS = ['studio', 'characters', 'add', 'settings'];
+const VIEWS = ['studio', 'characters', 'add', 'live', 'settings'];
 function setView(view, {focus = false, keepHash = false} = {}) {
   if (!VIEWS.includes(view)) view = 'studio';
   if (view !== 'characters') stopPreview();
+  // Leaving Live voice ends its session (the microphone stays on only while you can see the panel).
+  if (view !== 'live') window.rocsyLiveVoice?.stop();
+  else window.rocsyLiveVoice?.load();
   document.body.dataset.view = view;
   document.querySelectorAll('[data-view-page]').forEach(page => { page.hidden = page.dataset.viewPage !== view; });
   document.querySelectorAll('.view-tab').forEach(tab => {

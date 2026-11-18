@@ -21,7 +21,11 @@ from typing import Any, Literal
 
 import httpx
 
-from bunnylock import BunnyLock, PendingStore
+from bunnylock import BunnyLock, PendingStore, pin_gpus
+
+# Queue page -> GPUs -> Trainer: training runs and the tagger (child processes inherit it)
+# see only that card, as cuda:0.
+pin_gpus("trainer")
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -48,6 +52,7 @@ DATA_DIR = Path(os.getenv("TRAINER_DATA_DIR", "/data")).resolve()
 DATASET_ROOT = Path(os.getenv("TRAINER_DATASET_ROOT", "/datasets")).resolve()
 MODEL_ROOT = Path(os.getenv("TRAINER_MODEL_ROOT", "/models")).resolve()
 TRAINER_ROOT = Path(os.getenv("TRAINER_REPO", "/opt/trainers")).resolve()
+FIZGIG_V9 = TRAINER_ROOT / "vendor" / "Fizgig-v9"  # git worktree of Fizgig-latest at v9.7.3: MiniMax H3 Image (added in 9.6)
 FIZGIG_LATEST = TRAINER_ROOT / "vendor" / "Fizgig-latest"  # up-to-date checkout (v8.7.9) for MOSS-Image and Qwen Image 2.1
 # Full fine-tunes save straight into ComfyUI's models (writable mount): every checkpoint is a base model to render
 # with, train LoRAs on, or extract a LoRA from, and copying 15-26 GB files afterwards would double the disk use.
@@ -505,6 +510,41 @@ def _fizgig_spec(req: JobRequest, fam: families.Family, files: dict[str, str | N
             "--dataset_config", str(config), "--model", encoder, "--skip_existing",
             "&&", py, f"{fam_py}/train.py", *train,
         ]
+    if fam.id == "h3_image":
+        # Fizgig 9.7.3's "MiniMax H3 Image Standard" preset (families/minimax_image.py): Automagic v4 from 2.5e-4 (its
+        # ceiling), Likeness optimization on its tuned schedule, EMA 0.98, the Fizgig training adapter, 0.25 MP, every
+        # epoch saved. The Style preset (Automagic v3, 2.8e-4, no likeness schedule) is chosen by a 2.8e-4 rate.
+        # Only Fizgig 9.6+ has the family, so it runs from vendor/Fizgig-v9 with the same venv.
+        res = max(256, min(2048, round(req.max_pixels ** 0.5 / 32) * 32))
+        config = _make_fizgig_config(trainset, job_id, res)
+        lr = _lr(req, "2.5e-4")
+        style = abs(float(lr) - 2.8e-4) < 1e-9
+        train = [
+            "--family", "minimax_image", "--dataset_config", str(config), "--dit", dit,
+            "--vae", vae, "--text_encoder", encoder,
+            "--output_dir", out, "--output_name", name,
+            "--network_dim", str(req.rank), "--network_alpha", str(req.rank),
+            "--learning_rate", lr, "--max_train_epochs", str(req.epochs),
+            "--save_every_n_epochs", "1", "--seed", "42",
+            "--optimizer_type", "automagic3" if style else "automagic4", "--max_grad_norm", "1.0",
+            "--precision", "auto", "--blocks_to_swap", "-1",
+            # torch.compile of the blocks is untested on this ROCm wheel; flash_attn comes from the SDPA shim.
+            "--compile_blocks", "off", "--ema_decay", "0.98", "--save_state_on_train_end",
+        ]
+        if not style:
+            train += ["--family_option", "likeness_opt=1"]
+        if files.get("training_adapter"):
+            train += ["--training_adapter", files["training_adapter"]]
+        if req.trigger.strip():
+            train += ["--trigger_word", req.trigger.strip()]
+        fam_py = str(FIZGIG_V9 / "src/fizgig/families")
+        return [
+            "__fizgig__", py, f"{fam_py}/cache.py", "--family", "minimax_image", "--stage", "latents",
+            "--dataset_config", str(config), "--model", vae, "--skip_existing",
+            "&&", py, f"{fam_py}/cache.py", "--family", "minimax_image", "--stage", "text",
+            "--dataset_config", str(config), "--model", encoder, "--skip_existing",
+            "&&", py, f"{fam_py}/train.py", *train,
+        ]
     if fam.id == "klein9b":
         config = _make_fizgig_config(trainset, job_id, 1024)
         train = [
@@ -888,6 +928,11 @@ BUILTIN_PRESETS["moss_image"] = {
     "Fizgig: MOSS-Image Standard (rank 32, 1 MP)": {"rank": 32, "epochs": 70, "max_pixels": 1048576, "learning_rate": "1e-4"},
     "Fizgig: MOSS-Image Fast (rank 16, 0.26 MP)": {"rank": 16, "epochs": 70, "max_pixels": 262144, "learning_rate": "1e-4"},
 }
+# Fizgig 9.7.3's MiniMax H3 Image presets (families/minimax_image.py); Edit and Slider need photo pairs, not offered.
+BUILTIN_PRESETS["h3_image"] = {
+    "Fizgig: H3 Image Standard (rank 32, Automagic v4 2.5e-4, likeness, 0.25 MP)": {"rank": 32, "epochs": 30, "max_pixels": 262144, "learning_rate": "2.5e-4"},
+    "Fizgig: H3 Image Style (rank 16, Automagic v3 2.8e-4, 64 epochs)": {"rank": 16, "epochs": 64, "max_pixels": 262144, "learning_rate": "2.8e-4"},
+}
 BUILTIN_PRESETS["qwen_image_21"] = {
     "Fizgig: Qwen 2.1 Standard (rank 16, LR 1e-4…2e-4)": {"rank": 16, "epochs": 30, "max_pixels": 524288, "learning_rate": "1e-4"},
     "Fizgig: Qwen 2.1 Fast (rank 8, LR 2e-4…4e-4)": {"rank": 8, "epochs": 30, "max_pixels": 524288, "learning_rate": "2e-4"},
@@ -1031,7 +1076,7 @@ def _fizgig_command(args: list[str]) -> list[str]:
     # Families that run from Fizgig-latest (MOSS-Image, Qwen Image 2.1) call plain SDPA; the shim's sitecustomize
     # routes it to flash_attn and keeps masked calls (the text encoders) off the broken AOTriton kernels.
     shim = (" FIZGIG_SDPA_FLASH=1 PYTHONPATH=/opt/trainers/vendor/sdpa_shim:/opt/trainers/vendor/attn_overlay"
-            f"{_desktop_vram_cap()}" if any(str(FIZGIG_LATEST) in v for v in raw) else "")
+            f"{_desktop_vram_cap()}" if any(str(FIZGIG_LATEST) in v or str(FIZGIG_V9) in v for v in raw) else "")
     script = (
         f"cd {shlex.quote(str(root))} && source venv/bin/activate && "
         "export FIZGIG_GPU_BACKEND=rocm MIOPEN_FIND_MODE=2 "
@@ -1292,7 +1337,7 @@ async def _publish_final_lora(job_id: str) -> bool:
 
 
 # Image families the Image studio's custom LoRA gallery can use -> its model names there.
-IMAGE_GALLERY = {"krea2": "krea", "qwen_image_21": "qwen", "moss_image": "moss", "anima": "anima"}
+IMAGE_GALLERY = {"krea2": "krea", "qwen_image_21": "qwen", "moss_image": "moss", "anima": "anima", "h3_image": "h3image"}
 KREA_URL = os.getenv("TRAINER_KREA_URL", "http://127.0.0.1:8300/Image").rstrip("/")
 # "Test epochs" on a finished LoRA job: one agent-written prompt + seed rendered per saved epoch.
 epoch_tests = EpochTests(

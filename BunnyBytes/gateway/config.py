@@ -37,6 +37,7 @@ class Settings:
     # override per-deployment via env.
     vid_upstream: str = field(default_factory=lambda: os.getenv("VID_UPSTREAM", "http://127.0.0.1:8000").rstrip("/"))
     mus_upstream: str = field(default_factory=lambda: os.getenv("MUS_UPSTREAM", "http://127.0.0.1:8200").rstrip("/"))
+    m3d_upstream: str = field(default_factory=lambda: os.getenv("M3D_UPSTREAM", "http://127.0.0.1:8320").rstrip("/"))
     krea_upstream: str = field(default_factory=lambda: os.getenv("KREA_UPSTREAM", "http://127.0.0.1:8300").rstrip("/"))
     trainer_upstream: str = field(default_factory=lambda: os.getenv("TRAINER_UPSTREAM", "http://127.0.0.1:8500").rstrip("/"))
     # The queue coordinator's browser-facing surface (/Queue/...). Its

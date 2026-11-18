@@ -42,7 +42,7 @@ A grant that arrives while the process is reconnecting is re-sent on reconnect.
 
 | POST | body | answer |
 |---|---|---|
-| `/v2/enqueue` | `{app, instance, job_id, label, is_continuous?, priority?, group?, uses_llm?, model?, config?, vram_mb?}` | `{entry_id, state, position}`; the grant comes over the stream |
+| `/v2/enqueue` | `{app, instance, job_id, label, is_continuous?, priority?, group?, uses_llm?, model?, config?, vram_mb?, gpu_role?}` | `{entry_id, state, position}`; the grant comes over the stream |
 | `/v2/ack` | `{token}` | the job started (measures the handoff gap) |
 | `/v2/heartbeat` | `{token, instance?}` | extends the 90 s lease; `instance` re-binds the turn to a restarted process |
 | `/v2/release` | `{token, llm_settle?}` | 404 if the token isn't the active one |
@@ -102,3 +102,54 @@ rather than rendering in parallel.
 A plugin that wants GPU turns copies `bunnylock.py` (or mounts
 `BunnyBytes/shared/bunnylock.py`) and uses its own app id. No `plugin.json`
 setting is needed: the queue accepts any app that knows the secret.
+
+## GPUs (several cards)
+
+The queue finds every amdgpu card (`/sys/class/drm/card*/device`), in PCI bus
+order = ROCm order, and keeps each by its ROCm UUID (`GPU-<device/unique_id>`),
+so adding a card or moving one to another slot changes nothing. The **primary**
+card is the one picked on the Queue page (settings `primary_gpu`, a card id,
+while that card is installed), else `LOCK_VRAM_DEVICE`, else the one with the
+most VRAM. Changing it moves every role left on its default (and the "Card
+size" override) to that card. Each card
+has its own floor; a job's VRAM peak is kept per card (`vram.json`
+`profiles.<key>.cards`) and overall (its highest card). One-card files are
+moved onto the primary card on start.
+
+**Roles** say where each kind of work runs (Queue page → GPUs; settings
+`gpu_roles`: role → card ids in order):
+
+| role | used by | default |
+|---|---|---|
+| `comfyui` | ComfyUI (Image, Music, Video, 3D Models renders) | primary |
+| `comfyui_multi` | Video's two-GPU H3 modes | every card, primary first |
+| `llama` | the LLM (llama-launch) | primary |
+| `llama_multi` | LLM models with Multi-GPU on | every card, primary first |
+| `voice` | Voice container + host worker | primary |
+| `trainer` | Trainer | primary |
+
+A card that's gone falls back to the default. `prefer_multi_gpu` ("Use
+multi-GPU wherever it can") with 2+ cards gives `llama` the `llama_multi` cards
+and makes Video run H3 renders left on "GPU 0 only" with Split weights.
+
+**Placement of a job:** `uses_llm: true` → the `llama` cards; `uses_llm: false`
+→ its `gpu_role`, else its app's role (Vid/Krea/Mus/Model3D → comfyui, Voice → voice,
+Trainer → trainer, others → primary); unknown → both. With concurrent jobs on,
+a job starts next to others when it fits on **each of its cards**: that card's
+floor + the planned VRAM of the jobs on it (or its live reading, if higher) +
+its own + the reserve. Jobs on different cards never compete.
+
+Launchers (no secret, loopback only):
+
+| GET | answer |
+|---|---|
+| `/v2/gpus` | `{count, primary, multi_available, prefer_multi_gpu, cards: [{index, id, pci, name, total_mb, used_mb, primary, display, link}], roles: [{role, cards, visible, custom, chosen}]}`; `link` = the PCIe link the card really runs at (narrowest hop up to the CPU) |
+| `/v2/gpus/visible?role=R` | plain text ROCR_VISIBLE_DEVICES for role R (GPU UUIDs in order; the first is device 0 in the process) |
+
+ROCm stops at the first unknown entry in ROCR_VISIBLE_DEVICES and hides the
+rest, so only cards that are present are listed. `shared/bunnylock.py`:
+`gpu_layout()`, `visible_devices(role)`, `pin_gpus(role)` (sets
+ROCR_VISIBLE_DEVICES before torch loads, only with 2+ cards). The ComfyUI
+supervisor and llama-launch ask on each launch / model load; Voice and the
+Trainer at process start.
+

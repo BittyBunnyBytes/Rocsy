@@ -42,7 +42,12 @@ def remove_tree(root: Path, images: list[str]) -> None:
     shutil.rmtree(root)
 
 
-def run(root: Path, mode: str) -> None:
+def step(text: str) -> None:
+    """A plain progress line (the browser installer shows these while it uninstalls)."""
+    print(text, flush=True)
+
+
+def run(root: Path, mode: str, remove_images: bool = False) -> None:
     marker = root / '.rocsy-install.json'
     if mode not in {'keep', 'delete'} or root in {Path('/'), Path.home(), Path.home().parent}:
         raise ValueError('Unsafe uninstall request')
@@ -57,11 +62,12 @@ def run(root: Path, mode: str) -> None:
     # Keep named volumes when the user elects to preserve files.
     # Every optional service is a Compose profile (installer_runtime.ALL_PROFILES): name them all,
     # or `down` leaves the containers of profiles that are switched on in .env only.
-    profiles = [arg for name in ('motion', 'rea', 'trainer', 'hermes') for arg in ('--profile', name)]
+    profiles = [arg for name in ('motion', 'rea', 'trainer', 'sillytavern', 'hermes') for arg in ('--profile', name)]
     # Rocsy's own images (still there after `down`) can clean up container-owned files later.
     listed = subprocess.run(['docker', 'compose', '-f', str(compose), *profiles, 'config', '--images'],
                             cwd=compose.parent, capture_output=True, text=True, timeout=120)
     images = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+    step('Stopping Rocsy and removing its containers…')
     command = ['docker', 'compose', '-f', str(compose), *profiles, 'down', '--remove-orphans']
     if mode == 'delete':
         command.append('--volumes')
@@ -69,6 +75,7 @@ def run(root: Path, mode: str) -> None:
     if result.returncode:
         tail = (result.stderr or result.stdout).strip().splitlines()[-1:] or ['see its journal']
         raise RuntimeError(f'docker compose down failed: {tail[0][:240]}')
+    step('Removing the background helpers…')
     # The host helper is either the full one (bunny-hostctl) or the uninstall-only one; the ComfyUI
     # supervisor is this install's when it runs from its supervisors/ folder.
     for name, folder in (('bunny-hostctl.service', 'hostctl'), ('rocsy-uninstall-helper.service', 'hostctl'),
@@ -78,6 +85,7 @@ def run(root: Path, mode: str) -> None:
             subprocess.run(['systemctl', '--user', 'disable', '--now', name], check=False, timeout=30)
             unit_file.unlink()
     subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True, timeout=30)
+    step('Removing shortcuts and the rocsy command…')
     # The `rocsy` terminal command and the Rocsy Desktop menu entry go with it.
     integrations.remove_all(root)
     # Windows (WSL2, untested): the Desktop / Start menu / Startup shortcuts this install made.
@@ -90,7 +98,16 @@ def run(root: Path, mode: str) -> None:
                 and f'X-Rocsy-Install={root}\n' in launcher.read_text()):
             launcher.unlink()
     if mode == 'delete':
+        step('Deleting the Rocsy folder…')
         remove_tree(root, images)
+    if remove_images:
+        # After remove_tree, which may need one of these images to delete container-owned files.
+        step('Freeing disk space: removing Rocsy’s app images…')
+        for image in images:
+            subprocess.run(['docker', 'image', 'rm', image], capture_output=True, timeout=300)
+        subprocess.run(['docker', 'builder', 'prune', '-f', '--filter', 'label=com.docker.compose.project=rocsy'],
+                       capture_output=True, timeout=600)
+    step('Done.')
 
 
 if __name__ == '__main__':
@@ -99,7 +116,7 @@ if __name__ == '__main__':
     target = Path(sys.argv[1]).resolve()
     record(phase='running', root=str(target), mode=sys.argv[2])
     try:
-        run(target, sys.argv[2])
+        run(target, sys.argv[2], remove_images=sys.argv[3:4] == ['images'])
     except Exception as exc:
         record(phase='failed', root=str(target), mode=sys.argv[2], error=f'{type(exc).__name__}: {exc}'[:400])
         raise

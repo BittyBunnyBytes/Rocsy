@@ -137,7 +137,7 @@ DEFAULT_REFINEMENT_PROMPT = (
     "Treat these sampled frames as limited evidence; do not claim to have heard the audio."
 )
 DEFAULTS: dict[str, Any] = {
-    "provider": "llama", "model": "qwen3.8-flash-next-uncensored",
+    "provider": "llama", "model": "strata-qwen-flash-next",
     "temperature": 0.7, "thinking_level": "none", "context_size": 65536, "top_p": 1.0, "top_k": 40,
     "min_p": 0.0, "repeat_penalty": 1.0, "seed": -1, "extra_body": {},
     "instructions": DEFAULT_INSTRUCTIONS,

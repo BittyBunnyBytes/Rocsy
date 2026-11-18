@@ -48,14 +48,14 @@ from backend.generation import (
     LTX_TILE_PRESETS, SEEDHUNTER_CANDIDATE_COMBINE_NODES, GenerationError,
     build_ltx_workflow, build_seedhunter_candidates_workflow, build_seedhunter_finalize_workflow,
     build_wan_workflow, calculate_wan_resolution, WAN_EXPERTS, WAN_TURBO_LORAS,
-    reference_token, validate_reference_limits, effective_duration, reference_category,
-    REF2V_TURBO_LORA_CHECKPOINT, build_workflow, calculate_ltx_resolution, calculate_resolution, resolve_references, stage_continuation_source,
+    reference_token, validate_reference_limits, REF2V_TURBO_LORA_CHECKPOINT, build_workflow, calculate_ltx_resolution, calculate_resolution, resolve_references, stage_continuation_source,
     H3_CFG_ENABLED, H3_CFG_LOCK_REASON, H3_LATENT_UPSCALER, h3_upscale_target, h3_upscale_warnings,
     h3_upscale_progress_ticks, h3_upscale_segments, h3_decode_seconds, H3_UPSCALE_BUILTIN_PRESETS, h3_upscale_tiling_summary, h3_upscale_chunk_plan,
 )
-from backend.bunnylock import BunnyLock, PendingStore
+from backend.bunnylock import BunnyLock, PendingStore, gpu_layout
 from backend.models import (
-    ASPECTS, DEFAULT_MINIMAX_H3_LORA_ENABLED, LTX_LORAS, LTX_WORKFLOWS, MAX_LTX_LORAS, MINIMAX_H3_CHECKPOINTS, MINIMAX_H3_LORA_SLOTS,
+    AgenticGenerationRequest,
+    ASPECTS, LTX_LORAS, LTX_WORKFLOWS, MAX_LTX_LORAS, MINIMAX_H3_CHECKPOINTS, MINIMAX_H3_LORA_SLOTS,
     LORA_LISTS, MAX_WAN_LORAS, WAN_LORAS, WAN_MAX_MEGAPIXELS, WAN_MAX_SECONDS,
     MODEL_LABELS, lora_option, MODE_LABELS, REFERENCE_SIZING, SAMPLERS, SCHEDULERS, STITCH_TRANSITION_FAMILIES, UPSCALE_MODELS,
     AgenticRequest, EnhanceRequest, FinalizeRequest, GenerationRequest, PresetRenameRequest, PresetRequest, TriggerAliasRequest, ALIAS_DEFAULTS, ResolutionRequest, RetryRequest, StitchRequest,
@@ -215,6 +215,37 @@ def comfy_profile_for_request(request: GenerationRequest) -> str | None:
         if request.multi_gpu_offload in ("conditioning", "conditioning_vae"):
             return "h3_multi"
     return COMFY_PROFILE_FOR_MODEL.get(request.model)
+
+
+MULTI_GPU_PROFILES = {"h3_multi", "h3_split", "h3_parallel"}
+
+
+def gpu_role_for_request(request: GenerationRequest) -> str | None:
+    """The GPU queue's role for a render that uses both cards (it plans VRAM on each)."""
+    return "comfyui_multi" if comfy_profile_for_request(request) in MULTI_GPU_PROFILES else None
+
+
+_GPU_LAYOUT: dict[str, Any] = {"at": 0.0, "value": None}
+
+
+async def _gpu_layout() -> dict[str, Any] | None:
+    """The queue's GPU layout (Queue page -> GPUs), cached 15 s."""
+    if time.monotonic() - _GPU_LAYOUT["at"] > 15:
+        value = await asyncio.to_thread(gpu_layout, settings.lock_url)
+        _GPU_LAYOUT.update(at=time.monotonic(), value=value if value is not None else _GPU_LAYOUT["value"])
+    return _GPU_LAYOUT["value"]
+
+
+async def prefer_multi_gpu(request: GenerationRequest) -> GenerationRequest:
+    """Queue page -> GPUs -> "Use multi-GPU wherever it can" with 2+ cards: an H3 /
+    SeedHunter render left on "GPU 0 only" uses Split weights (validated here) instead.
+    A render that already picked a multi-GPU mode keeps it."""
+    if request.model not in ("minimax_h3", "seedhunter") or request.multi_gpu_offload != "off":
+        return request
+    layout = await _gpu_layout() or {}
+    if not (layout.get("prefer_multi_gpu") and layout.get("multi_available")):
+        return request
+    return request.model_copy(update={"multi_gpu_offload": "split"})
 
 # bunny-lock (the shared GPU queue, BunnyBytes/shared/bunnylock.py): renders and
 # Hermes turns get their GPU turns over the client's stream; held turns are
@@ -3769,6 +3800,7 @@ async def generate_route(request: GenerationRequest, http_request: Request) -> d
 
 
 async def generate(request: GenerationRequest, http_request: Request = None) -> dict[str, Any]:
+    request = await prefer_multi_gpu(request)
     comfy_state = await comfy.ensure_online(profile=comfy_profile_for_request(request), switch=False)
     if not comfy_state["online"]:
         raise APIError(
@@ -3789,9 +3821,9 @@ async def generate(request: GenerationRequest, http_request: Request = None) -> 
             f"{MODEL_LABELS[request.model]} needs at least 5s - shorter clips fall outside its trained range.",
         )
     if request.model == "seedhunter":
-        references = resolve_references(store, request.reference_ids)
+        references = resolve_references(store, request.reference_ids, request.reference_trims)
     elif request.mode == "ref2v":  # MiniMax H3 Ref2V, or LTX 2.5 Reference (MSR V2)
-        references = resolve_references(store, request.reference_ids)
+        references = resolve_references(store, request.reference_ids, request.reference_trims)
     else:
         references = []
     videos = resolve_references(store, request.reference_video_ids) if request.model == "seedhunter" else []
@@ -3842,7 +3874,7 @@ async def generate(request: GenerationRequest, http_request: Request = None) -> 
     queue_key = {"queue_model": MODEL_LABELS.get(request.model, request.model),
                  "queue_config": f"{width}x{height} {round(request.duration)}s"}
     entry = await lock_client.enqueue(job_id, label, uses_llm=False, model=queue_key["queue_model"],
-                                      config=queue_key["queue_config"])
+                                      config=queue_key["queue_config"], gpu_role=gpu_role_for_request(request))
     if entry is None:
         raise APIError(503, "queue_unavailable", "Could not reach the GPU queue coordinator. Try again shortly.")
     item = {"id": job_id, "model": request.model, "mode": "seedhunter" if request.model == "seedhunter" else request.mode,
@@ -3853,7 +3885,8 @@ async def generate(request: GenerationRequest, http_request: Request = None) -> 
         item["stage"] = "candidates"
     store.create_job(item)
     pending_submissions[job_id] = {"workflow": workflow, "model": request.model, "label": label,
-                                   "profile": comfy_profile_for_request(request), **queue_key}
+                                   "profile": comfy_profile_for_request(request), **queue_key,
+                                   "gpu_role": gpu_role_for_request(request)}
     if AGENT_RENDER.get() or (http_request is not None and http_request.headers.get("X-Rocsy-Agent")):
         agent_renders.add(job_id)
     try:
@@ -4097,7 +4130,7 @@ async def finalize_job(job_id: str, request: FinalizeRequest) -> dict[str, Any]:
             "within 60s. Check the supervisor (comfyui-supervisor.service) or start ComfyUI directly, then try again.",
         )
     original_request = GenerationRequest.model_validate_json(item["request_json"])
-    references = resolve_references(store, original_request.reference_ids)
+    references = resolve_references(store, original_request.reference_ids, original_request.reference_trims)
     videos = resolve_references(store, original_request.reference_video_ids)
     audios = resolve_references(store, original_request.reference_audio_ids)
     frames: list[dict[str, Any]] = []
@@ -4119,12 +4152,13 @@ async def finalize_job(job_id: str, request: FinalizeRequest) -> dict[str, Any]:
     # entry was already released once the job went idle at "awaiting_selection"
     # (see maintain_lock_tokens()).
     label = f"SeedHunter finalize: {original_request.prompt[:60]}"
-    entry = await lock_client.enqueue(job_id, label, uses_llm=False)
+    entry = await lock_client.enqueue(job_id, label, uses_llm=False, gpu_role=gpu_role_for_request(original_request))
     if entry is None:
         raise APIError(503, "queue_unavailable", "Could not reach the GPU queue coordinator. Try again shortly.")
     store.update_job(job_id, state="waiting_for_gpu", stage="finalize", queue_entry_id=entry["entry_id"])
     pending_submissions[job_id] = {"workflow": workflow, "model": "seedhunter", "label": label,
-                                   "profile": comfy_profile_for_request(original_request)}
+                                   "profile": comfy_profile_for_request(original_request),
+                                   "gpu_role": gpu_role_for_request(original_request)}
     await publish_jobs()
     return public_job(store.job(job_id) or item)
 
@@ -5869,6 +5903,7 @@ async def _agentic_prepare_render(clip: dict[str, Any], generation: GenerationRe
         first_frame_id, last_frame_id = clip["first_frame_id"], clip["last_frame_id"]
     data.update(prompt=prompt, mode=render_mode, duration=clip["duration"],
                 reference_ids=reference_ids, reference_video_ids=[], reference_audio_ids=[],
+                reference_trims={k: v for k, v in (clip.get("reference_trims") or {}).items() if k in reference_ids} or None,
                 first_frame_id=first_frame_id, last_frame_id=last_frame_id,
                 continue_from_job_id=None)
     return GenerationRequest.model_validate(data)
@@ -5922,7 +5957,7 @@ async def _agentic_check_not_black(render_id: str, request: GenerationRequest) -
     if black < 1.0:
         return
     expected = 0.0
-    for ref in resolve_references(store, list(request.reference_ids)) if request.reference_ids else []:
+    for ref in resolve_references(store, list(request.reference_ids), request.reference_trims) if request.reference_ids else []:
         if (ref.get("mime_type") or "").startswith("video/"):
             start = float(ref.get("trim_start") or 0)
             end = float(ref.get("trim_end") or ref.get("duration") or 0)
@@ -7816,10 +7851,12 @@ async def _queue_agentic(job: dict[str, Any], request: AgenticRequest) -> None:
                     raise agentic.PlanProblems(crowded)
             for item in parsed:
                 try:
-                    validate_reference_limits(resolve_references(store, item["reference_ids"]) if item["reference_ids"] else [])
+                    validate_reference_limits(resolve_references(store, item["reference_ids"], item.get("reference_trims"))
+                                              if item["reference_ids"] else [])
                 except GenerationError as limit:
                     raise ServiceError(f"Clip {item['id']}: {limit}. Each clip may use at most 3 video references totalling "
-                                       "15 s; give each source segment its own clip.") from None
+                                       "15 s; give each source segment its own clip, and cut a longer attached video "
+                                       "with refs=videoN@START-END (seconds inside it, e.g. video1@0-12.5).") from None
             size = (job.get("batch") or {}).get("size")
             if size and len(parsed) > size:
                 first = job["batch"]["first"]
@@ -8097,6 +8134,73 @@ async def agentic_rag_library() -> JSONResponse:
         return JSONResponse({"detail": f"Agentic framework unavailable: {type(exc).__name__}"}, status_code=503)
 
 
+def _strip_direct_tags(plan: str) -> str:
+    """scene=NAME / chars=A,B in ::VIDEO headers set to '-' (their features are off in direct runs)."""
+    return re.sub(r"(?m)^(::VIDEO\b.*)$",
+                  lambda m: re.sub(r"\b(scene|chars)=(?!-(?:\s|$))\S+", r"\1=-", m.group(1)), plan)
+
+
+_HANDOFF_BLOCK = re.compile(r"(?s)^\s*::VIDEO\b([^\n]*)\n(.*?)\n?::END\s*$")
+
+
+def _ledger_handoff_plan(handoff: Any, resumed_offset: int | None) -> tuple[str, int]:
+    """A handed-over ledger's clips as this run's ::VIDEO plan: ids renumbered from 1 (the run's clip_offset keeps
+    the story numbers), EXTEND from= mapped to this run's ids (0 = the resumed session's last kept clip)."""
+    clips = sorted(handoff.clips, key=lambda c: c.n)
+    numbers = [c.n for c in clips]
+    if numbers != list(range(numbers[0], numbers[0] + len(numbers))):
+        raise APIError(422, "ledger_not_contiguous", "Hand over a continuous range of clips (e.g. 1-12), one run at a time")
+    offset = numbers[0] - 1
+    if resumed_offset is not None and offset != resumed_offset:
+        raise APIError(422, "ledger_offset", f"This session has {resumed_offset} kept clips: hand over clips from "
+                                             f"{resumed_offset + 1} on to continue it")
+    blocks = []
+    for clip in clips:
+        match = _HANDOFF_BLOCK.match(clip.prompt)
+        if not match:
+            raise APIError(422, "ledger_clip_format", f"Clip {clip.n} in the ledger isn't a ::VIDEO ... ::END block; "
+                                                      "save it as one to hand it over")
+        header, body = match.group(1), match.group(2).strip()
+
+        def source(m: re.Match[str]) -> str:
+            n = int(m.group(1))
+            if n > offset:
+                return f"from={n - offset}"
+            if n == offset and resumed_offset is not None:
+                return "from=0"
+            raise APIError(422, "ledger_source_missing", f"Clip {clip.n} continues clip {n}, which isn't in this handover: "
+                                                         f"include clip {n} or continue its session")
+        header = re.sub(r"\bfrom=(\d+)", source, header)
+        header = re.sub(r"\bid=\d+", f"id={clip.n - offset}", header) if re.search(r"\bid=\d+", header) else f" id={clip.n - offset}{header}"
+        blocks.append(f"::VIDEO{header.rstrip()}\n{body}\n::END")
+    return "\n\n".join(blocks), offset
+
+
+def _ledger_handoff_import(session: dict[str, Any], job: dict[str, Any], handoff: Any) -> None:
+    """The handed-over clips (written, approved ones marked), outline and standing directions in this session's ledger."""
+    approved = []
+    for clip in handoff.clips:
+        ledger.put(session, clip.n, "written", clip.prompt.strip(), seconds=clip.seconds, source=handoff.source,
+                   run=job["session_run_id"], clip=clip.n - int(session["runs"][-1].get("clip_offset") or 0),
+                   approved=True if clip.approved else None)
+        if clip.approved:
+            approved.append(clip.n)
+    book = ledger.ledger(session)
+    if handoff.outline and not book.get("outline"):
+        items = [{"seconds": float(item.get("seconds") or 10), "beat": str(item.get("beat") or "")[:600]}
+                 for item in handoff.outline if isinstance(item, dict) and str(item.get("beat") or "").strip()]
+        if items:
+            book["outline"], book["outline_start"] = items, 0
+    known = {(d.get("from"), d.get("text")) for d in book.get("directions") or []}
+    for item in handoff.directions:
+        if isinstance(item, dict) and str(item.get("text") or "").strip() and (item.get("from"), item.get("text")) not in known:
+            ledger.add_direction(session, int(item.get("from") or 1), str(item["text"]))
+    numbers = sorted(c.n for c in handoff.clips)
+    _enhancement_log(job, "system", f"Prompt ledger handed over from the {handoff.source.replace('-', ' ')}: clips "
+                     f"{numbers[0]}-{numbers[-1]} ({len(numbers)} prompts"
+                     + (f", {len(approved)} approved by the user" if approved else "") + ") are this run's plan, not written again")
+
+
 @app.post(p("/api/enhancement/agentic"), status_code=202)
 async def agentic_generate(request: AgenticRequest) -> dict[str, Any]:
     generation = request.generation
@@ -8123,6 +8227,11 @@ async def agentic_generate(request: AgenticRequest) -> dict[str, Any]:
                       if (item := store.job(render_id)) and item["state"] == "complete" and item.get("output_path")), None) if resumed else None
     if resumed and not source_id:
         raise APIError(422, "session_has_no_video", "This session has no completed video to continue")
+    handoff_offset: int | None = None
+    if request.ledger:
+        plan, handoff_offset = _ledger_handoff_plan(request.ledger, len(historical_sources) if resumed else None)
+        generation = generation.model_copy(update={"prompt": plan})
+        request = request.model_copy(update={"generation": generation})
     attachments = [item.model_dump() for item in request.guide_attachments]
     attachment_brief = guide_files.brief_block(attachments)
     enhance_request = EnhanceRequest(model=generation.model, mode=generation.mode,
@@ -8139,6 +8248,13 @@ async def agentic_generate(request: AgenticRequest) -> dict[str, Any]:
         if not agentic.is_plan(generation.prompt):
             raise APIError(422, "not_a_plan", "Generate queues a pasted ::VIDEO plan; this prompt has no ::VIDEO blocks")
         agentic_config = {**agentic_config, **{key: False for key in AGENTIC_DIRECT_OFF}}
+        # Direct runs switch the scene / character screenshot features off; their header tags are bookkeeping for
+        # those features, so a plan written with them (e.g. by the Master Agent) is queued without them instead of
+        # being refused as "an invalid experimental scene name".
+        plain = _strip_direct_tags(generation.prompt)
+        if plain != generation.prompt:
+            generation = generation.model_copy(update={"prompt": plain})
+            request = request.model_copy(update={"generation": generation})
         known = [ref_id for ref_id in dict.fromkeys(request.available_reference_ids or generation.reference_ids) if store.reference(ref_id)]
         aliases = {ref["alias"]: ref["id"] for ref in resolve_references(store, known)} if known else {}
         try:
@@ -8166,7 +8282,9 @@ async def agentic_generate(request: AgenticRequest) -> dict[str, Any]:
             raise APIError(422, "preset_not_found", f'Agentic preset "{name}" is missing')
         if name:
             try:
-                GenerationRequest.model_validate(_agentic_generation_base(generation, saved_presets[name]))
+                # The preset's settings are what's checked; the prompt is the whole Agentic plan, which may be
+                # longer than one clip's 20,000-character limit (each rendered clip is checked on its own).
+                AgenticGenerationRequest.model_validate(_agentic_generation_base(generation, saved_presets[name]))
             except ValueError as exc:
                 raise APIError(422, "invalid_agentic_preset", f'Agentic preset "{name}" is invalid: {exc}') from exc
     job_id = "enhance-" + uuid.uuid4().hex
@@ -8221,9 +8339,11 @@ async def agentic_generate(request: AgenticRequest) -> dict[str, Any]:
                     "direct": request.direct}})
     agentic_sessions[session_id] = session
     # Overall clip numbers: this run's clip 1 follows the session's kept final clips (session:1..N).
-    session["runs"][-1]["clip_offset"] = len(historical_sources)
+    session["runs"][-1]["clip_offset"] = len(historical_sources) if handoff_offset is None else handoff_offset
     if resumed:
         ledger.backfill(session, historical_sources)
+    if request.ledger:
+        _ledger_handoff_import(session, job, request.ledger)
     if not request.direct and not ledger.ledger(session).get("outline"):
         target = ledger.long_haul_target(generation.prompt, request.guide)
         if target:
@@ -8525,7 +8645,7 @@ async def agentic_rewrite(session_id: str, body: dict[str, Any]) -> dict[str, An
             if clip["action"] == "EXTEND" and source not in selected and source not in renders:
                 raise APIError(422, "source_missing", f"Clip {clip['id']} continues clip {source}, which has no finished render; include clip {source}.")
     try:
-        generation = GenerationRequest.model_validate(session["generation"])
+        generation = AgenticGenerationRequest.model_validate(session["generation"])   # the saved plan can exceed one clip's limit
         request = AgenticRequest(generation=generation.model_dump(), guide=notes,
                                  available_reference_ids=session.get("available_reference_ids") or [])
     except (KeyError, ValueError) as exc:
@@ -8813,7 +8933,7 @@ async def agentic_edit(session_id: str, body: dict[str, Any]) -> dict[str, Any]:
         if clip["id"] in selected and any(not store.reference(ref_id) for ref_id in clip["reference_ids"]):
             raise APIError(422, "asset_missing", f"Clip {clip['id']}'s references were deleted, so it can't be re-rendered.")
     try:
-        generation = GenerationRequest.model_validate(session["generation"])
+        generation = AgenticGenerationRequest.model_validate(session["generation"])   # the saved plan can exceed one clip's limit
         request = AgenticRequest(generation=generation.model_dump(), guide=notes,
                                  available_reference_ids=session.get("available_reference_ids") or [])
     except (KeyError, ValueError) as exc:
@@ -9748,6 +9868,72 @@ async def transcribe_postedit_source(job_id: str, vocals: bool = True) -> dict[s
 @app.get(p("/api/postedit/transcribe/{job_id}"))
 async def postedit_transcription_status(job_id: str, vocals: bool = True) -> dict[str, Any]:
     return await _postedit_transcription_status(job_id, vocals)
+
+
+# Transcripts of audio that isn't a Vid job (the Master Agent's `$R transcript` of an upload, a link or a workspace
+# video): the same GPU Whisper and cache as Post-Edit captions, without a gallery job. The file is kept by content
+# hash, so asking again for the same audio returns the cached transcript.
+TRANSCRIBE_INBOX_MAX = 600 * 1024 ** 2
+
+
+def _transcribe_inbox(key: str) -> Path | None:
+    if not re.fullmatch(r"[0-9a-f]{24}", key):
+        raise APIError(422, "invalid_key", "Unknown transcript id.")
+    folder = settings.data_dir / "transcribe-inbox"
+    return next((p for p in folder.glob(f"{key}.*") if p.is_file()), None) if folder.is_dir() else None
+
+
+async def _file_transcription_status(key: str, vocals: bool) -> dict[str, Any]:
+    source = _transcribe_inbox(key)
+    if source is None:
+        raise APIError(404, "not_found", "No audio with that id; upload it again.")
+    result = whisper.cached(settings.data_dir, f"file-{key}", source, vocals)
+    if result is not None:
+        return {"id": key, "state": "ready", "vocals_isolated": vocals, **{k: result[k] for k in ("model", "language", "cues", "words")}}
+    task = postedit_transcription_tasks.get(f"file-{key}:{int(vocals)}")
+    if task and task.done():
+        try:
+            task.result()
+        except Exception as exc:
+            log.warning("Whisper transcription of file %s failed: %s", key[:8], exc)
+            postedit_transcription_tasks.pop(f"file-{key}:{int(vocals)}", None)
+            return {"id": key, "state": "failed", "error": str(exc)[:300]}
+    return {"id": key, "state": "transcribing" if task else "idle"}
+
+
+@app.post(p("/api/transcribe/file"))
+async def transcribe_file(file: UploadFile = File(...), vocals: bool = Form(True)) -> dict[str, Any]:
+    folder = settings.data_dir / "transcribe-inbox"
+    folder.mkdir(parents=True, exist_ok=True)
+    digest, size = hashlib.sha256(), 0
+    temporary = folder / f".up-{uuid.uuid4().hex}"
+    try:
+        with temporary.open("wb") as handle:
+            while chunk := await file.read(8 * 1024 * 1024):
+                size += len(chunk)
+                if size > TRANSCRIBE_INBOX_MAX:
+                    raise APIError(413, "too_large", "Audio for a transcript can be up to 600 MB.")
+                digest.update(chunk)
+                handle.write(chunk)
+        key = digest.hexdigest()[:24]
+        suffix = re.sub(r"[^a-z0-9]", "", Path(file.filename or "").suffix.lower())[:5] or "bin"
+        source = _transcribe_inbox(key)
+        if source is None:
+            source = folder / f"{key}.{suffix}"
+            os.replace(temporary, source)
+    finally:
+        temporary.unlink(missing_ok=True)
+    status = await _file_transcription_status(key, vocals)
+    if status["state"] in ("idle", "failed"):
+        postedit_transcription_tasks[f"file-{key}:{int(vocals)}"] = asyncio.create_task(
+            whisper.transcribe(settings.data_dir, f"file-{key}", source, _postedit_gpu_whisper, vocals))
+        status = {"id": key, "state": "transcribing"}
+    return status
+
+
+@app.get(p("/api/transcribe/file/{key}"))
+async def transcribe_file_status(key: str, vocals: bool = True) -> dict[str, Any]:
+    return await _file_transcription_status(key, vocals)
 
 
 @app.post(p("/api/postedit"), status_code=202)

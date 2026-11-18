@@ -12,6 +12,7 @@ COLORS: dict[str, str] = {
     "Vid": "#e8735f",
     "Krea": "#b484f2",
     "Mus": "#4fc7a3",
+    "Model3D": "#e79a4f",
     "Voice": "#f08cb6",
     "Agent": "#e9a04f",
     "Trainer": "#84c96c",

@@ -195,13 +195,33 @@ class UploadCache:
     def _id(relative: str) -> str:
         return hashlib.sha256(relative.encode()).hexdigest()[:20]
 
+    def _reference_rows(self, query: str) -> list[tuple]:
+        """Rows from Video's database over this container's read-only mount. Video keeps it in WAL
+        mode: while Video runs its -wal/-shm files are there and a plain read-only open works; once
+        Video has stopped cleanly they are gone and SQLite can't create them here, so the file is
+        opened as immutable instead (safe then: no -wal means nothing is writing it)."""
+        uri = self.reference_db_path.resolve().as_uri()
+        try:
+            db = sqlite3.connect(uri + "?mode=ro", uri=True, timeout=0.2)
+            try:
+                return db.execute(query).fetchall()
+            finally:
+                db.close()
+        except sqlite3.OperationalError:
+            if Path(str(self.reference_db_path.resolve()) + "-wal").exists():
+                raise
+            db = sqlite3.connect(uri + "?mode=ro&immutable=1", uri=True, timeout=0.2)
+            try:
+                return db.execute(query).fetchall()
+            finally:
+                db.close()
+
     def _reference_kinds(self) -> tuple[set[str], set[str]]:
         """Classify opaque H3 reference names using their original metadata."""
         if self.reference_db_path is None:
             return set(), set()
         try:
-            with sqlite3.connect(self.reference_db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.2) as db:
-                rows = db.execute("SELECT stored_name, filename, thumbnail_stored_name, role FROM h3_references").fetchall()
+            rows = self._reference_rows("SELECT stored_name, filename, thumbnail_stored_name, role FROM h3_references")
         except (OSError, sqlite3.Error):
             return set(), set()
         working = set()
@@ -224,8 +244,7 @@ class UploadCache:
         if self.reference_db_path is None:
             return set()
         try:
-            with sqlite3.connect(self.reference_db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.2) as db:
-                rows = db.execute("SELECT stored_name, thumbnail_stored_name FROM h3_references").fetchall()
+            rows = self._reference_rows("SELECT stored_name, thumbnail_stored_name FROM h3_references")
         except (OSError, sqlite3.Error):
             # Can't tell what H3 uses: treat everything as in use (fail closed).
             return {"*"}

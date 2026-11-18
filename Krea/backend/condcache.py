@@ -17,7 +17,11 @@ ENCODERS = {
     "CLIPTextEncode": ("text",),
     "TextEncodeQwenImage21": ("prompt", "negative_prompt", "resolution"),
     "TextEncodeQwenImageEditPlus": ("prompt",),
+    "MiniMaxH3ImageConditioning": ("prompt", "width", "height"),
 }
+# The wrapper's outputs are (conditioning, negative, latent); an encoder whose stock outputs differ has its
+# downstream links moved: MiniMax H3 Image's latent is its output 1, the wrapper's 2.
+OUTPUT_MAP = {"MiniMaxH3ImageConditioning": {1: 2}}
 ENABLED = os.getenv("KREA_COND_CACHE", "1") != "0"
 
 
@@ -27,6 +31,8 @@ def _is_link(value: Any) -> bool:
 
 def _image_slot(encoder: str, name: str) -> str | None:
     if encoder == "TextEncodeQwenImage21" and name.startswith("images.image_"):
+        return "image_" + name.rsplit("_", 1)[-1]
+    if encoder == "MiniMaxH3ImageConditioning" and name.startswith("images.image_"):
         return "image_" + name.rsplit("_", 1)[-1]
     if encoder == "TextEncodeQwenImageEditPlus" and name in ("image1", "image2", "image3"):
         return "image_" + name[-1]
@@ -91,6 +97,11 @@ def wrap(workflow: dict[str, Any]) -> dict[str, Any]:
         new_inputs.update(encoder=encoder, params=json.dumps(params, sort_keys=True))
         node["class_type"] = NODE
         node["inputs"] = new_inputs
+        if moves := OUTPUT_MAP.get(encoder):
+            for other in out.values():
+                for name, value in (other.get("inputs") or {}).items():
+                    if _is_link(value) and str(value[0]) == str(node_id) and value[1] in moves:
+                        other["inputs"][name] = [value[0], moves[value[1]]]
     return out
 
 

@@ -70,6 +70,7 @@
           <button type="button" class="a-icon-btn" id="a-project-back" aria-label="All projects" title="All projects"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           <span class="a-tile" id="a-project-tile"></span>
           <h2 id="a-project-name"></h2>
+          <button type="button" class="a-btn ghost" id="a-project-chat-setup" title="Chat with the agent to change this project's instructions, documents and plugins" aria-label="Update with the agent"><span class="a-wide-label">Update with the agent</span><span class="a-narrow-label" aria-hidden="true">✨ Agent</span></button>
           <button type="button" class="a-btn ghost" id="a-project-edit">Edit</button>
           <button type="button" class="a-btn ghost" id="a-project-delete">Delete</button>
         </div>
@@ -78,6 +79,7 @@
           <button type="button" role="tab" id="a-tab-chats" data-ptab="chats" aria-selected="true" aria-controls="a-project-chats">Chats</button>
           <button type="button" role="tab" id="a-tab-sources" data-ptab="sources" aria-selected="false" aria-controls="a-project-sources">Sources</button>
           <button type="button" role="tab" id="a-tab-access" data-ptab="access" aria-selected="false" aria-controls="a-project-access">Model &amp; access</button>
+          <button type="button" role="tab" id="a-tab-plugins" data-ptab="plugins" aria-selected="false" aria-controls="a-project-plugins">Plugins</button>
         </div>
         <div id="a-pchat-tools" class="a-pchat-tools">
           <button type="button" class="a-btn ghost a-select-toggle" id="a-pchat-select" aria-pressed="false" title="Select chats to delete several at once">Select</button>
@@ -109,6 +111,15 @@
           <div id="a-pa-agents" class="a-pv-rows"></div>
           <h3>Tools</h3>
           <div id="a-pa-tools" class="a-pv-rows"></div>
+        </div>
+        <div id="a-project-plugins" class="a-pv-list a-access" role="tabpanel" aria-labelledby="a-tab-plugins" hidden>
+          <h3>Plugins</h3>
+          <p class="a-source-hint">Extras for every chat in this project. They take effect from each chat's next turn.</p>
+          <div id="a-pp-list" class="a-pv-rows"></div>
+          <h3 class="a-pp-custom-head">Your plugins <button type="button" class="a-btn ghost" id="a-pp-new">New plugin</button></h3>
+          <p class="a-source-hint">Make your own: instructions the agent follows, and/or a kind of block it writes that gets saved
+            (```lyrics Song title …) and handed back each turn. Your plugins are available in every project; turn them on here per project.</p>
+          <div id="a-pp-custom" class="a-pv-rows"></div>
         </div>
       </section>
 
@@ -205,9 +216,20 @@
         <ul id="a-cmds" class="a-cmds" role="listbox" aria-label="Commands" hidden></ul>
         <ul id="a-mentions" class="a-mentions" role="listbox" aria-label="Pinned upload files" hidden></ul>
         <ul id="a-files" class="a-files" aria-label="Attachments to send" hidden></ul>
+        <div id="a-setup" class="a-setup" role="region" aria-label="Project draft" hidden>
+          <div class="a-setup-row">
+            <span class="a-setup-icon" aria-hidden="true">🛠</span>
+            <span class="a-setup-text"><strong id="a-setup-title">New project setup</strong><span id="a-setup-sub"></span></span>
+            <button type="button" class="a-btn ghost" id="a-setup-review" aria-controls="a-setup-detail" aria-expanded="false">Review draft</button>
+            <button type="button" class="a-btn ghost" id="a-setup-newchat" hidden>New chat in it</button>
+            <button type="button" class="a-btn primary" id="a-setup-apply">Create project</button>
+          </div>
+          <div id="a-setup-detail" class="a-setup-detail" hidden></div>
+        </div>
         <div class="a-compose-row">
           <button type="button" class="a-btn ghost a-attach" id="a-attach" aria-label="Attach files" title="Attach images, video or audio (or drop / paste them)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true"><path d="M20.5 11.5 12.4 19.6a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           <input type="file" id="a-file-input" multiple hidden>
+          <div id="a-plugin-btns" class="a-plugin-btns" hidden></div>
           <div class="a-input-wrap"><pre id="a-input-highlight" class="a-input-highlight" aria-hidden="true"></pre><textarea id="a-input" rows="1" maxlength="20000" placeholder="Ask the Master Agent… (@ for pinned files, / for commands)" aria-label="Message the Master Agent" aria-controls="a-cmds a-mentions" aria-autocomplete="list"></textarea></div>
           <button type="button" class="a-btn a-stop-inline" id="a-stop-inline" title="Stop the Master Agent" aria-label="Stop" hidden><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg><span>Stop</span></button>
           <button type="submit" class="a-btn primary" id="a-send">Send</button>
@@ -256,6 +278,7 @@
       <div class="a-field"><span id="a-pd-color-label">Colour</span><div class="a-pick" id="a-pd-colors" role="radiogroup" aria-labelledby="a-pd-color-label"></div></div>
       <p class="a-modal-error" id="a-pd-error" role="alert" hidden></p>
       <div class="a-modal-actions">
+        <button type="button" class="a-btn a-pd-agent" id="a-pd-agent" title="Chat with the Master Agent: it drafts the instructions, documents and plugins, and you confirm them with a button in that chat">✨ Set up with the agent</button>
         <button type="button" class="a-btn ghost" id="a-pd-cancel">Cancel</button>
         <button type="submit" class="a-btn primary" id="a-pd-save">Save</button>
       </div>
@@ -279,6 +302,59 @@
       <div class="a-modal-actions">
         <button type="button" class="a-btn ghost" id="a-td-cancel">Cancel</button>
         <button type="submit" class="a-btn primary">Add source</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="a-ledger-dialog" class="a-modal a-ledger-modal" aria-labelledby="a-lg-title">
+    <div class="a-ledger-modal-head">
+      <h2 id="a-lg-title">Prompt ledger</h2>
+      <button type="button" class="a-btn ghost" id="a-lg-refresh">Refresh</button>
+      <button type="button" class="a-btn ghost" id="a-lg-close">Close</button>
+    </div>
+    <p class="a-access-note" id="a-lg-summary"></p>
+    <div class="a-ledger-filter" role="tablist" aria-label="Filter clips">
+      <button type="button" role="tab" data-lgf="all" aria-selected="true">All</button>
+      <button type="button" role="tab" data-lgf="verified" aria-selected="false">Verified</button>
+      <button type="button" role="tab" data-lgf="written" aria-selected="false">Written</button>
+      <button type="button" role="tab" data-lgf="in-progress" aria-selected="false">In progress</button>
+    </div>
+    <div id="a-lg-list" class="a-ledger-list"></div>
+    <div id="a-lg-extra"></div>
+  </dialog>
+  <dialog id="a-plugin-dialog" class="a-modal a-ledger-modal" aria-labelledby="a-pg-title">
+    <div class="a-ledger-modal-head">
+      <h2 id="a-pg-title">Plugin</h2>
+      <button type="button" class="a-btn ghost" id="a-pg-refresh">Refresh</button>
+      <button type="button" class="a-btn ghost" id="a-pg-close">Close</button>
+    </div>
+    <p class="a-access-note" id="a-pg-summary"></p>
+    <div id="a-pg-list" class="a-ledger-list"></div>
+  </dialog>
+  <dialog id="a-plugin-editor" class="a-modal a-plugin-editor" aria-labelledby="a-pe-title">
+    <form id="a-pe-form" method="dialog">
+      <h2 id="a-pe-title">New plugin</h2>
+      <div class="a-pe-namerow">
+        <label class="a-field a-pe-icon">Icon<input id="a-pe-icon" maxlength="8" placeholder="🧩" autocomplete="off"></label>
+        <label class="a-field a-pe-name">Name<input id="a-pe-label" maxlength="60" required autocomplete="off" placeholder="Song lyrics"></label>
+      </div>
+      <label class="a-field">Description <span class="a-access-note">(shown in the Plugins list)</span>
+        <input id="a-pe-description" maxlength="400" autocomplete="off" placeholder="Keeps every song's lyrics for this project"></label>
+      <label class="a-field">Instructions for the agent <span class="a-access-note">(added to every turn while the plugin is on)</span>
+        <textarea id="a-pe-instructions" rows="6" maxlength="8000" placeholder="Write lyrics as verse / pre-chorus / chorus. Keep a song's title the same when you revise it."></textarea></label>
+      <label class="a-field">Save blocks named <span class="a-access-note">(optional)</span>
+        <input id="a-pe-capture" maxlength="24" autocomplete="off" placeholder="lyrics" pattern="[a-z0-9][a-z0-9_-]{0,23}"></label>
+      <p class="a-access-note" id="a-pe-capture-hint">Leave empty for an instructions-only plugin.</p>
+      <label class="a-access-row"><span class="a-pv-row-text"><span class="a-pv-row-title">Give saved items back every turn</span>
+        <span class="a-access-note">The agent sees the list and the newest item in full, so long chats don't forget them.</span></span>
+        <input type="checkbox" id="a-pe-feed" checked></label>
+      <label class="a-access-row"><span class="a-pv-row-text"><span class="a-pv-row-title">Button next to the paperclip to view them</span></span>
+        <input type="checkbox" id="a-pe-button" checked></label>
+      <p class="a-modal-error" id="a-pe-error" role="alert" hidden></p>
+      <div class="a-modal-actions">
+        <button type="button" class="a-btn danger" id="a-pe-delete" hidden>Delete plugin</button>
+        <span class="a-pe-spacer"></span>
+        <button type="button" class="a-btn ghost" id="a-pe-cancel">Cancel</button>
+        <button type="submit" class="a-btn primary" id="a-pe-save">Create plugin</button>
       </div>
     </form>
   </dialog>

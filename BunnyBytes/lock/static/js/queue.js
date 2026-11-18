@@ -10,8 +10,16 @@
   const gpuPanel = document.getElementById("gpu-panel");
   const gpuMode = document.getElementById("gpu-mode");
   const gpuNumbers = document.getElementById("gpu-numbers");
-  const gpuBar = document.getElementById("gpu-bar");
-  const gpuLegend = document.getElementById("gpu-legend");
+  const gpuTitle = document.getElementById("gpu-title");
+  const gpuCards = document.getElementById("gpu-cards");
+  const gpusCount = document.getElementById("gpus-count");
+  const gpuList = document.getElementById("gpu-list");
+  const gpuRoles = document.getElementById("gpu-roles");
+  const setMulti = document.getElementById("set-multi");
+  const setMultiHelp = document.getElementById("set-multi-help");
+  const setPrimary = document.getElementById("set-primary");
+  const setPrimaryHelp = document.getElementById("set-primary-help");
+  let layout = null;   // GET /api/gpus: cards (with PCIe link) + what each role runs on
   const setConcurrent = document.getElementById("set-concurrent");
   const setPrepare = document.getElementById("set-prepare");
   const setReserve = document.getElementById("set-reserve");
@@ -26,7 +34,7 @@
   const restartComfyui = document.getElementById("restart-comfyui");
   const modeIndicator = document.getElementById("mode-indicator");
 
-  const APP_LABELS = { Vid: "Video", Krea: "Image", Mus: "Music", Trainer: "Trainer", Hermes: "Hermes", Agent: "Master Agent" };
+  const APP_LABELS = { Vid: "Video", Krea: "Image", Mus: "Music", Model3D: "3D Models", Trainer: "Trainer", Hermes: "Hermes", Agent: "Master Agent" };
   const TEST_JOBS = [
     ["Krea", "Product concept images"],
     ["Mus", "Soundtrack draft"],
@@ -490,52 +498,207 @@
 
   // ---------------------------------------------------------------- GPU memory
 
+  const cardName = (card) => `GPU ${card.index}${card.name ? ` · ${card.name}` : ""}`;
+  const linkOf = (index) => layout?.cards?.find((c) => c.index === index)?.link || null;
+  const linkText = (link) => !link ? "" : link.label + (link.limited ? ` (card can do PCIe ${link.max_gen}.0 x${link.max_width})` : "");
+
   function renderGpu() {
     gpuPanel.hidden = !vram || !vram.available;
     if (gpuPanel.hidden) return;
-    const total = vram.total_mb || 1;
-    const pct = (mb) => `${Math.max(0, Math.min(100, (mb / total) * 100))}%`;
-    const floor = vram.floor_mb || 0;
-    const planned = vram.running.reduce((sum, job) => sum + (job.estimate_mb || 0), 0);
-    const beyond = vram.used_mb - floor - planned;
-    const extra = beyond >= 256 ? beyond : 0;   // smaller is reading noise
-    gpuMode.textContent = vram.active ? "Jobs share the GPU" : "One job at a time";
+    // One block per card; older servers only send the top-level (one-card) numbers.
+    const cards = vram.cards?.length ? vram.cards : [{ index: 0, ...vram }];
+    const several = cards.length > 1;
+    gpuTitle.textContent = several ? `GPU memory · ${cards.length} GPUs` : "GPU memory";
+    gpuMode.textContent = vram.active ? (several ? "Jobs share the GPUs" : "Jobs share the GPU") : "One job at a time";
     gpuMode.className = "badge" + (vram.active ? " badge-on" : "");
-    gpuNumbers.textContent = `${gb(vram.used_mb)} used of ${gb(total)}` + (vram.active ? ` · ${gb(vram.free_for_jobs_mb)} free for another job` : "");
-    gpuBar.innerHTML = "";
-    const segment = (cls, mb, title, app) => {
+    const used = cards.reduce((sum, c) => sum + (c.used_mb || 0), 0);
+    const total = cards.reduce((sum, c) => sum + (c.total_mb || 0), 0);
+    gpuNumbers.textContent = several ? `${gb(used)} used of ${gb(total)} in all` : "";
+    gpuCards.innerHTML = "";
+    for (const card of cards) gpuCards.appendChild(cardBlock(card, several));
+  }
+
+  function cardBlock(card, several) {
+    const block = document.createElement("div");
+    block.className = "gpu-card";
+    const total = card.total_mb || 1;
+    const pct = (mb) => `${Math.max(0, Math.min(100, (mb / total) * 100))}%`;
+    // With per-process figures (pid: host), the card splits into other programs (games, browser,
+    // desktop) and Rocsy's own idle use; without them, one "lowest reading" floor as before.
+    const outside = card.outside_mb ?? null;
+    const floor = outside == null ? (card.floor_mb || 0) : (card.rocsy_floor_mb || 0);
+    const running = card.running || [];
+    const planned = running.reduce((sum, job) => sum + (job.estimate_mb || 0), 0);
+    const beyond = card.used_mb - (outside || 0) - floor - planned;
+    const extra = beyond >= 256 ? beyond : 0;   // smaller is reading noise
+    const head = document.createElement("div");
+    head.className = "gpu-card-head";
+    const title = document.createElement("span");
+    const name = document.createElement("strong");
+    name.textContent = card.name || several ? cardName(card) : "GPU";
+    title.appendChild(name);
+    const link = linkOf(card.index);
+    const extras = [card.primary && several ? "primary" : "", linkText(link)].filter(Boolean).join(" · ");
+    if (extras) {
+      const more = document.createElement("span");
+      more.textContent = ` · ${extras}`;
+      if (link?.limited) more.className = "link-limited";
+      title.appendChild(more);
+    }
+    const numbers = document.createElement("span");
+    numbers.className = "gpu-numbers";
+    numbers.textContent = `${gb(card.used_mb)} used of ${gb(total)}` + (vram.active ? ` · ${gb(card.free_for_jobs_mb)} free for another job` : "");
+    head.append(title, numbers);
+    const bar = document.createElement("div");
+    bar.className = "gpu-bar";
+    bar.setAttribute("role", "img");
+    bar.setAttribute("aria-label", `${name.textContent}: ${numbers.textContent}`);
+    const segment = (cls, mb, label, app) => {
       if (mb <= 0) return;
       const el = document.createElement("span");
       el.className = cls;
       el.style.width = pct(mb);
-      el.title = `${title}: ${gb(mb)}`;
+      el.title = `${label}: ${gb(mb)}`;
       if (app) el.dataset.app = app;
-      gpuBar.appendChild(el);
+      bar.appendChild(el);
     };
-    segment("seg-floor", floor, "Desktop (lowest reading)");
-    for (const job of vram.running) segment("seg-job", job.estimate_mb || 0, `${job.label} (planned)`, job.app);
+    if (outside != null) {
+      segment("seg-outside", outside, "Other programs now (games, browser, desktop)");
+      segment("seg-floor", floor, "Rocsy idle (drivers, services' baseline)");
+    } else {
+      segment("seg-floor", floor, card.display || !several ? "Desktop (lowest reading)" : "Idle (lowest reading)");
+    }
+    for (const job of running) segment("seg-job", job.estimate_mb || 0, `${job.label} (planned)`, job.app);
     segment("seg-extra", extra, "Beyond the plan (cached models, other programs)");
     segment("seg-reserve", vram.reserve_mb, "Always kept free");
     const mark = document.createElement("span");
     mark.className = "used-mark";
-    mark.style.left = pct(vram.used_mb);
-    mark.title = `Used now: ${gb(vram.used_mb)}`;
-    gpuBar.appendChild(mark);
-    gpuBar.setAttribute("aria-label", gpuNumbers.textContent);
-    gpuLegend.innerHTML = "";
+    mark.style.left = pct(card.used_mb);
+    mark.title = `Used now: ${gb(card.used_mb)}`;
+    bar.appendChild(mark);
+    const legendEl = document.createElement("div");
+    legendEl.className = "gpu-legend";
     const legend = (cls, text, app) => {
       const item = document.createElement("span");
       const swatch = document.createElement("i");
       if (cls) swatch.className = cls;
       if (app) swatch.dataset.app = app;
       item.append(swatch, text);
-      gpuLegend.appendChild(item);
+      legendEl.appendChild(item);
     };
-    legend("k-floor", `Desktop ${gb(floor)}`);
-    for (const job of vram.running) legend("", `${job.key} ${job.estimate_mb ? gb(job.estimate_mb) : "(unmeasured)"}`, job.app);
+    if (outside != null) {
+      legend("k-outside", `Other programs ${gb(outside)}`);
+      legend("k-floor", `Rocsy idle ${gb(floor)}`);
+    } else {
+      legend("k-floor", `${card.display || !several ? "Desktop" : "Idle"} ${gb(floor)}`);
+    }
+    for (const job of running) legend("", `${job.key} ${job.estimate_mb != null ? gb(job.estimate_mb) : "(unmeasured)"}`, job.app);
     if (extra > 0) legend("k-extra", `Beyond plan ${gb(extra)}`);
     legend("k-reserve", `Reserve ${gb(vram.reserve_mb)}`);
     legend("k-used", "Used now");
+    block.append(head, bar, legendEl);
+    return block;
+  }
+
+  // ---------------------------------------------------------------- GPU layout
+
+  const ROLE_LABELS = { comfyui: "ComfyUI renders", comfyui_multi: "Video two-GPU modes", llama: "LLM",
+    llama_multi: "LLM with Multi-GPU on", voice: "Voice", trainer: "Trainer" };
+
+  function renderPrimary(cards) {
+    if (document.activeElement === setPrimary) return;
+    setPrimary.innerHTML = "";
+    const add = (value, label) => {
+      const o = document.createElement("option");
+      o.value = value;
+      o.textContent = label;
+      setPrimary.appendChild(o);
+    };
+    const auto = cards.find((c) => c.index === layout.auto_primary);
+    add("", `Automatic${auto ? ` (${cardName(auto)})` : ""}`);
+    for (const card of cards) add(card.id, cardName(card));
+    if (layout.primary_missing) add(layout.primary_chosen, "Chosen card (not installed: automatic for now)");
+    setPrimary.value = layout.primary_chosen || "";
+    setPrimary.disabled = cards.length < 2 && !layout.primary_chosen;
+    setPrimaryHelp.dataset.base ??= setPrimaryHelp.textContent;
+    setPrimaryHelp.textContent = setPrimaryHelp.dataset.base + (cards.length < 2 ? " Only one GPU is detected." : "");
+  }
+
+  function renderLayout() {
+    if (!layout) return;
+    const cards = layout.cards || [];
+    gpusCount.textContent = cards.length === 1 ? "1 GPU" : `${cards.length} GPUs`;
+    gpusCount.className = "badge" + (cards.length > 1 ? " badge-on" : "");
+    gpuList.innerHTML = "";
+    if (!cards.length) gpuList.textContent = "No GPU memory counters could be read.";
+    for (const card of cards) {
+      const row = document.createElement("div");
+      row.className = "gpu-row";
+      const name = document.createElement("strong");
+      name.textContent = cardName(card);
+      const facts = document.createElement("span");
+      facts.textContent = [card.total_mb ? gb(card.total_mb) : "", card.primary ? "primary" : "", card.display ? "drives the display" : ""]
+        .filter(Boolean).join(" · ");
+      const link = document.createElement("span");
+      link.textContent = card.link ? linkText(card.link) : "PCIe link unknown";
+      if (card.link?.limited) {
+        link.className = "link-limited";
+        link.title = "The slot or the chipset path is narrower or slower than the card.";
+      }
+      const ids = document.createElement("span");
+      ids.className = "muted";
+      ids.textContent = `${card.id}${card.pci ? ` · ${card.pci}` : ""}`;
+      row.append(name, facts, link, ids);
+      if (!card.primary && cards.length > 1) {
+        const make = document.createElement("button");
+        make.type = "button";
+        make.className = "queue-cancel make-primary";
+        make.textContent = "Make primary";
+        make.title = `Run everything on ${cardName(card)} unless a role below picks another card`;
+        make.addEventListener("click", () => saveSettings({ primary_gpu: card.id }));
+        row.appendChild(make);
+      }
+      gpuList.appendChild(row);
+    }
+    renderPrimary(cards);
+    if (document.activeElement !== setMulti) setMulti.checked = !!layout.prefer_multi_gpu;
+    setMulti.disabled = !layout.multi_available && !layout.prefer_multi_gpu;
+    setMultiHelp.dataset.base ??= setMultiHelp.textContent;
+    setMultiHelp.textContent = setMultiHelp.dataset.base + (layout.multi_available ? "" : " Only one GPU is detected, so this has no effect yet.");
+    if (gpuRoles.contains(document.activeElement)) return;
+    gpuRoles.innerHTML = "";
+    for (const role of layout.roles || []) {
+      const row = document.createElement("label");
+      row.className = "gpu-role";
+      const text = document.createElement("span");
+      text.textContent = ROLE_LABELS[role.role] || role.role;
+      const about = document.createElement("small");
+      about.textContent = role.about + (role.cards?.length ? ` · now: ${role.cards.map((i) => `GPU ${i}`).join(" + ")}` : "");
+      text.appendChild(about);
+      const select = document.createElement("select");
+      const option = (value, label) => {
+        const o = document.createElement("option");
+        o.value = value;
+        o.textContent = label;
+        select.appendChild(o);
+      };
+      option("", role.multi ? "Default (all GPUs, primary first)" : "Default (primary GPU)");
+      if (role.multi) {
+        for (const first of cards) {
+          const order = [first, ...cards.filter((c) => c.index !== first.index)];
+          if (cards.length > 1) option(JSON.stringify(order.map((c) => c.id)), `All GPUs, ${cardName(first)} first`);
+        }
+      }
+      for (const card of cards) option(JSON.stringify([card.id]), `${cardName(card)} only`);
+      const chosen = role.chosen?.length ? JSON.stringify(role.chosen) : "";
+      if (chosen && ![...select.options].some((o) => o.value === chosen)) option(chosen, "Saved choice (a card is missing)");
+      select.value = chosen;
+      select.addEventListener("change", () => {
+        saveSettings({ gpu_roles: { [role.role]: select.value ? JSON.parse(select.value) : null } });
+      });
+      row.append(text, select);
+      gpuRoles.appendChild(row);
+    }
   }
 
   function renderSettings() {
@@ -598,12 +761,15 @@
 
   async function loadSettings() {
     try {
-      const [s, v] = await Promise.all([
+      const [s, v, g] = await Promise.all([
         fetch(`${PREFIX}/api/settings`).then((r) => r.ok ? r.json() : null),
         fetch(`${PREFIX}/api/vram`).then((r) => r.ok ? r.json() : null),
+        fetch(`${PREFIX}/api/gpus`).then((r) => r.ok ? r.json() : null).catch(() => null),
       ]);
       if (s) settings = s;
       if (v) vram = v;
+      if (g) layout = g;
+      renderLayout();
       renderSettings();
       renderGpu();
       refresh();
@@ -650,6 +816,8 @@
 
   setConcurrent.addEventListener("change", () => saveSettings({ concurrent: setConcurrent.checked }));
   setPrepare.addEventListener("change", () => saveSettings({ prepare_early: setPrepare.checked }));
+  setMulti.addEventListener("change", () => saveSettings({ prefer_multi_gpu: setMulti.checked }));
+  setPrimary.addEventListener("change", () => saveSettings({ primary_gpu: setPrimary.value }));
   setReserve.addEventListener("change", () => {
     const value = parseFloat(setReserve.value);
     if (value >= 0) saveSettings({ vram_reserve_mb: Math.round(value * 1024) });

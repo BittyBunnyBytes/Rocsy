@@ -33,7 +33,7 @@ import nodes
 log = logging.getLogger("bunny_cond_cache")
 
 VERSION = 1
-ENCODERS = ("CLIPTextEncode", "TextEncodeQwenImage21", "TextEncodeQwenImageEditPlus")
+ENCODERS = ("CLIPTextEncode", "TextEncodeQwenImage21", "TextEncodeQwenImageEditPlus", "MiniMaxH3ImageConditioning")
 IMAGE_SLOTS = 16
 RAM_ENTRIES = int(os.environ.get("BUNNY_COND_CACHE_RAM_ENTRIES", "64"))
 DISK_BYTES = int(float(os.environ.get("BUNNY_COND_CACHE_DISK_GB", "2")) * 1024 ** 3)
@@ -250,6 +250,13 @@ def _run_encoder(encoder: str, params: dict, clip, vae, images: dict) -> tuple:
         slots = {f"image{i}": images.get(f"image_{i}") for i in (1, 2, 3)}
         out = cls.execute(clip=clip, prompt=params["prompt"], vae=vae, **slots)
         return (out.args[0], None, None)
+    if encoder == "MiniMaxH3ImageConditioning":
+        # MiniMax H3 Image (2026-11-15): its 32B Qwen3-VL encoder (+ the reference pictures through the vision
+        # tower and the VAE) is ~10 s per prompt, ~80 s with two references. Outputs: positive + the image latent
+        # (an empty latent at the render size; the references ride in the conditioning as minimax_refs).
+        out = cls.execute(clip=clip, prompt=params["prompt"], width=int(params.get("width") or 0),
+                          height=int(params.get("height") or 0), vae=vae, images=dict(images) or None)
+        return (out.args[0], None, out.args[1])
     raise ValueError(f"BunnyCachedEncode: unsupported encoder {encoder}")
 
 

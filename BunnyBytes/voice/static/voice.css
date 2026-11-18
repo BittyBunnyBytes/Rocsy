@@ -231,3 +231,146 @@ body.h3-studio-ui .use-button { min-height: 34px; padding: 6px 10px; }
   body.h3-studio-ui .service-state > span:not(.status-dot) { display: none; }
 }
 .job-meta .job-chunk { color: var(--blue); border-color: rgba(124,179,220,.4); }
+
+/* ---- Live voice (static/realtime.js) ---- */
+.live-page .page-panel { display: flex; flex-direction: column; gap: 14px; }
+.live-page .page-toolbar { margin-bottom: 0; }
+
+/* Live bar */
+.live-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 16px;
+  padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: rgba(255,255,255,.03);
+  transition: border-color .2s, box-shadow .2s; }
+#live-panel[data-state="live"] .live-bar { border-color: rgba(127,217,154,.55); box-shadow: 0 0 0 1px rgba(127,217,154,.15) inset; }
+#live-panel[data-state="waiting"] .live-bar { border-color: rgba(232,193,112,.5); }
+.live-bar-voice { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.live-avatar { flex: none; width: 52px; height: 52px; border-radius: 50%; overflow: hidden; display: grid; place-items: center;
+  background: var(--panel, #1b2530); font-size: 24px; font-weight: 700; color: var(--text); }
+.live-avatar img, .live-voice-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+#live-panel[data-state="live"] .live-avatar { box-shadow: 0 0 0 3px rgba(127,217,154,.55); }
+#live-panel.is-muted .live-avatar { filter: grayscale(1) opacity(.6); }
+.live-bar-text { display: flex; flex-direction: column; min-width: 0; }
+.live-bar-text strong { font-size: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-bar-label { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+.live-bar-sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-bar-state { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.live-pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: rgba(255,255,255,.07); color: var(--muted); }
+#live-panel[data-state="connecting"] .live-pill { color: var(--text); }
+#live-panel[data-state="waiting"] .live-pill { background: rgba(232,193,112,.16); color: #e8c170; }
+#live-panel[data-state="live"] .live-pill { background: rgba(127,217,154,.16); color: #7fd99a; }
+#live-panel[data-state="live"] .live-pill::before { content: "● "; animation: live-blink 1.4s ease-in-out infinite; }
+#live-panel.is-muted[data-state="live"] .live-pill::after { content: " · muted"; color: #e8c170; }
+@keyframes live-blink { 50% { opacity: .35; } }
+.live-bar-numbers { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.live-bar-actions { display: flex; gap: 8px; }
+.live-start { min-width: 104px; min-height: 42px; font-size: 15px; }
+#live-panel:not([data-state="off"]) .live-start { background: #b5474f; color: #fff; }
+.live-mute[aria-pressed="true"] { background: rgba(232,193,112,.18); color: #e8c170; }
+.live-status { margin: -6px 2px 0; font-size: 13px; color: var(--muted); }
+.live-status[data-kind="ok"] { color: #7fd99a; }
+.live-status[data-kind="warn"] { color: #e8c170; }
+.live-status[data-kind="error"] { color: #f08a8a; }
+
+/* Layout */
+.live-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.live-main, .live-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.live-page .card-head.is-static { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.live-fields { display: flex; flex-direction: column; gap: 12px; }
+.live-inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.live-small { min-height: 30px; padding: 4px 10px; font-size: 12px; }
+.live-label { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+#live-mic-test[aria-pressed="true"] { background: rgba(127,217,154,.16); color: #7fd99a; }
+
+/* Voices */
+.live-voice-tools { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.live-voice-tools .jobs-search { flex: 1 1 180px; }
+.live-voice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); gap: 8px;
+  max-height: 460px; overflow-y: auto; padding: 2px; margin-bottom: 10px; }
+.live-voice { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 12px;
+  background: rgba(255,255,255,.02); cursor: pointer; min-width: 0; transition: border-color .15s, background .15s; }
+.live-voice:hover { border-color: rgba(165,140,240,.5); }
+.live-voice:focus-visible { outline: 2px solid var(--violet); outline-offset: 1px; }
+.live-voice[aria-selected="true"] { border-color: var(--violet); background: rgba(165,140,240,.12); }
+.live-voice-art { flex: none; width: 40px; height: 40px; border-radius: 50%; overflow: hidden; display: grid; place-items: center;
+  background: var(--panel, #1b2530); font-size: 20px; font-weight: 700; }
+.live-voice-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.live-voice-text strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-voice-text span { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-voice-play { flex: none; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--border); background: none;
+  color: var(--muted); cursor: pointer; font-size: 11px; }
+.live-voice-play:hover, .live-voice-play.is-playing { color: var(--text); border-color: var(--violet); }
+
+/* Meters */
+.live-meter { position: relative; height: 8px; border-radius: 4px; background: rgba(255,255,255,.06); overflow: hidden; }
+.live-meter i { display: block; height: 100%; width: 0; background: #5d6b75; transition: width .08s linear; }
+.live-meter i.is-open { background: #7fd99a; }
+.live-meter i.is-out { background: var(--violet); }
+.live-meter-db { height: 10px; overflow: visible; }
+.live-meter-db b { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #e8c170; border-radius: 1px; }
+
+/* Record + recordings */
+.live-record { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#live-panel .live-record select { width: auto; flex: 0 1 auto; min-width: 0; }
+#live-record.is-recording { background: rgba(181,71,79,.25); color: #f08a8a; }
+.live-recordings { display: flex; flex-direction: column; gap: 8px; }
+.live-recording { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.live-recording audio { flex: 1; min-width: 200px; height: 36px; }
+.live-recording-tag { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+.live-recording-tag.is-converted { background: rgba(165,140,240,.16); color: var(--violet); }
+.live-recording-tag.is-original { background: rgba(255,255,255,.07); color: var(--muted); }
+
+/* Advanced + help */
+.live-advanced summary, .live-help summary { list-style: none; cursor: pointer; }
+.live-advanced summary::-webkit-details-marker, .live-help summary::-webkit-details-marker { display: none; }
+.live-advanced summary .card-title::after, .live-help summary .card-title::after { content: " ▸"; color: var(--muted); }
+.live-advanced[open] summary .card-title::after, .live-help[open] summary .card-title::after { content: " ▾"; }
+.live-advanced-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 14px 18px; }
+.live-wide { grid-column: 1 / -1; }
+#live-gpu-warning { color: #e8c170; }
+.live-help p { margin: 0 0 10px; line-height: 1.5; }
+.live-help code { font-size: 12px; overflow-wrap: anywhere; }
+.live-help kbd { padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px; }
+
+@media (max-width: 860px) {
+  .live-layout { grid-template-columns: 1fr; }
+  /* One column: Voice, Microphone, Output, then Advanced. */
+  .live-main, .live-side { display: contents; }
+  .live-voices-card { order: 1; }
+  .live-side > .card { order: 2; }
+  .live-advanced { order: 3; }
+  .live-bar { grid-template-columns: minmax(0, 1fr) auto; }
+  .live-bar-state { grid-column: 1 / -1; grid-row: 2; flex-direction: row; align-items: center; justify-content: space-between; }
+  .live-bar-actions { grid-row: 1; grid-column: 2; }
+  .live-voice-grid { max-height: 320px; }
+}
+@media (max-width: 480px) {
+  .live-avatar { width: 42px; height: 42px; font-size: 20px; }
+  .live-bar-text strong { font-size: 16px; white-space: normal; overflow-wrap: anywhere; }
+  .live-bar-actions { flex-direction: column; }
+  .live-start { min-width: 84px; }
+}
+
+/* Output route */
+.live-route .chip { white-space: nowrap; }
+.live-micbox { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid rgba(165,140,240,.35);
+  border-radius: 12px; background: rgba(165,140,240,.06); }
+.live-micbox-state { margin: 0; font-weight: 600; }
+.live-micbox-state[data-kind="ok"] { color: #7fd99a; }
+.live-micbox-state[data-kind="error"] { color: #f08a8a; }
+.live-steps { margin: 0; padding-left: 20px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.live-steps strong { color: var(--text); }
+
+/* 📡 API */
+.live-route-sep { width: 1px; align-self: stretch; margin: 4px 4px; background: var(--border); }
+.live-api-chip[aria-pressed="true"] { box-shadow: inset 0 -2px 0 #6fc3df; }
+.live-apibox { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid rgba(111,195,223,.35);
+  border-radius: 12px; background: rgba(111,195,223,.06); }
+.live-api-head input { flex: 1 1 160px; min-width: 0; font-family: ui-monospace, monospace; }
+.live-api-listeners { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.live-api-listeners[data-on="true"] { color: #6fc3df; font-weight: 600; }
+.live-api-url { display: flex; align-items: center; gap: 8px; }
+.live-api-url code { flex: 1; min-width: 0; padding: 7px 9px; border-radius: 8px; background: rgba(0,0,0,.25); font-size: 12px;
+  overflow-wrap: anywhere; user-select: all; }
+.live-api-example summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.live-api-example pre { margin: 8px 0 0; padding: 10px; border-radius: 8px; background: rgba(0,0,0,.25); overflow-x: auto; font-size: 12px; }
+
+.live-hear { display: flex; flex-direction: column; gap: 8px; }

@@ -1,0 +1,17 @@
+[Unit]
+Description=Rocsy real-time voice conversion (Seed-VC streaming API on 127.0.0.1:8953)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@ROCSY_ROOT@/BunnyBytes/voice/realtime
+# QUEUE_INTERNAL_SECRET (GPU queue turns) and ROCSY_ROOT / ROCSY_COMFY_ROOT come from here.
+EnvironmentFile=@ROCSY_ROOT@/BunnyBytes/.env
+Environment=PYTHONUNBUFFERED=1
+# RSP's Seed-VC environment (ComfyUI custom node) already has ROCm torch and Seed-VC's dependencies.
+ExecStart=@COMFY_ROOT@/custom_nodes/RSP/.venv/bin/python rt_server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

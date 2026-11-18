@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install Rocsy's host services as systemd --user units, with this checkout's paths filled in.
-#   ./install-units.sh            hostctl, ComfyUI supervisor and Rocsy Voice worker (prints what it wrote)
+#   ./install-units.sh            hostctl, ComfyUI supervisor, Rocsy Voice worker and real-time voice (prints what it wrote)
 # Paths come from BunnyBytes/.env (ROCSY_ROOT, ROCSY_COMFY_ROOT); ROCSY_ROOT defaults to
 # the folder above this script. Existing units are backed up as <unit>.bak first.
 set -eu
@@ -15,7 +15,7 @@ COMFY=${ROCSY_COMFY_ROOT:-$(env_value ROCSY_COMFY_ROOT)}
 [ -n "$COMFY" ] || { echo "Set ROCSY_COMFY_ROOT in $HERE/.env first (your ComfyUI folder)" >&2; exit 1; }
 [ -f "$ROOT/BunnyBytes/hostctl/hostctl.py" ] || { echo "ROCSY_ROOT=$ROOT does not hold BunnyBytes/" >&2; exit 1; }
 
-UNITS="hostctl/bunny-hostctl.service supervisors/comfyui-supervisor.service voice/rocsy-voice-worker.service"
+UNITS="hostctl/bunny-hostctl.service supervisors/comfyui-supervisor.service voice/rocsy-voice-worker.service voice/rocsy-voice-realtime.service"
 DEST=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
 mkdir -p "$DEST"
 for unit in $UNITS; do
@@ -36,4 +36,4 @@ if [ ! -f "$HERE/hostctl/hostctl.env" ]; then
     fi
 fi
 systemctl --user daemon-reload
-echo "Start them with: systemctl --user enable --now bunny-hostctl comfyui-supervisor rocsy-voice-worker"
+echo "Start them with: systemctl --user enable --now bunny-hostctl comfyui-supervisor rocsy-voice-worker rocsy-voice-realtime"

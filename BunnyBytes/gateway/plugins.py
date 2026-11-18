@@ -75,6 +75,9 @@ class Plugin:
     # setting): the gateway adds `path` to its fetches, module imports and redirects and serves
     # root-path requests made from its pages (see gateway app.py root_app_shim / root fallback).
     root_app: bool = False
+    # Browser caching for the app's own static files (SillyTavern answers max-age=0, so every visit re-checked
+    # ~350 scripts): {"seconds": N, "paths": [path prefixes], "exclude": [path prefixes]} (see proxy.py).
+    static_cache: dict | None = None
 
     def public(self) -> dict:
         return {"id": self.id, "name": self.name, "path": self.path, "upstream": self.upstream, "folder": self.folder,
@@ -147,6 +150,27 @@ def _parse(folder: Path, data: dict, taken_ids: set[str], taken_paths: set[str])
         raise ValueError("root_app must be true or false")
     if root_app and not data.get("strip_prefix"):
         raise ValueError("root_app needs strip_prefix: true (the app is served from its own root)")
+    static_cache = data.get("static_cache")
+    if static_cache is not None:
+        if not isinstance(static_cache, dict):
+            raise ValueError('static_cache must be {"seconds": N, "paths": ["/scripts/", ...]}')
+        seconds = static_cache.get("seconds")
+        paths, exclude = static_cache.get("paths") or [], static_cache.get("exclude") or []
+        if type(seconds) is not int or not 0 < seconds <= 2592000:
+            raise ValueError("static_cache.seconds must be a whole number from 1 to 2592000 (30 days)")
+        for name, items in (("paths", paths), ("exclude", exclude)):
+            if not isinstance(items, list) or len(items) > 40 or not all(
+                    isinstance(item, str) and item.startswith("/") and 1 < len(item) <= 120 and ".." not in item for item in items):
+                raise ValueError(f"static_cache.{name} must be a list of path prefixes such as /scripts/")
+        if not paths:
+            raise ValueError("static_cache.paths needs at least one path prefix")
+        version_url, version_key = static_cache.get("version_url") or "", static_cache.get("version_key") or ""
+        if version_url and not (isinstance(version_url, str) and version_url.startswith("/") and len(version_url) <= 120):
+            raise ValueError("static_cache.version_url must be a path such as /version")
+        if version_key and not (isinstance(version_key, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", version_key)):
+            raise ValueError("static_cache.version_key must be a field name such as pkgVersion")
+        static_cache = {"seconds": seconds, "paths": tuple(paths), "exclude": tuple(exclude),
+                        "version_url": version_url, "version_key": version_key or "version"}
     icon_file, icon_version = str(data.get("icon_file") or ""), ""
     if icon_file:
         if not ICON_FILE.match(icon_file):
@@ -166,7 +190,7 @@ def _parse(folder: Path, data: dict, taken_ids: set[str], taken_paths: set[str])
                   icon=_clean_icon(data.get("icon")), color=color.lower(), health=health, home=home or None,
                   gpu_queue=bool(data.get("gpu_queue")), note=str(data.get("note") or "")[:200],
                   container=str(data.get("container") or "")[:63], icon_file=icon_file, icon_version=icon_version,
-                  version=str(version or ""), updates=updates, root_app=root_app)
+                  version=str(version or ""), updates=updates, root_app=root_app, static_cache=static_cache)
 
 
 def load(root: Path, reserved_ids: set[str], reserved_paths: set[str]) -> tuple[list[Plugin], list[dict]]:

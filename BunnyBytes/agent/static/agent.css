@@ -435,11 +435,12 @@ code.a-approval-what {
   border: 1px solid var(--bb-border); background: var(--bb-panel); line-height: 1.4;
 }
 .a-compose textarea:focus { outline: none; border-color: var(--bb-blue); }
-.a-input-wrap textarea { position: relative; display: block; width: 100%; box-sizing: border-box; background: transparent; }
+/* the textarea and the highlight behind it must wrap identically: same font, word breaking and scrollbar room */
+.a-input-wrap textarea { position: relative; display: block; width: 100%; box-sizing: border-box; background: transparent; overflow-wrap: anywhere; scrollbar-gutter: stable; }
 .a-input-highlight {
   position: absolute; inset: 0; margin: 0; padding: 10px 12px; box-sizing: border-box;
   border: 1px solid transparent; overflow: hidden; pointer-events: none; user-select: none;
-  white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.4; color: transparent;
+  white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.4; color: transparent; scrollbar-gutter: stable;
 }
 .a-input-highlight .a-syntax-mention { color: transparent; background: color-mix(in srgb, var(--bb-blue) 24%, transparent); border-radius: 3px; }
 .a-input-highlight .a-syntax-fence { color: transparent; background: color-mix(in srgb, var(--bb-green) 15%, transparent); }
@@ -720,7 +721,7 @@ html, body { height: 100dvh; }
   /* composer: no iOS zoom on focus, clear of the home indicator */
   .a-compose { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); gap: 6px; }
   .a-compose-row { gap: 6px; }
-  .a-compose textarea, .a-rename-input { font-size: 16px; }
+  .a-compose textarea, .a-input-highlight, .a-rename-input { font-size: 16px; }
   .a-compose .a-btn { min-height: 42px; }
   .a-stop-inline > span { display: none; }
   .a-msg { padding: 0 12px 6px; }
@@ -1267,3 +1268,88 @@ body.a-code-full { overflow: hidden; }
   .a-agent-acts .a-btn { padding: 6px 9px; min-height: 34px; }
   .a-agent-compose { padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
 }
+
+/* Prompt ledger plugin */
+.a-ledger-card { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--bb-border); border-radius: 12px; background: var(--bb-panel); }
+.a-ledger-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.a-ledger-title { font-weight: 600; font-size: 0.92rem; }
+.a-ledger-count { flex: 1; min-width: 0; }
+.a-ledger-open { padding: 5px 12px; font-size: 0.85rem; }
+.a-ledger-rows:not(:empty) { margin-top: 8px; display: grid; gap: 3px; }
+.a-ledger-row { display: flex; align-items: baseline; gap: 8px; font-size: 0.86rem; min-width: 0; }
+.a-ledger-n { flex: none; min-width: 2ch; text-align: right; font-variant-numeric: tabular-nums; color: var(--bb-muted); }
+.a-ledger-secs { flex: none; color: var(--bb-muted); font-size: 0.8rem; }
+.a-ledger-sum { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.a-ledger-chip { flex: none; padding: 1px 7px; border-radius: 99px; font-size: 0.72rem; border: 1px solid var(--bb-border); color: var(--bb-muted); }
+.a-ledger-chip.is-verified { color: #7fc99a; border-color: rgba(127, 201, 154, 0.5); }
+.a-ledger-chip.is-written { color: var(--bb-blue); border-color: color-mix(in srgb, var(--bb-blue) 50%, transparent); }
+.a-ledger-chip.is-in-progress { color: #d9b36a; border-color: rgba(217, 179, 106, 0.5); }
+.a-ledger-modal { width: min(820px, calc(100vw - 32px)); }
+.a-ledger-modal-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.a-ledger-modal-head h2 { flex: 1; margin: 0; }
+.a-ledger-filter { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.a-ledger-filter button { padding: 4px 11px; border-radius: 99px; border: 1px solid var(--bb-border); background: none; color: var(--bb-muted); font: inherit; font-size: 0.82rem; cursor: pointer; }
+.a-ledger-filter button[aria-selected="true"] { color: var(--bb-text); border-color: var(--bb-blue); }
+.a-ledger-list { display: grid; gap: 4px; }
+.a-ledger-item { border: 1px solid var(--bb-border); border-radius: 10px; background: var(--bb-panel); }
+.a-ledger-item > summary { list-style: none; cursor: pointer; padding: 8px 10px; }
+.a-ledger-item > summary::-webkit-details-marker { display: none; }
+.a-ledger-item[open] .a-ledger-sum { white-space: normal; }
+.a-ledger-body { position: relative; padding: 0 10px 10px; }
+.a-ledger-prompt { margin: 0; padding: 10px 40px 10px 10px; border-radius: 8px; background: var(--bb-panel-alt); white-space: pre-wrap; word-break: break-word; font-size: 0.82rem; line-height: 1.45; max-height: 60vh; overflow: auto; }
+.a-ledger-copy { position: absolute; top: 6px; right: 16px; }
+.a-ledger-outline { display: grid; gap: 3px; }
+#a-lg-extra h3 { margin: 14px 0 6px; font-size: 0.92rem; }
+
+/* Plugin buttons next to the paperclip (prompt ledger, custom plugins with a button) */
+.a-plugin-btns { display: flex; gap: 4px; align-items: flex-end; }
+.a-plugin-btns[hidden] { display: none; }
+.a-plugin-btn { position: relative; padding: 8px 9px; display: inline-grid; place-items: center; font-size: 16px; line-height: 1; }
+.a-plugin-count:not(:empty) { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--bb-accent, #7aa2f7); color: #0b0f14; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
+/* Custom plugins in Project → Plugins */
+.a-pp-custom-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 18px; }
+.a-pp-edit { padding: 4px 10px; font-size: 0.82rem; margin-right: 8px; }
+.a-plugin-editor { width: min(600px, calc(100vw - 32px)); }
+.a-plugin-editor form { display: flex; flex-direction: column; gap: 10px; }
+.a-pe-namerow { display: grid; grid-template-columns: 90px 1fr; gap: 10px; }
+.a-pe-icon input { text-align: center; font-size: 1.2rem; }
+.a-plugin-editor textarea { resize: vertical; min-height: 110px; font: inherit; }
+.a-plugin-editor .a-access-row[hidden] { display: none; }
+.a-pe-spacer { flex: 1; }
+
+/* project setup chats: the draft panel above the composer, its confirm button, and the chip in replies */
+.a-pd-agent { margin-right: auto; }
+.a-setup { margin: 0 0 8px; border: 1px solid color-mix(in srgb, var(--bb-blue) 45%, var(--bb-border)); border-radius: 12px;
+  background: color-mix(in srgb, var(--bb-blue) 8%, var(--bb-panel)); }
+.a-setup[hidden] { display: none; }
+.a-setup-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex-wrap: wrap; }
+.a-setup-icon { font-size: 18px; line-height: 1; }
+.a-setup-text { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; font-size: 0.85rem; }
+.a-setup-text span { opacity: 0.75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.a-setup-detail { max-height: min(45vh, 420px); overflow: auto; padding: 4px 12px 10px; border-top: 1px solid var(--bb-border); font-size: 0.85rem; }
+.a-setup-detail[hidden] { display: none; }
+.a-setup-field { margin: 6px 0; }
+.a-setup-name { display: inline-flex; align-items: center; gap: 6px; }
+.a-setup-name .a-tile { width: 22px; height: 22px; }
+.a-setup-sec { margin: 6px 0; }
+.a-setup-sec > summary { cursor: pointer; font-weight: 600; padding: 2px 0; }
+.a-setup-pre { margin: 4px 0 0; padding: 8px; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  border-radius: 8px; background: var(--bb-panel); border: 1px solid var(--bb-border); font-size: 0.8rem; }
+.a-draft-chip { display: inline-block; margin: 6px 0; padding: 4px 10px; border-radius: 999px; font-size: 0.82rem;
+  background: color-mix(in srgb, var(--bb-blue) 14%, var(--bb-panel)); border: 1px solid color-mix(in srgb, var(--bb-blue) 40%, var(--bb-border)); }
+.a-narrow-label { display: none; white-space: nowrap; }
+.a-pv-head h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+.a-setup-row .a-btn { margin-left: auto; }
+.a-setup-row .a-btn ~ .a-btn { margin-left: 0; }
+@media (max-width: 760px) {
+  .a-wide-label { display: none; }
+  .a-narrow-label { display: inline; }
+}
+
+/* markdown: paragraphs and code inside list items and quotes */
+.a-md li > p { margin: 0.35em 0 0; }
+.a-md li > .a-md-codebox { margin: 0.4em 0; }
+.a-md li > :is(ul, ol) { margin: 0.15em 0; }
+.a-md blockquote > :first-child { margin-top: 0; }
+.a-md blockquote > :last-child { margin-bottom: 0; }

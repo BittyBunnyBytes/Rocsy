@@ -42,6 +42,7 @@ FAMILIES: dict[str, tuple[str, str, str]] = {
     "qwen_image_21": ("image", "qwen_image_21", "KreaCustom"),
     "moss_image": ("image", "moss", "KreaCustom"),
     "anima": ("image", "anima", "KreaCustom"),
+    "h3_image": ("image", "h3_image", "KreaCustom"),
 }
 EPOCH_RE = re.compile(r"-0*(\d+)$")
 ACTIVE = {"preparing", "writing_prompt", "rendering"}

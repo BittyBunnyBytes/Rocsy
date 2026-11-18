@@ -48,13 +48,13 @@ TRANSIENT_DOWNLOAD = re.compile(r'failed retrieving file|failed to retrieve some
 # What the installer can set up. Services are Compose profiles (COMPOSE_PROFILES in BunnyBytes/.env,
 # so later rebuilds keep the choice); backends run once, after Rocsy is up, and each may fail alone.
 COMPONENTS = {'motion': True, 'rea': False, 'trainer': False, 'comfyui': True, 'hermes': True, 'ytdlp': True,
-              'music': False}
+              'music': False, 'sillytavern': False}
 # Bundled starting points that become the user's own once installed (Models → Manager adds the LLMs it
 # downloads to Llama/config.yaml): written on a fresh install, never replaced by Update or Repair.
 USER_SEED_FILES = frozenset({'Llama/config.yaml'})
-SERVICE_PROFILES = ('motion', 'rea', 'trainer')
+SERVICE_PROFILES = ('motion', 'rea', 'trainer', 'sillytavern')
 ALL_PROFILES = (*SERVICE_PROFILES, 'hermes')
-PROFILE_SERVICES = {'motion': ['motion'], 'rea': ['rea'], 'trainer': ['trainer'], 'hermes': ['hermes-agent', 'hermes-dashboard']}
+PROFILE_SERVICES = {'motion': ['motion'], 'rea': ['rea'], 'trainer': ['trainer'], 'sillytavern': ['sillytavern'], 'hermes': ['hermes-agent', 'hermes-dashboard']}
 SUPERVISOR_UNIT = comfyinstall.UNIT
 
 
@@ -69,8 +69,9 @@ def run_install(job_id, payload):
     try:
         result = install(payload, update_state)
         with STATE_LOCK:
-            STATE.update(phase='complete', progress=100, message='Installation complete.', result=result)
-            STATE['log'].append('Installation complete.')
+            done = 'Uninstall complete.' if (result or {}).get('mode') == 'uninstall' else 'Installation complete.'
+            STATE.update(phase='complete', progress=100, message=done, result=result)
+            STATE['log'].append(done)
     except Exception as exc:
         with STATE_LOCK:
             STATE.update(phase='error', message=str(exc))
@@ -458,6 +459,11 @@ def start_docker_service(progress):
         time.sleep(1)
 
 
+def units_python():
+    """The Python the host units run (bunny-hostctl.service: /usr/bin/python3), when this system has it."""
+    return '/usr/bin/python3' if Path('/usr/bin/python3').exists() else None
+
+
 def systemd_user_ok():
     """User units (host helper, ComfyUI supervisor) need systemd as the init system."""
     return pkgmanager.init_system() == 'systemd' and shutil.which('systemctl') is not None
@@ -466,12 +472,30 @@ def systemd_user_ok():
 def safe_destination(raw):
     if not isinstance(raw, str) or not raw.strip() or len(raw) > 500 or any(ch in raw for ch in ('\0', '\n', '\r')):
         raise ValueError('Enter an installation folder.')
-    path = Path(os.path.expandvars(os.path.expanduser(raw.strip()))).resolve()
-    if path in (Path('/'), Path.home().resolve(), BUNDLE, BUNDLE.parent) or path.is_relative_to(BUNDLE) or BUNDLE.is_relative_to(path):
-        raise ValueError('Choose a dedicated folder outside your home root and the temporary installer.')
+    path = Path(os.path.expandvars(os.path.expanduser(raw.strip())))
+    if not path.is_absolute():   # "Rocsy" or "my stuff/rocsy" mean a folder in home, wherever the installer was started
+        path = Path.home() / path
+    path = path.resolve()
+    if path == Path('/'):
+        raise ValueError('That’s the whole drive. Pick a folder of its own, like ~/Rocsy.')
+    if path == Path.home().resolve():
+        raise ValueError('That’s your whole home folder. Pick a folder inside it, like ~/Rocsy.')
+    if path in (BUNDLE, BUNDLE.parent) or path.is_relative_to(BUNDLE) or BUNDLE.is_relative_to(path):
+        raise ValueError('That’s where the installer itself was unpacked. Pick another folder, like ~/Rocsy.')
     if path.exists() and not path.is_dir():
-        raise ValueError('The selected path is not a folder.')
+        raise ValueError('That’s a file, not a folder. Pick a folder, like ~/Rocsy.')
     return path
+
+
+def free_bytes(dest):
+    """Free space on the drive the Rocsy folder is (or will be) on, or None."""
+    path = Path(dest)
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    try:
+        return shutil.disk_usage(path).free
+    except OSError:
+        return None
 
 
 def existing_install(dest):
@@ -732,7 +756,7 @@ def current_components(dest):
         profiles = {'motion', 'rea', 'trainer'}  # installs made before components existed had all three
     return {'motion': 'motion' in profiles, 'rea': 'rea' in profiles, 'trainer': 'trainer' in profiles,
             'comfyui': supervisor_installed(dest), 'hermes': hermes_ready(dest), 'ytdlp': ytdlp_ready(dest),
-            'music': music_ready(dest)}
+            'music': music_ready(dest), 'sillytavern': 'sillytavern' in profiles}
 
 
 def chosen_components(raw, existing_dest=None):
@@ -754,7 +778,7 @@ def ensure_host_tools(progress, components, host_helper, download_comfy):
     if needs_git and not shutil.which('git'):
         missing.append('git')
     # The host units run /usr/bin/python3 (see bunny-hostctl.service); the Core Backend jobs run here.
-    pythons = {sys.executable, *(['/usr/bin/python3'] if Path('/usr/bin/python3').exists() else [])}
+    pythons = {sys.executable, *([units] if (units := units_python()) else [])}
     if needs_yaml and not all(command_ok([python, '-c', 'import yaml']) for python in pythons):
         missing.append('yaml')
     if (host_helper or (components['comfyui'] and download_comfy)) and not command_ok([sys.executable, '-c', 'import ensurepip, venv']):
@@ -894,7 +918,7 @@ def check_wsl(payload, dest):
     windows = windowshost.windows_version()
     if windows and not windows['wsl2']:
         raise ValueError(windows['reason'])
-    if not Path('/run/systemd/system').is_dir():
+    if pkgmanager.init_system() != 'systemd':
         raise ValueError('systemd is off in this WSL distro. Run “Install Rocsy (Windows).cmd” from Windows: '
                          'it turns systemd on and restarts the distro.')
     if (payload.get('desktop_app') or payload.get('windows_autostart')) and not windowshost.SAFE_DEST.match(str(dest)):
@@ -939,13 +963,37 @@ def apply_windows_shortcuts(dest, payload, info, distro):
     return record
 
 
+def uninstall_rocsy(dest, prior, payload, progress):
+    """Remove an installation with the bundle's uninstall worker (the same one Settings → Uninstall uses):
+    containers, helpers, shortcuts; with files='delete' the folder too; with remove_images the app images."""
+    files = payload.get('files')
+    if files not in ('keep', 'delete'):
+        raise ValueError('Choose whether to keep or delete Rocsy’s files.')
+    if files == 'delete':
+        if not prior['owned_destination']:
+            raise ValueError('This folder had other files before Rocsy was installed, so only “keep my files” is available.')
+        if payload.get('confirmation_phrase') != 'DELETE':
+            raise ValueError('Type DELETE to confirm deleting the Rocsy folder.')
+    # No password: the installer only runs for someone already signed in to this computer as its owner,
+    # and a forgotten Rocsy password must never stop them removing it.
+    worker = BUNDLE / 'BunnyBytes' / 'hostctl' / 'uninstall_worker.py'
+    progress(10, 'Checking Docker…')
+    use_group = not command_ok(['docker', 'info']) and account_in_docker_group()
+    command = [sys.executable, str(worker), str(dest), files, *(['images'] if payload.get('remove_images') else [])]
+    run_command(docker_command(command, use_group), progress, 30, 'Removing Rocsy…', cwd=str(Path.home()))
+    return {'mode': 'uninstall', 'destination': str(dest), 'kept_files': files == 'keep',
+            'images_removed': bool(payload.get('remove_images'))}
+
+
 def install(payload, progress=lambda _percent, _message: None):
     progress(2, 'Checking install location…')
     dest = safe_destination(payload.get('destination'))
     prior = existing_install(dest)
     mode = payload.get('mode')
+    if prior and mode == 'uninstall':
+        return uninstall_rocsy(dest, prior, payload, progress)
     if prior and mode not in {'update', 'repair', 'reinstall'}:
-        raise ValueError('Choose Update, Repair, or Complete reinstall for this Rocsy installation.')
+        raise ValueError('Choose Update, Repair, Uninstall or Complete reinstall for this Rocsy installation.')
     if not prior and mode != 'install':
         raise ValueError('This folder is not a recognized Rocsy installation.')
     if mode == 'reinstall':
@@ -1033,7 +1081,7 @@ def install(payload, progress=lambda _percent, _message: None):
     progress(27, 'Preparing destination…')
     dest.mkdir(parents=True, exist_ok=True)
     start_log_file(dest)
-    sources = ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer')
+    sources = ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer', 'Model3D')
     total = sum(len(files) for name in sources for _, _, files in os.walk(BUNDLE / name)) or 1
     copied = 0
     kept = []
@@ -1237,9 +1285,11 @@ class Handler(BaseHTTPRequestHandler):
                            'windows_autostart': bool(prior.get('windows_autostart')),
                            'host_helper': host_helper_installed(dest),
                            'components': current_components(dest)} if prior else None
-                return self._send(200, json.dumps({'installed': bool(prior),
+                busy = not prior and dest.is_dir() and any(dest.iterdir())
+                return self._send(200, json.dumps({'installed': bool(prior), 'destination': str(dest), 'has_files': busy,
                                                     'can_reinstall': bool(prior and prior['owned_destination']),
-                                                    'password_required': password_required, 'current': current}))
+                                                    'password_required': password_required, 'current': current,
+                                                    'free_bytes': free_bytes(dest)}))
             with STATE_LOCK:
                 if STATE['phase'] == 'running':
                     return self._send(409, '{"error":"An installation is already running."}')
@@ -1265,11 +1315,14 @@ TERMINAL_HELP = """Install Rocsy from the terminal.
 Options:
   --dir PATH     the Rocsy folder (default: %s)
   --no-password  install without a password (trusted machines only); skips the password question
+  --preset NAME  what to install: recommended (default), chat, music, training, agent, light or everything
+                 (with --defaults: installs that preset without questions)
   --verbose      show every command's output, not only the steps
   --help         this text
 
-The default install: Rocsy in the default folder with Motion, ComfyUI (downloaded, with its
-supervisor), Hermes Agent and yt-dlp; REA and the Trainer are left out. It asks whether you want
+The default install (the Recommended preset): Rocsy in the default folder with Motion, ComfyUI
+(downloaded, with its supervisor), Hermes Agent and yt-dlp; REA, the Trainer, Music covers and
+SillyTavern are left out. It asks whether you want
 a password and lets you type it (--defaults generates one and prints it at the end), and sets up
 the rocsy command, Rocsy Desktop and the host services helper.
 On a folder that already has Rocsy, the default is Update, which keeps everything as it is.
@@ -1288,7 +1341,7 @@ class Style:
 def parse_terminal_args(argv):
     """argv after the bundle and default folder → options; options['ui'] means the browser installer."""
     options = {'terminal': False, 'defaults': False, 'verbose': False, 'help': False, 'dir': None, 'windows': False,
-               'no_password': False}
+               'no_password': False, 'preset': None}
     items = list(argv)
     while items:
         arg = FLAG_ALIASES.get(items[0], items[0])
@@ -1301,12 +1354,17 @@ def parse_terminal_args(argv):
             options[arg[2:]] = True
         elif arg == '--no-password':
             options['no_password'] = True
+        elif arg == '--preset' and items or arg.startswith('--preset='):
+            name = items.pop(0) if arg == '--preset' else arg.partition('=')[2]
+            if name not in PRESETS:
+                raise SystemExit(f'Unknown preset {name!r}. Presets: {", ".join(PRESETS)}.')
+            options['preset'] = name
         else:
             raise SystemExit(f'Unknown option {arg!r}. Run with --help to see the options.')
     # --windows: started by “Install Rocsy (Windows).cmd”; the browser UI opens in Windows.
     graphical = os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY') or options['windows']
     options['ui'] = bool(graphical) and not (options['terminal'] or options['defaults'] or options['help'] or options['verbose']
-                                             or options['no_password'])
+                                             or options['no_password'] or options['preset'])
     return options
 
 
@@ -1365,7 +1423,66 @@ COMPONENT_TEXT = {
     'hermes': ('Hermes Agent', 'runs the Master Agent and Agentic modes'),
     'ytdlp': ('yt-dlp', 'web video references for the agent'),
     'music': ('Music covers', 'covers and custom voices in Music: YuE2, RSP, Seed-VC and their models (about 15 GB)'),
+    'sillytavern': ('SillyTavern', 'chat frontend for characters, on your local LLMs and Voice (experimental; about 0.5 GB)'),
 }
+
+
+# How the optional parts depend on each other and on the always-included core (the browser installer's
+# service map draws the same links). NEEDS: doesn't work without it. WORKS_WITH: better with it.
+COMPONENT_NEEDS = {'music': ('comfyui', 'YuE2, RSP and Seed-VC run as ComfyUI nodes'),
+                   'rea': ('hermes', 'its tools are served to Hermes')}
+COMPONENT_WORKS_WITH = {'motion': ('hermes', 'it renders the videos the Master Agent (Hermes) writes'),
+                        'ytdlp': ('hermes', 'the Master Agent (Hermes) uses it for web video references'),
+                        'trainer': ('comfyui', 'it trains on the base models in ComfyUI’s folder')}
+CORE_LINKS = {'sillytavern': 'chats through Llama (llama-swap) and speaks with Voice, both always included',
+              'hermes': 'thinks with Llama (llama-swap), always included',
+              'music': 'adds Covers and custom voices to the Music studio'}
+
+
+# Presets: the optional parts each one turns on (the browser installer shows the same table).
+PRESETS = {
+    'recommended': ('Recommended', 'all the studios plus the Master Agent', ('comfyui', 'hermes', 'ytdlp', 'motion')),
+    'chat': ('Chat & characters', 'SillyTavern role-play on your local LLMs, with voices and pictures', ('comfyui', 'sillytavern')),
+    'music': ('Music maker', 'songs, plus covers and custom singing voices', ('comfyui', 'music')),
+    'training': ('Training lab', 'train your own LoRAs for the studios', ('comfyui', 'trainer')),
+    'agent': ('Agent & automation', 'the Master Agent with video edits, web references and game modding', ('comfyui', 'hermes', 'ytdlp', 'motion', 'rea')),
+    'light': ('Lightweight', 'just the studios; the smallest download', ('comfyui',)),
+    'everything': ('Everything', 'every part of Rocsy (needs plenty of disk space)', tuple(COMPONENTS)),
+}
+# Rough disk use in GB, for the size shown next to each preset.
+SIZES_GB = {'core': 35, 'comfyui': 10, 'hermes': 7, 'ytdlp': 0.05, 'music': 15, 'motion': 3.5, 'rea': 7, 'trainer': 42, 'sillytavern': 1}
+
+
+def preset_components(name, kept=None):
+    """A preset as a components dict; backends an existing install already has (kept) stay on."""
+    if name not in PRESETS:
+        raise ValueError(f'Unknown preset {name!r}. Presets: {", ".join(PRESETS)}.')
+    on = set(PRESETS[name][2])
+    return {key: key in on or bool((kept or {}).get(key) and key in ('comfyui', 'hermes', 'ytdlp', 'music')) for key in COMPONENTS}
+
+
+def preset_size(name):
+    return round(SIZES_GB['core'] + sum(SIZES_GB[key] for key in PRESETS[name][2]))
+
+
+def ask_preset(ask, default='recommended'):
+    return ask.choose('What will you use Rocsy for? (Video, Image, Music, Voice and 3D Models are always included.)',
+                      [(key, f'{label} — {text} (about {preset_size(key)} GB)') for key, (label, text, _on) in PRESETS.items()],
+                      default)
+
+
+def component_advice(chosen, own_comfy=False):
+    """[(level, text)] for what the chosen parts are missing; level is 'needs' or 'recommended'.
+    ComfyUI counts as present when the user points Rocsy at their own ComfyUI folder."""
+    def present(key):
+        return chosen.get(key) or (key == 'comfyui' and own_comfy)
+    advice = []
+    for table, level in ((COMPONENT_NEEDS, 'needs'), (COMPONENT_WORKS_WITH, 'recommended')):
+        for key, (other, why) in table.items():
+            if chosen.get(key) and not present(other):
+                advice.append((level, f'{COMPONENT_TEXT[key][0]} {"needs" if level == "needs" else "works best with"} '
+                                      f'{COMPONENT_TEXT[other][0]}: {why}.'))
+    return advice
 
 
 def default_payload(dest, prior):
@@ -1409,11 +1526,14 @@ def customize(ask, style, dest_default, family, no_password=False):
     payload = default_payload(dest, prior)
     generated = None
     if prior:
-        payload['mode'] = ask.choose('Rocsy is already installed here. What should happen?', [
-            ('update', 'Update: new app files, rebuilt containers; settings and data kept'),
-            ('repair', 'Repair: restore app files, recreate every container; settings and data kept'),
-            *([('reinstall', 'Complete reinstall: DELETE this installation, its data and Docker volumes')]
+        payload['mode'] = ask.choose('Rocsy is already installed here. What should happen? (Not sure? Update.)', [
+            ('update', 'Update to this version: everything you made, your models and settings stay'),
+            ('repair', 'Repair: for when Rocsy won’t start; puts the app files back, keeps your files'),
+            ('uninstall', 'Uninstall: remove Rocsy from this computer (you choose whether to keep your files)'),
+            *([('reinstall', 'Start over from scratch: DELETES this installation and everything in it')]
               if prior['owned_destination'] else [])], 'update')
+        if payload['mode'] == 'uninstall':
+            return ask_uninstall(ask, style, dest, prior, payload), None
         if payload['mode'] == 'reinstall':
             phrase = ask.text('Type REINSTALL ROCSY to confirm deletion')
             payload['confirmation_phrase'] = phrase
@@ -1427,16 +1547,50 @@ def customize(ask, style, dest_default, family, no_password=False):
     print(style.bold('\n2. What to install'))
     kept = current_components(dest) if prior and payload['mode'] != 'reinstall' else {}
     defaults = kept or COMPONENTS
+    if not kept:   # a new install starts from a preset; Update/Repair start from what is installed
+        defaults = preset_components(ask_preset(ask))
+        if not ask.yes('Adjust the parts one by one?', False):
+            payload['components'] = defaults
+            return finish_customize(ask, style, payload, family, no_password, prior)
     chosen = {}
-    for key in ('motion', 'rea', 'trainer', 'comfyui', 'hermes', 'ytdlp', 'music'):
+    for key in ('motion', 'rea', 'trainer', 'comfyui', 'hermes', 'ytdlp', 'music', 'sillytavern'):
         name, text = COMPONENT_TEXT[key]
         if key in ('comfyui', 'hermes', 'ytdlp', 'music') and kept.get(key):
             print(f'  {name}: {style.ok("installed")} (kept; remove it in Models → Core Backend)')
             chosen[key] = True
             continue
-        chosen[key] = ask.yes(f'{name} — {text}?', defaults[key])
+        link = CORE_LINKS.get(key)
+        chosen[key] = ask.yes(f'{name} — {text}' + (f'; {link}' if link else '') + '?', defaults[key])
+    own_comfy = bool(payload['comfy_root'])
+    # Music covers install into ComfyUI: without it (or the user's own folder) they would fail.
+    if chosen['music'] and not chosen['comfyui'] and not own_comfy:
+        if ask.yes('Music covers need ComfyUI. Set up ComfyUI too?', True):
+            chosen['comfyui'] = True
+        else:
+            chosen['music'] = False
+            print('  ' + style.dim('Music covers skipped; add both later in Models → Core Backend.'))
+    for level, text in component_advice(chosen, own_comfy):
+        print('  ' + (style.warn if level == 'needs' else style.dim)(('Note: ' if level == 'needs' else 'Tip: ') + text))
     payload['components'] = chosen
+    return finish_customize(ask, style, payload, family, no_password, prior)
 
+
+def ask_uninstall(ask, style, dest, prior, payload):
+    """The uninstall questions: keep or delete files, free disk space, the current password."""
+    options = [('keep', 'Remove the app, keep my files (what you made, your models and settings stay)')]
+    if prior['owned_destination']:
+        options.append(('delete', 'Remove everything: also DELETE the Rocsy folder, including what you made and your models'))
+    payload['files'] = ask.choose('Your files:', options, 'keep')
+    if payload['files'] == 'delete':
+        print('  ' + style.warn(f'Everything in {dest} will be deleted for good. Copy anything you want to keep first.'))
+        payload['confirmation_phrase'] = ask.text('Type DELETE to confirm').strip().upper()
+    payload['remove_images'] = ask.yes('Free up disk space by removing Rocsy’s app images (rebuilt if you install again)?', True)
+    return payload
+
+
+def finish_customize(ask, style, payload, family, no_password, prior):
+    """Steps 3 and 4 of customize(): access, desktop and helpers."""
+    generated = None
     if payload['mode'] in ('install', 'reinstall'):
         print(style.bold('\n3. Access'))
         generated = choose_access(ask, style, payload, no_password)
@@ -1457,6 +1611,11 @@ def customize(ask, style, dest_default, family, no_password=False):
 
 
 def summary_lines(payload, style, generated=None):
+    if payload.get('mode') == 'uninstall':
+        return [f'  Folder      {payload["destination"]}  (uninstall)',
+                '  Removes     Rocsy’s apps, background helpers, shortcuts and the rocsy command',
+                f'  Your files  {"kept" if payload.get("files") == "keep" else "DELETED, with the whole folder"}',
+                f'  App images  {"removed (frees disk space)" if payload.get("remove_images") else "kept"}']
     if payload['components'] is not None:
         chosen = payload['components']
     elif payload['mode'] in ('update', 'repair'):
@@ -1464,6 +1623,7 @@ def summary_lines(payload, style, generated=None):
     else:
         chosen = COMPONENTS
     on = [COMPONENT_TEXT[key][0] for key, value in chosen.items() if value]
+    preset = next((label for key, (label, _text, _on) in PRESETS.items() if preset_components(key) == dict(chosen)), None)
     off = [COMPONENT_TEXT[key][0] for key, value in chosen.items() if not value]
     access = ('current password kept' if payload['mode'] in ('update', 'repair') else 'no password' if payload.get('password_mode') == 'none'
               else 'generated password (shown at the end)' if generated else 'your own password')
@@ -1472,7 +1632,7 @@ def summary_lines(payload, style, generated=None):
                                    ('desktop_launcher', 'desktop launcher'), ('host_helper', 'host helper')) if payload.get(key)]
     return [f'  Folder      {payload["destination"]}  ({payload["mode"]})',
             f'  ComfyUI     {payload["comfy_root"] or "set up inside the Rocsy folder"}',
-            f'  Installs    {", ".join(on) or "core apps only"}' + (style.dim(f'  (skipped: {", ".join(off)})') if off else ''),
+            f'  Installs    {preset + " preset: " if preset else ""}all studios, {", ".join(on) or "no extras"}' + (style.dim(f'  (skipped: {", ".join(off)})') if off else ''),
             f'  Access      {access}',
             f'  Desktop     {", ".join(desk) or "none"}']
 
@@ -1510,6 +1670,8 @@ def terminal_main(options, read=input, secret=None):
                 print(style.bad(f'  {dest} already has files. Choose another folder with --dir, or run --terminal to confirm adding Rocsy there.'))
                 return 1
             payload = default_payload(dest, prior)
+            if options.get('preset'):
+                payload['components'] = preset_components(options['preset'], current_components(dest) if prior else None)
             generated = payload.get('new_password')
             if options.get('no_password') and payload['mode'] == 'install':
                 generated = choose_access(ask, style, payload, no_password=True)
@@ -1529,6 +1691,11 @@ def terminal_main(options, read=input, secret=None):
                 else:
                     payload = default_payload(dest, prior)
                     generated = None
+                    if options.get('preset'):
+                        payload['components'] = preset_components(options['preset'], current_components(dest) if prior else None)
+                    elif payload['mode'] == 'install':
+                        print(style.bold('\nWhat to install'))
+                        payload['components'] = preset_components(ask_preset(ask))
                     if payload['mode'] == 'install':
                         print(style.bold('\nAccess'))
                         generated = choose_access(ask, style, payload, options.get('no_password'))
@@ -1537,7 +1704,7 @@ def terminal_main(options, read=input, secret=None):
                                     '(change it in Settings → Security).'))
         print(style.bold('\nSummary'))
         print('\n'.join(summary_lines(payload, style, generated)))
-        if not options['defaults'] and not ask.yes('Start now?', True):
+        if not options['defaults'] and not ask.yes('Uninstall now?' if payload.get('mode') == 'uninstall' else 'Start now?', True):
             print('Nothing was installed.')
             return 1
     except (KeyboardInterrupt, EOFError):
@@ -1562,13 +1729,19 @@ def terminal_main(options, read=input, secret=None):
         print(style.bad('\nStopped. Run the installer again and choose Repair to finish.'))
         return 130
     except Exception as exc:  # noqa: BLE001
-        print(style.bad(f'\nInstallation failed: {exc}'))
+        print(style.bad(f'\n{"Uninstall" if payload.get("mode") == "uninstall" else "Installation"} failed: {exc}'))
         tail = getattr(exc, 'output', '')
         if tail:
             print(style.dim('\n'.join('  ' + line for line in tail.splitlines()[-25:])))
         if LOG_FILE:
             print(f'Full log: {LOG_FILE}')
         return 1
+    if result['mode'] == 'uninstall':
+        print(style.ok(style.bold('\nRocsy is uninstalled.')))
+        print(f'  Your files are still in {result["destination"]}; run this installer again and choose Update to bring Rocsy back.'
+              if result['kept_files'] else '  The Rocsy folder was deleted.')
+        print(style.dim('  Docker itself, a ComfyUI folder of your own and Personal Hermes (~/.hermes) were not touched.'))
+        return 0
     print(style.ok(style.bold('\nRocsy is ' + {'update': 'updated', 'repair': 'repaired'}.get(result['mode'], 'installed') + '.')))
     print(f'  Open        {result["url"]}')
     if generated and payload.get('password_mode') == 'custom' and result['mode'] in ('install', 'reinstall'):

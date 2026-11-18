@@ -73,6 +73,12 @@
         form.anima_cfg = Number(value('anima-cfg'));
         form.anima_steps = Number(value('anima-steps')) || undefined;
         if (value('anima-negative-prompt').trim()) form.negative_prompt = value('anima-negative-prompt').trim();
+      } else if (model === 'h3_image') {
+        // MiniMax H3 Image: its own 6 steps, no CFG / negative / upscale; the size can follow Reference 1.
+        form.speed = 'standard';
+        form.enhance = false;
+        form.match_reference_size = Boolean(el('match-reference-size')?.checked);
+        form.h3_fast = value('h3-fast') || '';   // Speedup & Saves: pDMD fewer steps
       } else if (model === 'qwen_image_21') {
         form.steps = Number(value('steps'));
         form.cfg = Number(value('cfg'));
@@ -88,7 +94,7 @@
           .map(row => ({ enabled: Boolean(row.querySelector('.lora-enabled')?.checked),
             strength: Number(row.querySelector('.lora-strength')?.value || 1) }));
         try { form.references = JSON.parse(localStorage.getItem('krea.references') || '[]')
-          .slice(0, model === 'qwen_image_21' ? 10 : 4)
+          .slice(0, model === 'qwen_image_21' || model === 'h3_image' ? 10 : 4)
           .map(ref => ({ enabled: Boolean(ref.enabled && ref.image), strength: Number(ref.strength || 1),
             image: ref.image || null, width: ref.width || undefined, height: ref.height || undefined })); }
         catch { form.references = []; }

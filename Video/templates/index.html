@@ -1173,7 +1173,7 @@
               <option value="2">2 GiB</option><option value="4">4 GiB</option><option value="6">6 GiB</option>
               <option value="8" selected>8 GiB</option><option value="10">10 GiB</option><option value="12">12 GiB</option>
             </select><span class="hint">8 GiB is validated on this machine. The amount placed on GPU 1 may be lower because whole model layers are allocated together.</span></div>
-            <p class="hint">GPU 0 is always the first slot. Split weights uses GPU 1 for model storage; Parallel split runs H3 attention on both GPUs and targets 1 GiB free on GPU 1 during sampling. Text conditioning may still use system RAM. This choice is saved with overall H3 presets.</p>
+            <p class="hint">GPU 0 and GPU 1 are the first and second card of GPU Queue → GPUs → "Video two-GPU modes" (by default the biggest card, then the other). Split weights uses GPU 1 for model storage; Parallel split runs H3 attention on both GPUs and targets 1 GiB free on GPU 1 during sampling. Text conditioning may still use system RAM. This choice is saved with overall H3 presets.</p>
           </div>
         </details>
 

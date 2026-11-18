@@ -8,6 +8,13 @@
 # connection; no inbound tunnel port is opened on the host. Its gateway origin
 # remains on loopback.
 
+# Container logs rotate (Docker keeps json-file logs forever by default): 3 x 20 MB per service.
+x-logging: &rocsy-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
 services:
   lock:
     build: ./lock
@@ -15,16 +22,23 @@ services:
     # Distroless image: runs as the host user that owns lock/data (the installer writes ROCSY_UID).
     user: "${ROCSY_UID:-1000}:${ROCSY_GID:-1000}"
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host
+    # The host's process list: VRAM held by games and other programs outside Rocsy is read from
+    # /proc/<pid>/fdinfo (same user only; lock/src/procvram.rs) and not charged to Rocsy's jobs.
+    pid: host
     environment:
       LOCK_PORT: ${LOCK_PORT:-8600}
       QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
       # /Queue/... browser-facing page, routed through the gateway.
       QUEUE_MOUNT_PREFIX: /Queue
+      # Plugin apps whose jobs render in ComfyUI (comma-separated app names), for VRAM accounting.
+      LOCK_COMFY_APPS: ${LOCK_COMFY_APPS:-}
       # Apps get their turns over their own lease stream (lock/PROTOCOL.md); these
       # loopback URLs are only polled for render progress when an app doesn't push it.
       VID_UPSTREAM: http://127.0.0.1:${H3_PORT:-8000}
       MUS_UPSTREAM: http://127.0.0.1:${MUS_PORT:-8200}
+      M3D_UPSTREAM: http://127.0.0.1:${M3D_PORT:-8320}
       KREA_UPSTREAM: http://127.0.0.1:${KREA_PORT:-8300}
       TRAINER_UPSTREAM: http://127.0.0.1:${TRAINER_PORT:-8500}
       VOICE_UPSTREAM: http://127.0.0.1:${VOICE_PORT:-8950}
@@ -34,11 +48,18 @@ services:
       LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
     volumes:
       - ./lock/data:/app/data
+    healthcheck:
+      # Distroless image (no shell, curl or Python): the binary checks its own /health.
+      test: ["CMD", "bunny-lock", "--health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   framework:
     build: ./shared
     container_name: bunny-framework
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host
     environment:
       QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
@@ -78,6 +99,7 @@ services:
     build: ./connections
     container_name: bunny-connections
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host
     environment:
       CONNECTIONS_PORT: ${CONNECTIONS_PORT:-8800}
@@ -116,6 +138,7 @@ services:
     build: ./agent
     container_name: bunny-agent
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host
     # The GPU's media engine (VA-API) for video frames on the Agent page's video boards: decodes
     # never use the CPU. DRM access rule (like video) so it still starts without renderD128.
@@ -173,6 +196,7 @@ services:
     build: ./motion
     container_name: bunny-motion
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host          # Google Fonts at render time; listens on 127.0.0.1 only
     shm_size: 2gb               # Chrome
     device_cgroup_rules:
@@ -202,6 +226,7 @@ services:
     # Opt-in (REA is experimental): COMPOSE_PROFILES=rea in .env, or Models → Core Backend → REA.
     profiles: ["rea"]
     restart: unless-stopped
+    logging: *rocsy-logging
     ports:
       - "127.0.0.1:${REA_PORT:-8975}:8975"
       - "127.0.0.1:${REA_WEB_PORT:-8976}:8976"
@@ -223,10 +248,51 @@ services:
       retries: 3
       start_period: 20s
 
+  # SillyTavern (/SillyTavern): the official image, served by the gateway as a root-only app
+  # (gateway/sillytavern.py). Opt-in: COMPOSE_PROFILES=sillytavern in .env, the installer, or
+  # Models → Core Backend → SillyTavern. Code and Rocsy add-ons live in ../SillyTavern; its
+  # config/, data/ (chats, characters, keys), plugins/ and extensions/ there are this machine's own.
+  sillytavern:
+    image: ghcr.io/sillytavern/sillytavern:${SILLYTAVERN_TAG:-latest}
+    container_name: rocsy-sillytavern
+    profiles: ["sillytavern"]
+    restart: unless-stopped
+    logging: *rocsy-logging
+    # Host network + a 127.0.0.1 bind: only reachable through the Rocsy gateway and its login.
+    network_mode: host
+    environment:
+      PUID: "${ROCSY_UID:-1000}"
+      PGID: "${ROCSY_GID:-1000}"
+      SILLYTAVERN_PORT: ${SILLYTAVERN_PORT:-8140}
+      SILLYTAVERN_LISTENADDRESS_IPV4: 127.0.0.1
+      SILLYTAVERN_PROTOCOL_IPV6: "false"
+      # Every request arrives from the gateway on 127.0.0.1 (the visitor's address in
+      # X-Forwarded-For); Rocsy's login is the access control, so SillyTavern's own IP
+      # whitelist is off and its startup check for that is overridden.
+      SILLYTAVERN_WHITELISTMODE: "false"
+      SILLYTAVERN_SECURITYOVERRIDE: "true"
+      SILLYTAVERN_BROWSERLAUNCH_ENABLED: "false"
+      # Rocsy Addons' server plugin (plugins/rocsy): Voice + llama-swap bridge; the key stays server-side.
+      SILLYTAVERN_ENABLESERVERPLUGINS: "true"
+      SILLYTAVERN_ENABLESERVERPLUGINSAUTOUPDATE: "false"
+      ROCSY_LLAMA_KEY: ${LLAMA_API_KEY:-}
+    volumes:
+      - ../SillyTavern/config:/home/node/app/config
+      - ../SillyTavern/data:/home/node/app/data
+      - ../SillyTavern/plugins:/home/node/app/plugins
+      - ../SillyTavern/extensions:/home/node/app/public/scripts/extensions/third-party
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:${SILLYTAVERN_PORT:-8140}/version').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
   voice:
     build: ./voice
     container_name: bunny-voice
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host
     devices:
       - /dev/kfd
@@ -276,6 +342,7 @@ services:
     build: ./modelhub
     container_name: bunny-models
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host
     # Files it writes in ComfyUI's models folder must belong to the desktop user.
     user: "1000:1000"
@@ -315,6 +382,7 @@ services:
     build: ./gateway
     container_name: bunny-gateway
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host
     depends_on:
       - lock
@@ -334,6 +402,7 @@ services:
       GATEWAY_PORT: ${GATEWAY_PORT:-8080}
       VID_UPSTREAM: http://127.0.0.1:${H3_PORT:-8000}
       MUS_UPSTREAM: http://127.0.0.1:${MUS_PORT:-8200}
+      M3D_UPSTREAM: http://127.0.0.1:${M3D_PORT:-8320}
       KREA_UPSTREAM: http://127.0.0.1:${KREA_PORT:-8300}
       TRAINER_UPSTREAM: http://127.0.0.1:${TRAINER_PORT:-8500}
       LOCK_URL: http://127.0.0.1:${LOCK_PORT:-8600}
@@ -352,6 +421,9 @@ services:
       HOSTCTL_URL: http://127.0.0.1:${HOSTCTL_PORT:-8899}
       HOSTCTL_SECRET: ${HOSTCTL_SECRET:-}
       MAX_BODY_MB: ${MAX_BODY_MB:-50}
+      # Optional services that are on (gateway/sillytavern.py serves /SillyTavern only when its profile is).
+      ROCSY_PROFILES: ${COMPOSE_PROFILES:-}
+      SILLYTAVERN_UPSTREAM: http://127.0.0.1:${SILLYTAVERN_PORT:-8140}
       LLAMA_CONFIG: /llama-config.yaml
       LLAMA_OVERRIDE_DIR: /llama-overrides
     volumes:
@@ -376,6 +448,8 @@ services:
       - ../Video/uploads:/storage/user-uploads
       # Identify H3 continuation frames and generated thumbnails in the Cache view.
       - ../Video/data:/storage/h3-data:ro
+      # SillyTavern character cards, read live by scoped Llama keys with a "character" (llama_keys.py).
+      - ../SillyTavern/data/default-user/characters:/st-characters:ro
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${GATEWAY_PORT:-8080}/health', timeout=3)"]
       interval: 30s
@@ -391,6 +465,7 @@ services:
     build: ../Video
     container_name: video
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host
     # The GPU's media engine for ffmpeg (VA-API h264_vaapi, backend/gpu.py):
     # encodes/decodes never use the CPU. /dev/dri is mounted with a DRM
@@ -468,6 +543,7 @@ services:
     build: ../Music
     container_name: music
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host
     environment:
       BUNNY_FRAMEWORK_URL: http://127.0.0.1:8700
@@ -511,10 +587,45 @@ services:
       retries: 3
       start_period: 10s
 
+  model3d:
+    # 3D Models (/Model3D): picture -> GLB mesh with Hunyuan3D through the shared ComfyUI
+    # (built-in Hunyuan3D v2 nodes). Takes GPU turns as app "Model3D". See ../Model3D/README.md.
+    build: ../Model3D
+    container_name: model3d
+    restart: unless-stopped
+    logging: *rocsy-logging
+    network_mode: host
+    # GLBs land in ../Model3D/data: they belong to the desktop user (open them in Blender etc.).
+    user: "${ROCSY_UID:-1000}:${ROCSY_GID:-1000}"
+    environment:
+      M3D_HOST: 127.0.0.1
+      M3D_PORT: ${M3D_PORT:-8320}
+      M3D_PREFIX: /Model3D
+      M3D_COMFY_URL: ${COMFY_URL:-http://127.0.0.1:8189}
+      M3D_SUPERVISOR_URL: http://127.0.0.1:8083
+      # Text prompts: the Image studio draws the picture as a hidden job (its own GPU turn).
+      M3D_IMAGE_URL: http://127.0.0.1:${KREA_PORT:-8300}/Image
+      M3D_DATA_DIR: /data
+      BUNNY_LOCK_URL: http://127.0.0.1:${LOCK_PORT:-8600}
+      QUEUE_INTERNAL_SECRET: ${QUEUE_INTERNAL_SECRET:?Set QUEUE_INTERNAL_SECRET in .env before starting}
+    volumes:
+      # Shared GPU queue client (protocol v2, lock/PROTOCOL.md).
+      - ./shared/bunnylock.py:/app/bunnylock.py:ro
+      - ../Model3D/data:/data
+      # The page is live: edit ../Model3D/static and reload.
+      - ../Model3D/static:/app/static:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${M3D_PORT:-8320}/Model3D/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   krea:
     build: ../Krea
     container_name: krea
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host
     environment:
       BUNNY_FRAMEWORK_URL: http://127.0.0.1:8700
@@ -563,9 +674,11 @@ services:
     build: ../Llama
     container_name: llama
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host
-    # Expose all render nodes so llama.cpp can use additional GPUs when
-    # LLAMA_GPU_DEVICES names them. The default still selects only ROCm0.
+    # Expose every GPU: llama-launch picks the LLM's cards from the GPU queue
+    # (Queue page -> GPUs: LLM / LLM with Multi-GPU on) via ROCR_VISIBLE_DEVICES.
+    # LLAMA_GPU_DEVICES (ROCm0, ROCm1 ... in PCI order) set in .env overrides that.
     devices:
       - /dev/kfd
       - /dev/dri:/dev/dri
@@ -574,7 +687,9 @@ services:
       LLAMA_PORT: ${LLAMA_PORT:-8400}
       LLAMA_API_KEY: ${LLAMA_API_KEY:?Set LLAMA_API_KEY in .env before starting}
       HOSTCTL_SECRET: ${HOSTCTL_SECRET:?Set HOSTCTL_SECRET in .env before starting}
-      LLAMA_GPU_DEVICES: ${LLAMA_GPU_DEVICES:-ROCm0}
+      LLAMA_GPU_DEVICES: ${LLAMA_GPU_DEVICES:-}
+      LLAMA_MULTI_GPU_DEVICES: ${LLAMA_MULTI_GPU_DEVICES:-}
+      LOCK_URL: http://127.0.0.1:${LOCK_PORT:-8600}
       LLAMA_SPLIT_MODE: ${LLAMA_SPLIT_MODE:-layer}
       LLAMA_GPU_LAYERS: ${LLAMA_GPU_LAYERS:-}
       LLAMA_TENSOR_SPLIT: ${LLAMA_TENSOR_SPLIT:-}
@@ -631,6 +746,7 @@ services:
     image: hermes-agent
     container_name: hermes-agent
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host
     # ROCm compute device passthrough for the laya-context plugin's GPU scoring.
     # Same devices as the llama service; world read-write on this host, no
@@ -668,6 +784,7 @@ services:
     image: hermes-agent
     container_name: hermes-dashboard
     restart: unless-stopped
+    logging: *rocsy-logging
     network_mode: host
     depends_on:
       - hermes-agent
@@ -689,6 +806,7 @@ services:
     image: bunny-trainer
     container_name: bunny-trainer
     restart: unless-stopped
+    logging: *rocsy-logging
     profiles: ["trainer"]
     network_mode: host
     devices:

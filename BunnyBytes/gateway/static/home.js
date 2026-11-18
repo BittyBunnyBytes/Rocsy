@@ -3,7 +3,7 @@
 // #h-initial, so this paints that at once and only polls for changes.
 (() => {
   // Studio ids (Vid, Krea, Mus) stay in URLs and data; people see these names.
-  const LABELS = { Vid: "Video", Krea: "Image", Mus: "Music" };
+  const LABELS = { Vid: "Video", Krea: "Image", Mus: "Music", Model3D: "3D Models" };
   const label = (id) => LABELS[id] || id;
   const $ = (selector, root = document) => root.querySelector(selector);
 
@@ -79,19 +79,34 @@
     strip.replaceChildren(...items.map((item, index) => existing.get(item.thumb) || makeShot(item, index)));
   }
 
+  // Cards that span a whole row (a short last row, or the odd first card on
+  // tablets) are much wider than tall: they get bigger thumbnails, and the
+  // waveform / heatmap are redrawn to fill the width instead of stretching.
+  const WIDE_RATIO = 2.6;
+  const isWide = (card) => { const box = card.getBoundingClientRect(); return box.height > 0 && box.width / box.height > WIDE_RATIO; };
+  // Thumbnails are 640 px: a card wider than that gets the 1280 px copy.
+  const wantsBig = (card) => card.getBoundingClientRect().width > 640;
+  const cssUrl = (src) => `url("${src.replace(/"/g, "%22")}")`;
+  function artSrc(src, art) {
+    if (!src || !src.startsWith("/api/home/thumb")) return src;
+    const base = src.replace(/&size=big\b/, "");
+    return art?.closest(".h-studio")?.dataset.big ? `${base}&size=big` : base;
+  }
+
   function paintArt(latest) {
     for (const [studio, thumb] of Object.entries(latest || {})) {
       const art = $(`.h-studio[data-studio="${studio}"] .h-studio-art`);
       if (!thumb || !art || art.dataset.src === thumb) continue;
       art.dataset.src = thumb;
+      const src = artSrc(thumb, art);
       // Fade in only once the image has loaded, so the card never flashes empty.
       const img = new Image();
       img.decoding = "async";
       img.onload = () => {
-        art.style.backgroundImage = `url("${thumb.replace(/"/g, "%22")}")`;
+        art.style.backgroundImage = cssUrl(src);
         art.classList.add("has-art");
       };
-      img.src = thumb;
+      img.src = src;
     }
   }
 
@@ -101,7 +116,8 @@
   const trainerArt = { key: null, slides: [], index: 0, timer: null };
   const stillMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches || window.RocsyDataSaver?.active;
 
-  function showSlide(art, src) {
+  function showSlide(art, base) {
+    const src = artSrc(base, art);
     const img = new Image();
     img.decoding = "async";
     img.onload = () => {
@@ -115,7 +131,7 @@
       setTimeout(() => [...art.querySelectorAll(".h-art-slide")].slice(0, -1).forEach((old) => old.remove()), 1800);
     };
     img.onerror = () => {  // deleted since: skip it
-      trainerArt.slides = trainerArt.slides.filter((item) => item !== src);
+      trainerArt.slides = trainerArt.slides.filter((item) => item !== base);
       if (trainerArt.timer && trainerArt.slides.length) nextSlide(art);
     };
     img.src = src;
@@ -130,7 +146,7 @@
     if (trainerArt.slides.length > 1 && !stillMotion()) trainerArt.timer = setTimeout(() => nextSlide(art), SLIDE_MS);
   }
 
-  // Plugin cards (plugin.json "home.background"): one picture per visit, or a crossfading
+  // Plugin cards (plugin.json "home.background"): one random picture per visit, or a crossfading
   // slideshow when the plugin asks for one. Same layers as the Trainer card.
   const pluginArt = {};
   function paintPluginArt(all) {
@@ -138,18 +154,22 @@
       const art = document.querySelector(`.h-studio[data-card="${CSS.escape(id)}"] .h-studio-art`);
       if (!art || !show?.pictures?.length) continue;
       const state = pluginArt[id] ||= { key: null, slides: [], index: -1, timer: null };
-      const key = show.slideshow ? show.pictures.join("|") : `one:${show.pictures[0]}`;
+      // One picture: a random pick, kept for the whole visit while the plugin still lists it.
+      const kept = !show.slideshow && state.key?.startsWith("one:") && show.pictures.includes(state.key.slice(4));
+      const key = show.slideshow ? show.pictures.join("|") : kept ? state.key
+        : `one:${show.pictures[Math.floor(Math.random() * show.pictures.length)]}`;
       if (state.key === key) continue;  // same pictures: leave the running show alone
       state.key = key;
       clearTimeout(state.timer);
       art.classList.toggle("h-art-slideshow", !!show.slideshow);
-      state.slides = show.slideshow ? show.pictures : [show.pictures[0]];
+      state.slides = show.slideshow ? show.pictures : [key.slice(4)];
       state.index = -1;
       const next = () => {
         clearTimeout(state.timer);
         if (!state.slides.length) return;
         state.index = (state.index + 1) % state.slides.length;
-        const src = state.slides[state.index];
+        const base = state.slides[state.index];
+        const src = artSrc(base, art);
         const img = new Image();
         img.decoding = "async";
         img.onload = () => {
@@ -161,7 +181,7 @@
           requestAnimationFrame(() => requestAnimationFrame(() => slide.classList.add("on")));
           setTimeout(() => [...art.querySelectorAll(".h-art-slide")].slice(0, -1).forEach((old) => old.remove()), 1800);
         };
-        img.onerror = () => { state.slides = state.slides.filter((item) => item !== src); };
+        img.onerror = () => { state.slides = state.slides.filter((item) => item !== base); };
         img.src = src;
         if (state.slides.length > 1 && !stillMotion()) state.timer = setTimeout(next, SLIDE_MS);
       };
@@ -188,12 +208,13 @@
     const art = $('.h-studio[data-studio="Voice"] .h-studio-art');
     const pictures = info?.art?.pictures;
     if (!art || !pictures?.length || art.dataset.src) return;
-    const src = pictures[Math.floor(Math.random() * pictures.length)];
-    art.dataset.src = src;
+    const base = pictures[Math.floor(Math.random() * pictures.length)];
+    art.dataset.src = base;
+    const src = artSrc(base, art);
     const img = new Image();
     img.decoding = "async";
     img.onload = () => {
-      art.style.backgroundImage = `url("${src.replace(/"/g, "%22")}")`;
+      art.style.backgroundImage = cssUrl(src);
       art.classList.add("has-art");
     };
     img.onerror = () => { delete art.dataset.src; };  // deleted since: try another next poll
@@ -202,14 +223,35 @@
 
   // Music card: a waveform of the newest finished song. The page decodes the
   // audio once per song and keeps the bars in localStorage; data saver skips it.
-  const WAVE_BARS = 96;
-  const waveKey = "rocsy-mus-wave";
+  // The song is measured in WAVE_BARS slices; each draw averages them down to
+  // one bar per ~4.6 px of card width, so a wide card shows more bars, not fatter ones.
+  const WAVE_BARS = 288;
+  const WAVE_PX = 4.6;
+  const waveKey = "rocsy-mus-wave2";
   let waveFor = null;
+  let wavePeaksDrawn = null;
 
-  function drawWave(art, peaks) {
+  function fitPeaks(peaks, width) {
+    const count = Math.max(24, Math.min(peaks.length, Math.round((width || 440) / WAVE_PX)));
+    if (count >= peaks.length) return peaks;
+    const out = [];
+    for (let bar = 0; bar < count; bar++) {
+      const from = Math.floor((bar * peaks.length) / count), to = Math.max(from + 1, Math.floor(((bar + 1) * peaks.length) / count));
+      let sum = 0;
+      for (let i = from; i < to; i++) sum += peaks[i];
+      out.push(sum / (to - from));
+    }
+    const top = Math.max(...out) || 1;
+    return out.map((peak) => peak / top);
+  }
+
+  function drawWave(art, allPeaks) {
+    wavePeaksDrawn = allPeaks;
+    const peaks = fitPeaks(allPeaks, art.clientWidth);
+    art.dataset.bars = peaks.length;
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("class", "h-art-wave");
-    svg.setAttribute("viewBox", `0 0 ${WAVE_BARS * 2} 100`);
+    svg.setAttribute("viewBox", `0 0 ${peaks.length * 2} 100`);
     svg.setAttribute("preserveAspectRatio", "none");
     peaks.forEach((peak, index) => {
       const height = Math.max(2, peak * 96);
@@ -263,15 +305,26 @@
 
   // Vibe Coding card: a GitHub-style grid of coding activity per local day
   // (columns are weeks, Sunday on top), newest week on the right.
+  // Half a year on a normal card; a wider card shows as many more weeks as fit
+  // at the same cell size (up to three years).
   const HEAT_WEEKS = 26;
   let heatKey = null;
+  let heatActivity = null;
+
+  function heatWeeks(art) {
+    const width = art.clientWidth - 32, cell = (art.clientHeight * 0.48) / 7;
+    if (!(width > 0 && cell > 0)) return HEAT_WEEKS;
+    return Math.max(HEAT_WEEKS, Math.min(156, Math.floor(width / cell)));
+  }
 
   function paintCode(activity) {
     const art = $('.h-studio[data-card="Code"] .h-studio-art');
     if (!art || !Array.isArray(activity)) return;
-    const key = JSON.stringify(activity);
+    const weeks = heatWeeks(art);
+    const key = `${weeks}|${JSON.stringify(activity)}`;
     if (heatKey === key) return;
     heatKey = key;
+    heatActivity = activity;
     const dayKey = (date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
     const perDay = new Map();
     for (const [hour, count] of activity) {
@@ -279,13 +332,13 @@
       perDay.set(day, (perDay.get(day) || 0) + count);
     }
     const today = new Date();
-    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay() - (HEAT_WEEKS - 1) * 7);
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay() - (weeks - 1) * 7);
     const top = Math.max(1, ...perDay.values());
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("class", "h-art-heat");
-    svg.setAttribute("viewBox", `0 0 ${HEAT_WEEKS * 12} ${7 * 12}`);
+    svg.setAttribute("viewBox", `0 0 ${weeks * 12} ${7 * 12}`);
     svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
-    for (let week = 0; week < HEAT_WEEKS; week++) {
+    for (let week = 0; week < weeks; week++) {
       for (let weekday = 0; weekday < 7; weekday++) {
         const date = new Date(start.getFullYear(), start.getMonth(), start.getDate() + week * 7 + weekday);
         if (date > today) break;
@@ -304,6 +357,37 @@
     art.replaceChildren(svg);
     art.classList.add("has-art", "has-heat");
   }
+
+  // Re-check which cards are wide whenever the grid reflows (resize, rotation,
+  // a card hidden): swap their pictures to the matching thumbnail size and
+  // redraw the waveform / heatmap for the new width.
+  function resizeArt() {
+    document.querySelectorAll(".h-create > .h-studio").forEach((card) => {
+      card.classList.toggle("h-wide", isWide(card));
+      const big = wantsBig(card);
+      if (!!card.dataset.big === big) return;
+      if (big) card.dataset.big = "1"; else delete card.dataset.big;
+      for (const layer of [card.querySelector(".h-studio-art"), ...card.querySelectorAll(".h-art-slide")]) {
+        const match = layer?.style.backgroundImage.match(/^url\("(.*)"\)$/);
+        if (!match) continue;
+        const next = artSrc(match[1].replace(/%22/g, '"'), layer);
+        if (next === match[1]) continue;
+        const img = new Image();  // swap once loaded, so the card never blanks
+        img.decoding = "async";
+        img.onload = () => { layer.style.backgroundImage = cssUrl(next); };
+        img.src = next;
+      }
+    });
+    const wave = $('.h-studio[data-studio="Mus"] .h-studio-art.has-wave');
+    if (wave && wavePeaksDrawn && fitPeaks(wavePeaksDrawn, wave.clientWidth).length !== Number(wave.dataset.bars)) drawWave(wave, wavePeaksDrawn);
+    if (heatActivity) paintCode(heatActivity);
+  }
+  let resizeFrame = 0;
+  const create = $(".h-create");
+  if (create && window.ResizeObserver) {
+    new ResizeObserver(() => { cancelAnimationFrame(resizeFrame); resizeFrame = requestAnimationFrame(resizeArt); }).observe(create);
+  }
+  resizeArt();
 
   function apply(data) {
     document.querySelectorAll("[data-studio]").forEach((card) => {

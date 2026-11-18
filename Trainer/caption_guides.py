@@ -49,6 +49,12 @@ GUIDES: list[dict[str, Any]] = [
              "(foreground, background, left, right), materials, colours, lighting, mood and the medium (photo, illustration, "
              "3D render, poster). It renders text well: copy every visible word exactly as written, English or Chinese, inside "
              "double quotes, and say where it is and how it looks (font, colour). 60-150 words, in clear sentences."},
+    {"id": "h3image", "label": "MiniMax H3 Image", "group": "Image", "format": NATURAL, "families": ["h3_image"],
+     # MiniMax's H3 Image prompt expander (ComfyUI templates): one long literal English paragraph; Fizgig docs/MINIMAX_IMAGE.md.
+     "text": "MiniMax H3 Image reads long, literal English captions through MiniMax H3's Qwen3-VL-32B encoder. Write one "
+             "paragraph: the medium and style, then the subject with its pose, clothing, materials and colours, where things "
+             "sit in the frame (left, right, foreground, background), the setting, lighting and camera. Copy any visible "
+             "text exactly, inside double quotes, with where it is. Plain sentences, no tag lists or quality words. 60-150 words."},
     {"id": "natural", "label": "Other modern models (SD3, Lumina, HunyuanImage, HiDream)", "group": "Image",
      "format": NATURAL, "families": ["sd3", "lumina2", "hunyuan_image21", "aitk:sd35", "aitk:lumina", "aitk:hidream"],
      "text": "These models read natural language. Write one clear descriptive paragraph: subject, details, action or pose, "

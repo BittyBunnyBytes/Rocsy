@@ -39,6 +39,9 @@ STUDIOS = {
     "Wan Video 14B i2v 720p": ("Video · Wan 2.1 → 2.2", []),
     "YuE2": ("Music · YuE2", ["YuE 2"]),
     "MiniMax Music 3": ("Music · MiniMax Music 3", []),
+    "Hunyuan3D": ("3D Models · Hunyuan3D", ["Hunyuan3D 2.1", "Hunyuan 3D", "Hunyuan3D 2"]),
+    "Trellis.2": ("3D Models · TRELLIS.2", ["TRELLIS.2", "Trellis 2"]),
+    "Pixal3D": ("3D Models · Pixal3D", ["Pixal 3D"]),
 }
 # Studios whose model picker loads .gguf diffusion models (Video's H3 checkpoint list, Image's checkpoint list).
 STUDIO_GGUF = {"MiniMax H3", "Krea 2", "Qwen 2.1"}

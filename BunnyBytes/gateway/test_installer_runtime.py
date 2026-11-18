@@ -63,13 +63,21 @@ class InstallerTests(unittest.TestCase):
         self.bundle = bundle
         # Never install host packages or touch real systemd units from a test; tests opt in.
         self.real_ensure_host_tools = self.module.ensure_host_tools
+        # The tests describe a systemd host with /usr/bin/python3, whatever runs them (a container has neither);
+        # a test about another init system or Python patches these itself.
+        for target, name, value in ((self.module.pkgmanager, 'init_system', 'systemd'),
+                                    (self.module, 'units_python', '/usr/bin/python3'),
+                                    (self.module, 'systemd_user_ok', True)):
+            pin = patch.object(target, name, return_value=value)
+            pin.start()
+            self.addCleanup(pin.stop)
         for name, value in (('ensure_host_tools', lambda *_a, **_k: None), ('prepare_bind_folders', lambda *_a, **_k: None)):
             guard = patch.object(self.module, name, side_effect=value)
             guard.start()
             self.addCleanup(guard.stop)
 
     def make_bundle(self, env_example='MASTER_PASSWORD=\nCOOKIE_SECRET=\n'):
-        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer'):
+        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer', 'Model3D'):
             (self.bundle / name).mkdir(exist_ok=True)
         (self.bundle / 'BunnyBytes' / '.env.example').write_text(env_example)
 
@@ -218,7 +226,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_install_builds_and_starts_compose(self):
         m = self.module
-        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer'):
+        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer', 'Model3D'):
             (self.bundle / name).mkdir(exist_ok=True)
             (self.bundle / name / 'example.txt').write_text(name)
         (self.bundle / 'BunnyBytes' / '.env.example').write_text('MASTER_PASSWORD=\nCOOKIE_SECRET=\n')
@@ -248,7 +256,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_failed_image_build_is_retried(self):
         m = self.module
-        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer'):
+        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer', 'Model3D'):
             (self.bundle / name).mkdir(exist_ok=True)
         (self.bundle / 'BunnyBytes' / '.env.example').write_text('MASTER_PASSWORD=\n')
         flaky = m.CommandFailed('build failed', 'E: Failed to fetch x11-common.deb  400  Bad Request')
@@ -303,7 +311,7 @@ class InstallerTests(unittest.TestCase):
              patch.object(m, 'install_backends', return_value=[]), patch.object(m, 'run_command') as run:
             m.install({'destination': str(dest), 'mode': 'update', 'components': {'rea': False}})
         commands = [call.args[0] for call in run.call_args_list]
-        self.assertIn(['docker', 'compose', '--profile', 'motion', '--profile', 'rea', '--profile', 'trainer',
+        self.assertIn(['docker', 'compose', '--profile', 'motion', '--profile', 'rea', '--profile', 'trainer', '--profile', 'sillytavern',
                        '--profile', 'hermes', 'rm', '--stop', '--force', 'rea'], commands)
         self.assertIn('COMPOSE_PROFILES=motion\n', (dest / 'BunnyBytes/.env').read_text())
 
@@ -313,7 +321,7 @@ class InstallerTests(unittest.TestCase):
         (dest / 'BunnyBytes').mkdir(parents=True)
         (dest / 'BunnyBytes/.env').write_text('MASTER_PASSWORD=x\n')
         self.assertEqual({k: v for k, v in m.current_components(dest).items() if k in m.SERVICE_PROFILES},
-                         {'motion': True, 'rea': True, 'trainer': True})
+                         {'motion': True, 'rea': True, 'trainer': True, 'sillytavern': False})
 
     def test_backend_failure_is_reported_not_fatal(self):
         m = self.module
@@ -483,21 +491,21 @@ class InstallerTests(unittest.TestCase):
 
     def test_enter_takes_the_default_install(self):
         # Enter = default install, Enter = yes to a password, Enter at the password = generate one, start now.
-        code, install = self.terminal_run({'dir': str(self.root / 'fresh')}, answers=['', '', ''], secrets=[''])
+        code, install = self.terminal_run({'dir': str(self.root / 'fresh')}, answers=['', '', '', ''], secrets=[''])   # default install, preset (Enter), password, start
         self.assertEqual(code, 0)
         payload = install.call_args.args[0]
         self.assertEqual((payload['mode'], payload['password_mode']), ('install', 'custom'))
         self.assertGreaterEqual(len(payload['new_password']), 20)
 
     def test_default_install_asks_for_a_typed_password(self):
-        code, install = self.terminal_run({'dir': str(self.root / 'fresh')}, answers=['', 'y', ''],
+        code, install = self.terminal_run({'dir': str(self.root / 'fresh')}, answers=['', '', 'y', ''],
                                           secrets=['short', 'Secret-pass1', 'other-pass1', 'Secret-pass1', 'Secret-pass1'])
         self.assertEqual(code, 0)
         payload = install.call_args.args[0]
         self.assertEqual((payload['password_mode'], payload['new_password']), ('custom', 'Secret-pass1'))
 
     def test_default_install_without_a_password(self):
-        code, install = self.terminal_run({'dir': str(self.root / 'fresh')}, answers=['', 'n', ''])
+        code, install = self.terminal_run({'dir': str(self.root / 'fresh')}, answers=['', '', 'n', ''])
         self.assertEqual(code, 0)
         payload = install.call_args.args[0]
         self.assertEqual((payload['password_mode'], payload['no_password_ack'], payload['new_password']), ('none', True, ''))
@@ -506,7 +514,7 @@ class InstallerTests(unittest.TestCase):
         m = self.module
         with patch.dict(os.environ, {'DISPLAY': ':0'}):
             self.assertEqual(m.parse_terminal_args(['--no-password']), {**m.parse_terminal_args([]), 'no_password': True, 'ui': False})
-        code, install = self.terminal_run({'dir': str(self.root / 'fresh'), 'no_password': True}, answers=['', ''])
+        code, install = self.terminal_run({'dir': str(self.root / 'fresh'), 'no_password': True}, answers=['', '', ''])
         self.assertEqual(code, 0)
         self.assertEqual(install.call_args.args[0]['password_mode'], 'none')
         code, install = self.terminal_run({'defaults': True, 'dir': str(self.root / 'quiet'), 'no_password': True})
@@ -516,17 +524,64 @@ class InstallerTests(unittest.TestCase):
 
     def test_customize_asks_every_step(self):
         answers = ['c', str(self.root / 'custom'), '',          # customize, folder, ComfyUI folder
-                   '', 'y', 'n', 'n', '', 'n', 'y',             # motion, rea, trainer, comfyui, hermes, ytdlp, music
+                   '', 'y',                                     # preset (Recommended), adjust one by one
+                   '', 'y', 'n', 'n', '', 'n', 'y', 'y',        # motion, rea, trainer, comfyui, hermes, ytdlp, music, sillytavern
+                   '',                                          # Music covers need ComfyUI: set it up too (yes)
                    'y',                                         # a password (typed below)
                    'n', '', 'y', '', '',                        # desktop app, rocsy cmd, launcher, helper, system upgrade
                    '']                                          # start now
         code, install = self.terminal_run({}, answers=answers, secrets=['Secret-pass1', 'Secret-pass1'])
         self.assertEqual(code, 0)
         payload = install.call_args.args[0]
-        self.assertEqual(payload['components'], {'motion': True, 'rea': True, 'trainer': False, 'comfyui': False, 'hermes': True, 'ytdlp': False,
-                                                'music': True})
+        self.assertEqual(payload['components'], {'motion': True, 'rea': True, 'trainer': False, 'comfyui': True, 'hermes': True, 'ytdlp': False,
+                                                'music': True, 'sillytavern': True})
         self.assertEqual((payload['new_password'], payload['desktop_app'], payload['desktop_launcher'], payload['allow_system_upgrade']),
                          ('Secret-pass1', False, True, False))
+
+    def test_uninstall_checks_before_removing_anything(self):
+        m = self.module
+        dest = self.root / 'installed'
+        (dest / 'BunnyBytes').mkdir(parents=True)
+        (dest / '.rocsy-install.json').write_text(json.dumps({'format': 1, 'app': 'Rocsy', 'owned_destination': True, 'password_mode': 'custom'}))
+        (dest / 'BunnyBytes/.env').write_text('MASTER_PASSWORD=Secret-pass1\n')
+        base = {'destination': str(dest), 'mode': 'uninstall', 'files': 'keep'}   # no password: it may be forgotten
+        with patch.object(m, 'run_command') as run, patch.object(m, 'command_ok', return_value=True):
+            for bad, message in (({'files': 'delete', 'confirmation_phrase': 'delete'}, 'Type DELETE'),
+                                 ({'files': 'maybe'}, 'keep or delete')):
+                with self.assertRaisesRegex(ValueError, message):
+                    m.install({**base, **bad})
+            run.assert_not_called()
+            m.install({**base, 'current_password': 'a wrong guess'})   # ignored, not checked
+            result = m.install({**base, 'files': 'delete', 'confirmation_phrase': 'DELETE', 'remove_images': True})
+        command = run.call_args.args[0]
+        self.assertEqual(command[-3:], [str(dest), 'delete', 'images'])
+        self.assertTrue(command[1].endswith('BunnyBytes/hostctl/uninstall_worker.py'))
+        self.assertEqual(result, {'mode': 'uninstall', 'destination': str(dest), 'kept_files': False, 'images_removed': True})
+        # A folder that had other files: its contents are never deleted.
+        (dest / '.rocsy-install.json').write_text(json.dumps({'format': 1, 'app': 'Rocsy', 'owned_destination': False}))
+        with patch.object(m, 'run_command'), self.assertRaisesRegex(ValueError, 'keep my files'):
+            m.install({**base, 'files': 'delete', 'confirmation_phrase': 'DELETE'})
+
+    def test_presets(self):
+        m = self.module
+        self.assertEqual(m.preset_components('chat'), {**{key: False for key in m.COMPONENTS}, 'comfyui': True, 'sillytavern': True})
+        self.assertEqual(m.preset_components('recommended'), m.COMPONENTS)   # the default install is the Recommended preset
+        self.assertTrue(m.preset_components('light', kept={'hermes': True, 'motion': True})['hermes'])   # installed backends stay
+        self.assertFalse(m.preset_components('light', kept={'hermes': True, 'motion': True})['motion'])
+        self.assertEqual(m.parse_terminal_args(['--preset', 'music', '--defaults'])['preset'], 'music')
+        with self.assertRaises(SystemExit):
+            m.parse_terminal_args(['--preset=huge'])
+        answers = ['', '3', '', '']   # default install, preset 3 (Music maker), password (generated), start
+        code, install = self.terminal_run({'dir': str(self.root / 'fresh')}, answers=answers, secrets=[''])
+        self.assertEqual(code, 0)
+        self.assertEqual(install.call_args.args[0]['components'], m.preset_components('music'))
+
+    def test_component_advice(self):
+        m = self.module
+        self.assertEqual(m.component_advice({'music': True, 'comfyui': False}, own_comfy=True), [])
+        advice = m.component_advice({'music': True, 'comfyui': False, 'rea': True, 'hermes': False, 'motion': True})
+        self.assertEqual([level for level, _ in advice], ['needs', 'needs', 'recommended'])
+        self.assertIn('REA needs Hermes Agent', advice[1][1])
 
     def test_defaults_refuse_a_folder_with_other_files(self):
         (self.root / 'busy').mkdir()
@@ -563,7 +618,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_update_prepares_the_existing_comfy_root(self):
         m = self.module
-        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer'):
+        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer', 'Model3D'):
             (self.bundle / name).mkdir(exist_ok=True)
             (self.bundle / name / 'example.txt').write_text(name)
         destination = self.root / 'installed'
@@ -623,7 +678,7 @@ class InstallerTests(unittest.TestCase):
 
 
     def _bundle_apps(self):
-        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer'):
+        for name in ('BunnyBytes', 'Video', 'Music', 'Krea', 'Llama', 'Trainer', 'Model3D'):
             (self.bundle / name).mkdir(exist_ok=True)
             (self.bundle / name / 'example.txt').write_text(name)
         (self.bundle / 'BunnyBytes' / '.env.example').write_text('MASTER_PASSWORD=\nCOOKIE_SECRET=\n')
@@ -670,6 +725,7 @@ class InstallerTests(unittest.TestCase):
         m = self.module
         self._bundle_apps()
         # The worker refuses installs under /tmp, so this one lives in the real ~/.cache.
+        REAL_CACHE.mkdir(parents=True, exist_ok=True)  # a fresh account or container may not have ~/.cache yet
         outside = Path(tempfile.mkdtemp(prefix='rocsy-installer-test-', dir=REAL_CACHE))
         self.addCleanup(shutil.rmtree, outside)
         destination = outside / 'installed'

@@ -74,6 +74,8 @@ class LlamaKey:
     allow_images: bool = False                 # vision
     max_images: int = 4
     allow_audio: bool = False
+    allow_chat: bool = True                    # False: a key only for real-time voice
+    allow_realtime_voice: bool = False         # WS /Voice/v1/realtime (voice/realtime/rt_server.py)
     require_loaded: bool = False
     character: str = ""                        # SillyTavern card name ("" = none)
     thinking: bool = True                      # False: chat_template_kwargs.enable_thinking = false
@@ -191,6 +193,10 @@ def _apply(key: LlamaKey, spec: dict) -> None:
         key.allow_audio = bool(spec.get("allow_audio"))
     if "require_loaded" in spec:
         key.require_loaded = bool(spec.get("require_loaded"))
+    if "allow_chat" in spec:
+        key.allow_chat = bool(spec.get("allow_chat"))
+    if "allow_realtime_voice" in spec:
+        key.allow_realtime_voice = bool(spec.get("allow_realtime_voice"))
     if "character" in spec:
         name = str(spec.get("character") or "").strip()
         if name and (not _CARD_NAME.match(name) or name not in characters()):

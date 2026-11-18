@@ -11,7 +11,7 @@
       --bg:#0f1418; --surface:#151c21; --raised:#1a232a; --raised-2:#202b33; --border:#2a353e; --border-strong:#3a4752;
       --text:#e4e8eb; --muted:#9aa6af; --faint:#6f7b84;
       --accent:#e9a04f; --accent-strong:#f2b268; --accent-ink:#22190e; --accent-soft:rgba(233,160,79,.12);
-      --success:#9abc85; --success-soft:rgba(154,188,133,.12); --error:#e39898; --error-soft:rgba(227,152,152,.12); --warn:#e7c37a;
+      --success:#9abc85; --success-soft:rgba(154,188,133,.12); --error:#e39898; --error-soft:rgba(227,152,152,.12); --warn:#e7c37a; --link:#7caad6; --link-soft:rgba(124,170,214,.1);
       --font:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --mono:ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,monospace;
       --radius:10px;
     }
@@ -120,6 +120,162 @@
     .callout.danger { background:var(--error-soft); } .callout.danger::before { content:"!"; background:var(--error); }
     .callout p { margin:0; }
 
+
+    /* ---- service map (step 3) ---- */
+    .svc-legend { display:flex; flex-wrap:wrap; gap:6px 16px; margin:-6px 0 14px; color:var(--muted); font-size:12px; }
+    .svc-legend span { display:inline-flex; align-items:center; gap:7px; }
+    .lg-line { display:inline-block; width:22px; height:0; border-top:2px solid var(--accent); }
+    .lg-line.uses { border-top:2px dashed var(--link); }
+    .lg-dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--accent); }
+    .lg-dot.off { background:none; border:1.5px solid var(--faint); } .lg-dot.core { background:var(--success); }
+    .svc-tips { display:grid; gap:8px; }
+    .svc-tips:empty { display:none; }
+    .svc-tip { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; padding:10px 12px 10px 14px; border:1px solid rgba(124,170,214,.35); border-radius:9px; background:var(--link-soft); font-size:12.5px; }
+    .svc-tip.needs { border-color:rgba(231,195,122,.45); background:rgba(231,195,122,.08); }
+    .svc-tip.done { border-color:rgba(154,188,133,.35); background:var(--success-soft); }
+    .svc-tip p { margin:0; flex:1 1 100%; min-width:0; }
+    .svc-tip .kind { display:inline-block; margin-right:6px; font:10.5px var(--mono); letter-spacing:.06em; text-transform:uppercase; color:var(--link); }
+    .svc-tip.needs .kind { color:var(--warn); } .svc-tip.done .kind { color:var(--success); }
+    .svc-tip .muted { color:var(--muted); }
+    .svc-tip .actions { display:flex; flex-wrap:wrap; gap:6px; margin-left:auto; }
+    .mini { min-height:30px; padding:4px 12px; border:1px solid var(--border-strong); border-radius:7px; background:var(--raised-2); color:var(--text); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; }
+    .mini:hover { border-color:var(--accent); }
+    .mini.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+    .svc-layout { display:grid; grid-template-columns:minmax(0,1fr) 270px; gap:16px; align-items:start; }
+    .svc-map { position:relative; display:grid; gap:18px; }
+    .svc-links { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; z-index:0; }
+    .svc-links path { fill:none; stroke-width:2; stroke-linecap:round; }
+    .svc-links path.needs { stroke:var(--accent); marker-end:url(#arrow-needs); }
+    .svc-links path.uses { stroke:var(--link); stroke-dasharray:5 5; marker-end:url(#arrow-uses); }
+    .svc-links path.off { opacity:.45; }
+    .svc-group { position:relative; }
+    .svc-group h3 { margin:0 0 8px; font-size:12px; font-weight:600; color:var(--text); letter-spacing:.02em; }
+    .svc-group h3 span { margin-left:6px; color:var(--faint); font-weight:400; }
+    .svc-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:16px 12px; }
+    .svc { position:relative; z-index:1; display:grid; grid-template-columns:30px minmax(0,1fr); grid-template-rows:auto auto; column-gap:10px; align-items:center;
+      min-height:62px; padding:10px 11px; border:1px solid var(--border); border-radius:9px; background:var(--raised); text-align:left; cursor:pointer;
+      transition:border-color .12s, background .12s, filter .15s, box-shadow .15s; }
+    .svc:hover { border-color:var(--border-strong); }
+    .svc input { position:absolute; opacity:0; width:1px; height:1px; pointer-events:none; }
+    .svc:has(input:focus-visible) { outline:2px solid var(--accent); outline-offset:2px; }
+    .svc .mono { grid-row:1 / span 2; display:grid; place-items:center; width:30px; height:30px; border-radius:8px; background:var(--raised-2); color:var(--muted); font:600 11px var(--mono); position:relative; }
+    .svc .mono::after { content:""; position:absolute; right:-3px; bottom:-3px; width:10px; height:10px; border-radius:50%; border:2px solid var(--raised); background:var(--faint); }
+    .svc .name { font-size:13px; font-weight:600; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .svc .short { font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .svc .rel { position:absolute; top:-8px; right:8px; padding:0 6px; border-radius:999px; font:10px/16px var(--mono); letter-spacing:.04em; background:var(--raised-2); color:var(--muted); border:1px solid var(--border-strong); }
+    .svc .rel:empty { display:none; }
+    .svc .flag { position:absolute; bottom:-7px; right:8px; padding:0 6px; border-radius:999px; font:9.5px/14px var(--mono); background:var(--raised-2); color:var(--muted); }
+    .svc .flag.big { background:#2b2719; color:var(--warn); }
+    .svc .flag:empty { display:none; }
+    .svc.is-on { border-color:rgba(233,160,79,.65); background:linear-gradient(0deg,rgba(233,160,79,.07),rgba(233,160,79,.07)),var(--raised); }
+    .svc.is-on .mono { background:var(--accent-soft); color:var(--accent); } .svc.is-on .mono::after { background:var(--accent); }
+    .svc.is-off .mono::after { background:var(--raised); border-color:var(--faint); box-shadow:inset 0 0 0 1.5px var(--faint); }
+    .svc.is-core { cursor:pointer; }
+    .svc.is-core .mono { color:var(--success); } .svc.is-core .mono::after { background:var(--success); }
+    .svc.is-kept .mono::after { background:var(--success); }
+    .svc.is-warn { border-color:rgba(231,195,122,.7); }
+    .svc-map.focusing .svc:not(.is-focus):not(.rel-needs):not(.rel-uses):not(.rel-by) { filter:brightness(.55) saturate(.4); }
+    .svc.is-focus { box-shadow:0 0 0 2px var(--text); }
+    .svc.rel-needs { box-shadow:0 0 0 2px var(--accent); } .svc.rel-needs .rel { color:var(--accent-ink); background:var(--accent); border-color:var(--accent); }
+    .svc.rel-uses { box-shadow:0 0 0 2px var(--link); } .svc.rel-uses .rel { color:#0d1720; background:var(--link); border-color:var(--link); }
+    .svc.rel-by { box-shadow:0 0 0 1.5px var(--border-strong); }
+    .svc-side { position:sticky; top:88px; display:grid; gap:10px; max-height:calc(100vh - 110px); overflow:auto; }
+    .svc-detail { padding:16px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); font-size:12.5px; }
+    .svc-detail .head { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+    .svc-detail .head .mono { display:grid; place-items:center; width:34px; height:34px; border-radius:9px; background:var(--raised-2); color:var(--accent); font:600 12px var(--mono); flex:none; }
+    .svc-detail h4 { margin:0; font-size:14.5px; font-weight:650; }
+    .svc-detail .pill { display:inline-block; margin-top:1px; padding:1px 8px; border-radius:999px; font:10.5px var(--mono); background:var(--raised-2); color:var(--muted); }
+    .svc-detail .pill.on { background:var(--accent-soft); color:var(--accent); } .svc-detail .pill.core { background:var(--success-soft); color:var(--success); }
+    .svc-detail > p { margin:0 0 12px; color:var(--muted); }
+    .svc-detail h5 { margin:12px 0 6px; font:10.5px var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--faint); }
+    .svc-detail ul { list-style:none; margin:0; padding:0; display:grid; gap:6px; }
+    .svc-detail li { display:grid; grid-template-columns:auto 1fr; gap:2px 8px; align-items:baseline; }
+    .svc-detail li button.link { border:0; padding:0; background:none; color:var(--text); font-weight:600; cursor:pointer; text-align:left; }
+    .svc-detail li button.link:hover { color:var(--accent); text-decoration:underline; }
+    .svc-detail li .why { grid-column:1 / -1; color:var(--muted); font-size:11.5px; }
+    .svc-detail .st { font:10.5px var(--mono); color:var(--faint); justify-self:end; }
+    .svc-detail .st.ok { color:var(--success); } .svc-detail .st.bad { color:var(--warn); }
+    .svc-detail .toggle { margin-top:14px; width:100%; }
+    .svc-detail .empty { color:var(--faint); }
+
+
+    /* ---- setup style (step 1) ---- */
+    .style-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .style-choice { position:relative; display:grid; grid-template-columns:38px 1fr; gap:12px; align-items:start; padding:14px; border:1px solid var(--border); border-radius:10px; background:var(--raised); cursor:pointer; }
+    .style-choice:hover { border-color:var(--border-strong); }
+    .style-choice input { position:absolute; opacity:0; pointer-events:none; }
+    .style-choice:has(input:checked) { border-color:var(--accent); background:linear-gradient(0deg,rgba(233,160,79,.07),rgba(233,160,79,.07)),var(--raised); }
+    .style-choice:has(input:focus-visible) { outline:2px solid var(--accent); outline-offset:2px; }
+    .style-choice strong { display:block; font-size:14px; }
+    .style-choice .desc { display:block; margin-top:3px; color:var(--muted); font-size:12.5px; }
+    .style-icon, .preset .p-icon { display:grid; place-items:center; width:38px; height:38px; border-radius:10px; background:var(--raised-2); }
+    .style-icon svg, .preset .p-icon svg { width:20px; height:20px; fill:none; stroke:var(--muted); stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+    .style-choice:has(input:checked) .style-icon svg { stroke:var(--accent); }
+
+    /* ---- presets (step 3) ---- */
+    .presets { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:10px; }
+    .preset { position:relative; display:grid; grid-template-rows:auto auto 1fr auto; gap:6px; padding:14px; border:1px solid var(--border); border-radius:10px; background:var(--raised); color:var(--text); text-align:left; cursor:pointer; transition:border-color .12s, background .12s; }
+    .preset:hover { border-color:var(--border-strong); }
+    .preset[aria-checked="true"] { border-color:var(--accent); background:linear-gradient(0deg,rgba(233,160,79,.08),rgba(233,160,79,.08)),var(--raised); }
+    .preset[aria-checked="true"] .p-icon { background:var(--accent-soft); } .preset[aria-checked="true"] .p-icon svg { stroke:var(--accent); }
+    .preset[aria-checked="true"]::after { content:"✓"; position:absolute; top:10px; right:12px; display:grid; place-items:center; width:20px; height:20px; border-radius:50%; background:var(--accent); color:var(--accent-ink); font-size:12px; font-weight:700; }
+    .preset .p-name { font-size:14px; font-weight:650; }
+    .preset .p-blurb { color:var(--muted); font-size:12px; line-height:1.45; }
+    .preset .p-chips { display:flex; flex-wrap:wrap; gap:4px; }
+    .preset .p-chips span { padding:1px 7px; border-radius:999px; background:var(--raised-2); color:var(--muted); font-size:10.5px; }
+    .preset .p-size { color:var(--faint); font:10.5px var(--mono); }
+    .preset .p-tag { position:absolute; top:-8px; left:12px; padding:0 7px; border-radius:999px; background:var(--accent); color:var(--accent-ink); font:600 10px/16px var(--mono); letter-spacing:.04em; }
+    .preset.custom { border-style:dashed; }
+    .preset.custom:not([aria-checked="true"]) { opacity:.6; }
+    .size-bar { display:flex; flex-wrap:wrap; align-items:center; gap:8px 18px; margin:14px 0; padding:12px 14px; border:1px solid var(--border); border-radius:10px; background:var(--surface); font-size:12.5px; color:var(--muted); }
+    .size-bar b { color:var(--text); font-weight:600; }
+    .size-bar .disk { flex:1 1 220px; min-width:0; }
+    .size-bar .track { height:6px; margin-top:6px; border-radius:3px; background:var(--border); overflow:hidden; display:flex; }
+    .size-bar .track i { display:block; height:100%; background:var(--accent); }
+    .size-bar .track i.core { background:var(--success); }
+    .size-bar.tight { border-color:rgba(231,195,122,.5); } .size-bar.short { border-color:rgba(227,152,152,.6); }
+    .size-bar .warn { color:var(--warn); } .size-bar .bad { color:var(--error); }
+    #tips-top .svc-tips { margin-bottom:14px; }
+    details.svc-custom { margin-top:4px; border:1px solid var(--border); border-radius:10px; background:var(--surface); }
+    details.svc-custom > summary { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; padding:13px 16px; cursor:pointer; list-style:none; }
+    details.svc-custom > summary::-webkit-details-marker { display:none; }
+    details.svc-custom > summary::before { content:"▸"; color:var(--accent); transition:transform .15s; }
+    details.svc-custom[open] > summary::before { transform:rotate(90deg); }
+    details.svc-custom .sc-title { font-weight:600; font-size:13px; }
+    details.svc-custom .sc-sub { color:var(--faint); font-size:12px; }
+    details.svc-custom[open] { padding-bottom:16px; }
+    details.svc-custom > :not(summary) { margin-left:16px; margin-right:16px; }
+
+    /* ---- password helpers ---- */
+    .pw-tools { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+    .meter { height:4px; margin-top:6px; border-radius:2px; background:var(--border); overflow:hidden; }
+    .meter i { display:block; height:100%; width:0; background:var(--error); transition:width .2s, background .2s; }
+
+    /* ---- review: what happens ---- */
+    .happen { margin:0; padding-left:20px; display:grid; gap:6px; color:var(--muted); font-size:12.5px; }
+    .happen b { color:var(--text); font-weight:600; }
+    #time-estimate { margin:0 0 10px; color:var(--muted); font-size:12.5px; }
+
+    /* ---- finished ---- */
+    .result.done { font:inherit; white-space:normal; padding:20px; border-radius:12px; background:var(--success-soft); border:1px solid rgba(154,188,133,.35); }
+    .result.done h3 { margin:0 0 6px; font-size:18px; }
+    .result.done p { margin:0 0 10px; color:var(--muted); }
+    .result.done .open-row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:12px 0 16px; }
+    .result.done .secret { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:0 0 14px; padding:10px 12px; border-radius:8px; background:var(--bg); border:1px solid var(--border-strong); }
+    .result.done .secret code { font-size:14px; background:none; padding:0; user-select:all; }
+    .result.done ul, .result.done ol { margin:0 0 12px; padding-left:20px; display:grid; gap:4px; font-size:12.5px; }
+    .result.done .bad-item { color:var(--error); }
+    .result.done h4 { margin:14px 0 6px; font-size:13px; }
+    .result.done details summary { cursor:pointer; color:var(--accent); font-size:12px; }
+    .result.done pre { margin-top:8px; }
+
+
+    .problem-note { margin:12px 0 0; padding:10px 14px; border-radius:9px; background:rgba(231,195,122,.1); border:1px solid rgba(231,195,122,.45); color:var(--warn); font-size:13px; text-align:right; }
+    .nudge { animation:nudge .5s ease 2; }
+    @keyframes nudge { 0%,100% { box-shadow:0 0 0 0 rgba(233,160,79,0); } 50% { box-shadow:0 0 0 4px rgba(233,160,79,.55); } }
+    .steps li.optional-step button { opacity:.62; }
+    .steps li.optional-step .num { border-style:dashed; }
+
     /* ---- review ---- */
     .summary { display:grid; margin:0; }
     .summary div { display:grid; grid-template-columns:150px minmax(0,1fr) auto; gap:14px; align-items:baseline; padding:11px 0; border-bottom:1px solid var(--border); }
@@ -139,6 +295,8 @@
     .button:hover:not(:disabled) { background:var(--accent-strong); border-color:var(--accent-strong); }
     .button:disabled { opacity:.45; cursor:not-allowed; }
     .button.large { min-height:46px; padding:10px 26px; font-size:14.5px; }
+    .button.danger { background:var(--error); border-color:var(--error); color:#2a1414; }
+    .button.danger:hover:not(:disabled) { background:#eaa9a9; border-color:#eaa9a9; }
     .button.ghost { background:none; color:var(--text); border-color:var(--border-strong); font-weight:550; }
     .button.ghost:hover:not(:disabled) { background:var(--raised); border-color:var(--border-strong); }
 
@@ -180,6 +338,14 @@
       .steps li { flex:none; } .steps button > span:last-child { min-width:auto; }
       label.option { grid-template-columns:20px 1fr; } label.option > .badge { grid-column:2; justify-self:start; }
       .summary div { grid-template-columns:1fr auto; } .summary dd { grid-column:1 / -1; grid-row:2; }
+      .svc-layout { grid-template-columns:minmax(0,1fr); }
+      .svc-side { display:contents; }
+      .style-row { grid-template-columns:minmax(0,1fr); }
+      .presets { grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 8px; }
+      .preset { padding:12px; } .preset .p-chips { display:none; }
+      details.svc-custom > :not(summary) { margin-left:10px; margin-right:10px; }
+      .svc-tips { order:-1; } .svc-map { order:0; } .svc-detail { order:1; }
+      .svc-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px 10px; }
       .progress-inner { padding:10px 16px 12px; }
     }
   </style>
@@ -193,15 +359,15 @@
 
   <div class="shell">
     <nav class="rail" aria-label="Installer steps">
-      <h1>Install Rocsy</h1>
-      <p>Six short steps. Nothing changes on this machine until you press Install on the last one.</p>
+      <h1 id="rail-title">Install Rocsy</h1>
+      <p id="rail-intro">A few short steps. Nothing changes on this machine until you press Install on the last one.</p>
       <ol class="steps" id="steps">
         <li><button type="button" data-step="system"><span class="num"><span>1</span></span><span><span class="label">System</span><span class="sub" id="sub-system">Docker and Python</span></span></button></li>
         <li><button type="button" data-step="location"><span class="num"><span>2</span></span><span><span class="label">Location</span><span class="sub" id="sub-location">Where Rocsy lives</span></span></button></li>
         <li><button type="button" data-step="components"><span class="num"><span>3</span></span><span><span class="label">What to install</span><span class="sub" id="sub-components">Services and backends</span></span></button></li>
         <li><button type="button" data-step="access"><span class="num"><span>4</span></span><span><span class="label">Access</span><span class="sub" id="sub-access">Password</span></span></button></li>
         <li><button type="button" data-step="desktop"><span class="num"><span>5</span></span><span><span class="label">Desktop &amp; helpers</span><span class="sub" id="sub-desktop">Launchers and host helper</span></span></button></li>
-        <li><button type="button" data-step="review"><span class="num"><span>6</span></span><span><span class="label">Review &amp; install</span><span class="sub">Check, then start</span></span></button></li>
+        <li><button type="button" data-step="review"><span class="num"><span>6</span></span><span><span class="label" id="review-label">Review &amp; install</span><span class="sub">Check, then start</span></span></button></li>
       </ol>
       <p class="rail-foot">An internet connection is needed for Docker packages, images and the backends you choose. Models and LoRAs download later, in Models.</p>
     </nav>
@@ -209,7 +375,7 @@
     <main class="page">
       <!-- 1 · System -->
       <section data-page="system">
-        <header><p class="eyebrow">Step 1 of 6</p><h2>Your system</h2><p>Rocsy runs in Docker. The installer checks what this machine already has and sets up anything missing with your distribution’s package manager (APT, DNF, Zypper, pacman, APK, XBPS, eopkg or Portage).</p></header>
+        <header><p class="eyebrow" data-eyebrow>Step 1</p><h2>Welcome to Rocsy</h2><p>Rocsy is your own AI studio for video, pictures, music, voice and 3D, running on this computer. First, a quick check of what this machine already has. Anything missing is set up for you.</p></header>
         <div class="card">
           <div class="platform"><div class="glyph" id="platform-glyph">L</div><div><strong class="platform-name" id="platform"></strong><span class="platform-kind" id="platform-kind"></span></div></div>
           <div class="platform-picker" id="platform-picker" hidden><label class="field-title" for="preview-platform">Preview as</label><select id="preview-platform"><option value="auto">Auto detected</option><option value="windows10">Windows 10 (WSL2)</option><option value="windows11">Windows 11 (WSL2)</option></select></div>
@@ -219,23 +385,44 @@
           <div class="options" id="arch-upgrade-option" style="margin-top:14px" hidden><label class="option"><input id="allow-system-upgrade" type="checkbox"><span class="body"><strong>Refresh mirrors and update the system</strong><span class="desc">Only used if Docker packages need installing. CachyOS/Arch 404 errors usually mean a stale package database. This can upgrade packages beyond Docker and may need a reboot.</span></span><span class="badge">Arch</span></label></div>
           <details class="disclosure" id="setup-details"><summary>Manual setup commands</summary><p class="setup-note" id="setup-note"></p><pre id="setup-command"></pre></details>
         </div>
+        <div class="card" id="setup-style">
+          <h3>How would you like to set up?</h3><p>You can switch at any time.</p>
+          <div class="style-row">
+            <label class="style-choice"><input type="radio" name="setup-style" value="quick" checked><span class="style-icon"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></span><span><strong>Quick setup <span class="badge">recommended</span></strong><span class="desc">Pick what you’ll use Rocsy for and a password. Everything else uses sensible defaults.</span></span></label>
+            <label class="style-choice"><input type="radio" name="setup-style" value="custom"><span class="style-icon"><svg viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg></span><span><strong>Custom setup</strong><span class="desc">Choose the folder, every service, launchers and helpers yourself.</span></span></label>
+          </div>
+        </div>
         <div class="pager"><span class="spacer"></span><button class="button" type="button" data-next>Continue</button></div>
       </section>
 
       <!-- 2 · Location -->
       <section data-page="location" hidden>
-        <header><p class="eyebrow">Step 2 of 6</p><h2>Where Rocsy goes</h2><p>Choose a folder for Rocsy itself. If you already use ComfyUI, point Rocsy at it so your models are shared.</p></header>
+        <header><p class="eyebrow" data-eyebrow>Step 2</p><h2 id="header-location">Where Rocsy goes</h2><p id="intro-location">The folder Rocsy lives in. The default is fine for most people. Already use ComfyUI? Point Rocsy at it so you don’t download your models twice.</p></header>
         <div class="card">
-          <div class="field"><label class="field-title" for="destination">Rocsy folder</label><input id="destination" type="text" spellcheck="false" autocomplete="off"><p class="hint">Any writable folder. An existing Rocsy here can be updated, repaired or reinstalled.</p></div>
-          <div class="field"><label class="field-title" for="comfy-root">Existing ComfyUI folder <span class="badge">optional</span></label><input id="comfy-root" type="text" placeholder="Leave empty to let Rocsy set one up" spellcheck="false" autocomplete="off"><p class="hint">A ComfyUI folder that has a <code>models</code> directory.</p></div>
+          <div class="field"><label class="field-title" for="destination">Rocsy folder</label><input id="destination" type="text" spellcheck="false" autocomplete="off"><p class="hint" id="folder-status">Any folder you own. Rocsy creates it if it doesn’t exist.</p></div>
+          <div class="field" id="comfy-root-field"><label class="field-title" for="comfy-root">Existing ComfyUI folder <span class="badge">optional</span></label><input id="comfy-root" type="text" placeholder="Leave empty to let Rocsy set one up" spellcheck="false" autocomplete="off"><p class="hint">A ComfyUI folder that has a <code>models</code> directory.</p></div>
           <div class="options"><label class="option"><input id="allow-existing" type="checkbox"><span class="body"><strong>Add Rocsy to a folder that already has files</strong><span class="desc">Needed when the Rocsy folder isn’t empty. Complete reinstall won’t be available for it later.</span></span></label></div>
         </div>
         <div class="card" id="existing-options" hidden>
-          <h3>Rocsy is already installed here</h3><p>Choose what to do with it.</p>
+          <h3>Rocsy is already installed here</h3><p>What would you like to do? If you’re not sure, choose Update.</p>
           <div class="options">
-            <label class="option"><input type="radio" name="install-mode" value="update"><span class="body"><strong>Update</strong><span class="desc">Install the bundled app files and rebuild the containers. Settings and saved data are kept.</span></span><span class="badge">recommended</span></label>
-            <label class="option"><input type="radio" name="install-mode" value="repair"><span class="body"><strong>Repair</strong><span class="desc">Restore the bundled app files and recreate every container. Settings and saved data are kept.</span></span></label>
-            <label class="option danger"><input type="radio" name="install-mode" value="reinstall"><span class="body"><strong>Complete reinstall</strong><span class="desc">Delete this installation, its saved data and Docker volumes, then install fresh.</span></span><span class="badge danger">deletes data</span></label>
+            <label class="option"><input type="radio" name="install-mode" value="update"><span class="body"><strong>Update to this version</strong><span class="desc">Get the newest Rocsy. Everything you made, your downloaded models, settings and password stay exactly as they are.</span></span><span class="badge">recommended</span></label>
+            <label class="option"><input type="radio" name="install-mode" value="repair"><span class="body"><strong>Repair</strong><span class="desc">For when Rocsy won’t start or something looks broken. Puts the app files back and restarts every part. Your creations and settings stay.</span></span></label>
+            <label class="option"><input type="radio" name="install-mode" value="uninstall"><span class="body"><strong>Uninstall</strong><span class="desc">Remove Rocsy from this computer. Next you choose whether to keep your files. No password needed.</span></span></label>
+            <div class="subpanel" id="uninstall-options" hidden>
+              <div class="options">
+                <label class="option"><input type="radio" name="uninstall-files" value="keep" checked><span class="body"><strong>Remove the app, keep my files</strong><span class="desc">Stops Rocsy and removes its apps, shortcuts and helpers. The folder with what you made, your downloaded AI models and your settings stays, so you can install again later and pick up where you left off.</span></span><span class="badge">recommended</span></label>
+                <label class="option danger" id="uninstall-delete-option"><input type="radio" name="uninstall-files" value="delete"><span class="body"><strong>Remove everything</strong><span class="desc">Also deletes the Rocsy folder: everything you made, every AI model you downloaded and all settings. This can’t be undone.</span></span><span class="badge danger">deletes files</span></label>
+                <p class="hint" id="uninstall-delete-unavailable" hidden>“Remove everything” isn’t offered because this folder had other files before Rocsy was added. Delete what you don’t need yourself afterwards.</p>
+                <label class="option"><input type="checkbox" id="uninstall-images" checked><span class="body"><strong>Free up disk space</strong><span class="desc">Also remove Rocsy’s app images (<span id="uninstall-images-size">about 40 GB</span>). They’re rebuilt automatically if you install again.</span></span></label>
+              </div>
+              <div id="uninstall-delete-confirm" hidden style="margin-top:12px">
+                <div class="callout danger"><p>Everything in <b id="uninstall-folder"></b> will be deleted for good, including your pictures, videos, songs and models. Copy anything you want to keep first.</p></div>
+                <div class="field" style="margin-top:12px"><label class="field-title" for="uninstall-phrase">Type DELETE to confirm</label><input id="uninstall-phrase" type="text" spellcheck="false" autocomplete="off"></div>
+              </div>
+              <p class="hint">Not touched: Docker itself, a ComfyUI folder of your own (if you pointed Rocsy at one) and Personal Hermes in <code>~/.hermes</code>.</p>
+            </div>
+            <label class="option danger"><input type="radio" name="install-mode" value="reinstall"><span class="body"><strong>Start over from scratch</strong><span class="desc">Delete this installation and everything in it, including what you made, then install fresh.</span></span><span class="badge danger">deletes data</span></label>
             <p class="hint warn" id="reinstall-unavailable" hidden>Complete reinstall is unavailable because the folder contained other files before Rocsy was installed.</p>
             <div class="subpanel" id="reinstall-confirm" hidden>
               <div class="callout danger"><p>This permanently removes the installation folder and Rocsy’s Docker volumes.</p></div>
@@ -249,37 +436,47 @@
 
       <!-- 3 · Components -->
       <section data-page="components" hidden>
-        <header><p class="eyebrow">Step 3 of 6</p><h2>What to install</h2><p>Video, Image, Music, Voice, the Master Agent, Models, Llama and Connections are always included. Pick the rest; anything you skip can be installed later in Models → Manager → Core Backend.</p></header>
-        <div class="card">
-          <h3>Optional services</h3><p>Extra Rocsy apps, each built as its own container.</p>
-          <div class="options">
-            <label class="option"><input type="checkbox" data-component="motion" checked><span class="body"><strong>Motion</strong><span class="desc">The video renderer the Master Agent uses for edits and titles (Remotion).</span></span></label>
-            <label class="option"><input type="checkbox" data-component="rea"><span class="body"><strong>REA</strong><span class="desc">Reverse Engineer Anything: guided game modding tools.</span></span><span class="badge">experimental</span></label>
-            <label class="option"><input type="checkbox" data-component="trainer"><span class="body"><strong>Trainer</strong><span class="desc">LoRA training for the image and video models.</span></span><span class="badge big">20+ GB image</span></label>
+        <header><p class="eyebrow" data-eyebrow>Step 3</p><h2 id="header-components">What will you use Rocsy for?</h2><p id="intro-components">Pick a preset. Video, Image, Music, Voice, 3D Models and the rest of the core are always included; presets add the extras that suit you. Nothing is final: add or remove parts later in Models → Manager → Core Backend.</p></header>
+        <div class="presets" id="presets" role="radiogroup" aria-label="Presets"></div>
+        <div class="size-bar" id="size-bar" aria-live="polite"></div>
+        <div id="tips-top"></div>
+        <details class="svc-custom" id="svc-custom">
+        <summary><span class="sc-title">Fine-tune: every service and how they connect</span><span class="sc-sub" id="svc-count"></span></summary>
+        <div class="svc-legend" aria-hidden="true">
+          <span><i class="lg-line needs"></i>needs</span><span><i class="lg-line uses"></i>works with</span>
+          <span><i class="lg-dot on"></i>on</span><span><i class="lg-dot off"></i>off</span><span><i class="lg-dot core"></i>always included</span>
+        </div>
+        <div class="svc-layout">
+          <div class="svc-map" id="svc-map">
+            <svg class="svc-links" id="svc-links" aria-hidden="true"><defs>
+              <marker id="arrow-needs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker>
+              <marker id="arrow-uses" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--link)"/></marker>
+            </defs><g id="svc-paths"></g></svg>
+            <div class="svc-group"><h3>Optional apps <span>each runs in its own container</span></h3><div class="svc-grid" data-group="app"></div></div>
+            <div class="svc-group"><h3>Backends <span>set up after Rocsy starts; one failing doesn’t stop the rest</span></h3><div class="svc-grid" data-group="backend"></div></div>
+            <div class="svc-group"><h3>Always included <span>the core of Rocsy</span></h3><div class="svc-grid" data-group="core"></div></div>
+          </div>
+          <div class="svc-side">
+            <div class="svc-tips" id="svc-tips" aria-live="polite"></div>
+            <aside class="svc-detail" id="svc-detail" aria-live="polite"></aside>
           </div>
         </div>
-        <div class="card">
-          <h3>Core backends</h3><p>Set up after Rocsy starts. One that fails doesn’t stop the rest; you can retry it in Core Backend.</p>
-          <div class="options">
-            <label class="option"><input type="checkbox" data-component="comfyui" checked><span class="body"><strong>ComfyUI</strong><span class="desc">Every studio renders through it. <span id="comfy-plan">Downloads ComfyUI and PyTorch for ROCm into the Rocsy folder</span>, then sets up the supervisor that starts it on demand.</span></span><span class="badge big" id="comfy-size">several GB</span></label>
-            <label class="option"><input type="checkbox" data-component="hermes" checked><span class="body"><strong>Hermes Agent</strong><span class="desc">Runs the Master Agent and Agentic modes. Installs Personal Hermes (the <code>hermes</code> command) and Rocsy’s patched copy, then builds its container.</span></span></label>
-            <label class="option"><input type="checkbox" data-component="ytdlp" checked><span class="body"><strong>yt-dlp</strong><span class="desc">Lets the agent download web video references.</span></span><span class="badge">small</span></label>
-            <label class="option"><input type="checkbox" data-component="music"><span class="body"><strong>Music covers</strong><span class="desc">Covers and custom voices in Music: the YuE2 pack, RSP, the Seed-VC voice converter and every model they load, each checked against its SHA-256. Needs ComfyUI. YuE2 weights are non-commercial (CC BY-NC 4.0).</span></span><span class="badge big">about 15 GB</span></label>
-          </div>
-          <p class="hint" id="components-hint"></p>
-        </div>
+        </details>
+        <p class="hint" id="components-hint"></p>
         <div class="pager"><button class="button ghost" type="button" data-back>Back</button><span class="spacer"></span><button class="button" type="button" data-next>Continue</button></div>
       </section>
 
       <!-- 4 · Access -->
       <section data-page="access" hidden>
-        <header><p class="eyebrow">Step 4 of 6</p><h2>Who can open Rocsy</h2><p>Rocsy is a website on this machine. A password keeps it to you, especially if you make it reachable from the internet later.</p></header>
+        <header><p class="eyebrow" data-eyebrow>Step 4</p><h2>Keep Rocsy private</h2><p>You open Rocsy in a browser window. A password keeps it yours, especially if you reach it from your phone or the internet later.</p></header>
         <div class="card" id="access-kept" hidden><div class="callout"><p>This installation keeps its current password. Change it any time in Settings → Security.</p></div></div>
         <div class="card" id="password-options">
           <div class="options">
             <label class="option"><input type="radio" name="password-mode" value="custom" checked><span class="body"><strong>Set my own password</strong><span class="desc">You can change it later in Settings.</span></span><span class="badge">recommended</span></label>
             <div class="subpanel" id="custom-password-row" hidden>
-              <div class="field"><label class="field-title" for="new-password">New password</label><input id="new-password" type="password" autocomplete="new-password"><p class="hint" id="password-rules">8–200 characters, no spaces at either end, and none of $ # " ' \</p></div>
+              <div class="pw-tools"><button type="button" class="mini primary" id="generate-password">Make a strong one for me</button><button type="button" class="mini" id="show-password" aria-pressed="false">Show</button><button type="button" class="mini" id="copy-password" hidden>Copy</button></div>
+              <p class="hint" id="generated-note" hidden>Copy it into your password manager now. It’s also shown once more when the install finishes.</p>
+              <div class="field"><label class="field-title" for="new-password">New password</label><input id="new-password" type="password" autocomplete="new-password"><div class="meter" id="pw-meter" aria-hidden="true"><i></i></div><p class="hint" id="password-rules">8–200 characters, no spaces at either end, and none of $ # " ' \</p></div>
               <div class="field"><label class="field-title" for="confirm-password">Confirm new password</label><input id="confirm-password" type="password" autocomplete="new-password"><p class="hint" id="password-match" hidden></p></div>
             </div>
             <label class="option danger"><input type="radio" name="password-mode" value="none"><span class="body"><strong>No password</strong><span class="desc">Only for a trusted machine nobody else can reach.</span></span></label>
@@ -294,7 +491,7 @@
 
       <!-- 5 · Desktop & helpers -->
       <section data-page="desktop" hidden>
-        <header><p class="eyebrow">Step 5 of 6</p><h2>Desktop &amp; helpers</h2><p>Ways to open Rocsy, and the helper that lets Settings manage this machine. Uninstalling Rocsy removes all of them; unchecking one in an Update removes just that one.</p></header>
+        <header><p class="eyebrow" data-eyebrow>Step 5</p><h2>Desktop &amp; helpers</h2><p>Ways to open Rocsy, and the helper that lets Settings manage this machine. Uninstalling Rocsy removes all of them; unchecking one in an Update removes just that one.</p></header>
         <div class="card">
           <h3>Open Rocsy</h3><p>Pick any; the website itself is always at <code>http://127.0.0.1:8080</code>.</p>
           <div class="options">
@@ -314,8 +511,9 @@
 
       <!-- 6 · Review -->
       <section data-page="review" hidden>
-        <header><p class="eyebrow">Step 6 of 6</p><h2>Review &amp; install</h2><p>Check your choices. Building the images takes a while the first time; the log is at the bottom of the window.</p></header>
+        <header><p class="eyebrow" data-eyebrow>Step 6</p><h2 id="header-review">Ready to install</h2><p id="intro-review">Check your choices, then press Install. You can leave this window open and do something else; progress shows at the bottom.</p></header>
         <div class="card"><dl class="summary" id="summary"></dl></div>
+        <div class="card" id="what-happens"><h3>What happens next</h3><p id="time-estimate"></p><ol class="happen" id="happen-list"></ol></div>
         <div class="install-row"><button class="button ghost large" type="button" data-back>Back</button><button class="button large" id="install" type="button">Install and build Rocsy</button><p id="install-note">Nothing has been changed yet.</p></div>
         <p class="result" id="result" role="status" aria-live="polite"></p>
       </section>
@@ -337,9 +535,43 @@
     let inspection = null;
     let inspectedDestination = '';
     const selected = name => document.querySelector(`input[name="${name}"]:checked`)?.value;
-    const componentBoxes = () => [...document.querySelectorAll('input[data-component]')];
-    const BACKENDS = ['comfyui', 'hermes', 'ytdlp', 'music'];
-    const COMPONENT_NAMES = {motion: 'Motion', rea: 'REA', trainer: 'Trainer', comfyui: 'ComfyUI', hermes: 'Hermes Agent', ytdlp: 'yt-dlp', music: 'Music covers'};
+    const COMPONENTS_DEFAULT = {motion: true, rea: false, trainer: false, sillytavern: false, comfyui: true, hermes: true, ytdlp: true, music: false};
+    // Presets: the optional parts each one turns on (installer_runtime.PRESETS has the same table).
+    const ICON = {
+      star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
+      chat: '<path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 10h8M8 13h5"/>',
+      music: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
+      flask: '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3M7.5 15h9"/>',
+      agent: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13v1M15 13v1M2 13h3M19 13h3"/>',
+      leaf: '<path d="M5 19c0-8 6-14 15-14 0 9-6 15-14 15"/><path d="M5 19l8-8"/>',
+      layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/><path d="M3 17.5l9 4.5 9-4.5"/>',
+      refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
+      sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+    };
+    const PRESETS = [
+      {id: 'recommended', name: 'Recommended', icon: 'star', tag: 'most people', blurb: 'All the studios plus the Master Agent, which can make and edit things for you.', on: ['comfyui', 'hermes', 'ytdlp', 'motion']},
+      {id: 'chat', name: 'Chat & characters', icon: 'chat', blurb: 'Role-play with your local LLMs in SillyTavern, with voices and pictures in chat.', on: ['comfyui', 'sillytavern']},
+      {id: 'music', name: 'Music maker', icon: 'music', blurb: 'Songs, plus covers and custom singing voices.', on: ['comfyui', 'music']},
+      {id: 'training', name: 'Training lab', icon: 'flask', blurb: 'Train your own LoRAs and use them straight away in the studios.', on: ['comfyui', 'trainer']},
+      {id: 'agent', name: 'Agent & automation', icon: 'agent', blurb: 'The Master Agent with every tool: video edits, web references and game modding.', on: ['comfyui', 'hermes', 'ytdlp', 'motion', 'rea']},
+      {id: 'light', name: 'Lightweight', icon: 'leaf', blurb: 'Just the studios. The smallest download; add anything else later.', on: ['comfyui']},
+      {id: 'everything', name: 'Everything', icon: 'layers', blurb: 'Every part of Rocsy. Needs plenty of disk space.', on: ['comfyui', 'hermes', 'ytdlp', 'motion', 'rea', 'trainer', 'sillytavern', 'music']},
+    ];
+    // Rough disk use in GB (built images and downloads), for the size estimate.
+    const SIZES_GB = {core: 35, comfyui: 10, hermes: 7, ytdlp: 0.05, music: 15, motion: 3.5, rea: 7, trainer: 42, sillytavern: 1};
+    const setupStyle = () => selected('setup-style') || 'quick';
+    const uninstalling = () => !!inspection?.installed && selected('install-mode') === 'uninstall';
+    // Already part of the install being updated (costs nothing to keep).
+    const installedNow = id => existingKept() && !!inspection.current?.components?.[id];
+    // Quick setup skips the folder and launcher steps (defaults), unless the folder needs a decision.
+    function activeSteps() {
+      if (uninstalling()) return ['system', 'location', 'review'];
+      // Update / Repair keep the current password: no Access step.
+      const relevant = STEPS.filter(name => name !== 'access' || passwordNeeded());
+      if (setupStyle() === 'custom') return relevant;
+      const folderNeedsYou = !!inspection?.installed || !!inspection?.has_files || !!folderError;
+      return relevant.filter(name => name !== 'desktop' && (name !== 'location' || folderNeedsYou));
+    }
     const STEPS = ['system', 'location', 'components', 'access', 'desktop', 'review'];
     let step = 'system';
     const visited = new Set(['system']);
@@ -354,42 +586,124 @@
         else button.removeAttribute('aria-current');
       });
       if (name === 'review') renderSummary();
+      if (name === 'components') requestAnimationFrame(drawLinks);
+      renderRail();
       renderStepStates();
       if (focus) { window.scrollTo({top: 0}); document.querySelector(`[data-page="${name}"] h2`)?.focus({preventScroll: true}); }
     }
     function stepProblem(name) {
       // A short reason the step still needs attention, or '' when it is fine.
       if (name === 'location') {
-        if (inspection?.installed && !selected('install-mode')) return 'Choose Update, Repair or Reinstall';
+        if (folderError) return 'Pick a different folder';
+        if (inspection?.has_files && !$('allow-existing').checked) return 'This folder already has files';
+        if (inspection?.installed && !selected('install-mode')) return 'Choose what to do with the Rocsy that’s already here (Update if you’re not sure)';
+        if (uninstalling()) {
+          if (selected('uninstall-files') === 'delete' && $('uninstall-phrase').value.trim().toUpperCase() !== 'DELETE') return 'Type DELETE to confirm removing everything';
+        }
         if (inspection?.installed && selected('install-mode') === 'reinstall' && $('reinstall-phrase').value !== 'REINSTALL ROCSY') return 'Confirm the reinstall';
       }
+      if (name === 'components') {
+        // The one hard requirement the installer can't work around: Music covers install into ComfyUI.
+        const comfy = components().comfyui || ownComfy() || keptBackend('comfyui');
+        if (components().music && !keptBackend('music') && !comfy) return 'Music covers need ComfyUI';
+      }
       if (name === 'access' && passwordNeeded()) {
-        if (selected('password-mode') === 'custom' && !passwordValid()) return 'Set a password';
-        if (selected('password-mode') === 'none' && !$('no-password-ack').checked) return 'Confirm no password';
+        if (selected('password-mode') === 'custom' && !passwordValid()) {
+          const value = $('new-password').value, again = $('confirm-password').value;
+          if (!value) return 'Type a password, or press “Make a strong one for me”';
+          if (value.length < 8) return 'Use at least 8 characters';
+          if (!passwordRulesOk(value)) return value !== value.trim() ? 'Remove the space at the start or end' : 'Leave out $ # " \' \\';
+          if (!again) return 'Type the password again in “Confirm”';
+          return 'The two passwords don’t match';
+        }
+        if (selected('password-mode') === 'none' && !$('no-password-ack').checked) return 'Tick “I understand” to go without a password';
       }
       return '';
     }
     function renderStepStates() {
+      clearSolvedProblems();
       for (const button of document.querySelectorAll('#steps [data-step]')) {
         const name = button.dataset.step;
         const problem = name === 'review' ? '' : stepProblem(name);
         button.classList.toggle('warn', !!problem && visited.has(name) && name !== step);
         button.classList.toggle('done', !problem && visited.has(name) && name !== step && name !== 'review');
       }
-      $('sub-location').textContent = $('destination').value || 'Where Rocsy lives';
+      const skipped = name => setupStyle() === 'quick' && !activeSteps().includes(name);
+      $('sub-location').textContent = (skipped('location') ? 'Default: ' : '') + ($('destination').value || 'Where Rocsy lives');
       const on = Object.entries(components()).filter(([, value]) => value).map(([key]) => COMPONENT_NAMES[key]);
       $('sub-components').textContent = on.length ? on.join(', ') : 'Core apps only';
       $('sub-access').textContent = !passwordNeeded() ? 'Keeps the current password' : selected('password-mode') === 'none' ? 'No password' : 'Your own password';
       const desk = [['desktop-app', 'Desktop'], ['terminal-command', 'rocsy'], ['host-helper', 'helper']].filter(([id]) => $(id).checked).map(([, label]) => label);
-      $('sub-desktop').textContent = desk.length ? desk.join(' · ') : 'None';
+      $('sub-desktop').textContent = (skipped('desktop') ? 'Default: ' : '') + (desk.length ? desk.join(' · ') : 'None');
+    }
+    function renderRail() {
+      const active = activeSteps();
+      document.querySelectorAll('#steps [data-step]').forEach(button => {
+        const index = active.indexOf(button.dataset.step);
+        // Quick setup keeps the skipped steps listed (dimmed, with their defaults) so they can still be opened.
+        button.closest('li').classList.toggle('optional-step', index < 0);
+        button.closest('li').hidden = uninstalling() && index < 0;
+        button.querySelector('.num span').textContent = index < 0 ? '·' : index + 1;
+      });
+      document.querySelectorAll('[data-page]').forEach(page => {
+        const index = active.indexOf(page.dataset.page);
+        const eyebrow = page.querySelector('[data-eyebrow]');
+        if (eyebrow) eyebrow.textContent = index < 0 ? 'Optional · defaults are used if you skip this' : `Step ${index + 1} of ${active.length}`;
+      });
+      const removing = uninstalling(), existing = !!inspection?.installed;
+      const verb = removing ? 'Uninstall' : existing ? ({update: 'Update', repair: 'Repair', reinstall: 'Reinstall'}[selected('install-mode')] || 'Manage') : 'Install';
+      $('rail-title').textContent = `${verb} Rocsy`;
+      $('review-label').textContent = removing ? 'Review & uninstall' : `Review & ${verb.toLowerCase()}`;
+      $('header-location').textContent = existing ? 'Your Rocsy' : 'Where Rocsy goes';
+      $('intro-location').textContent = existing ? 'Rocsy is already on this computer. Choose what to do with it.' : 'The folder Rocsy lives in. The default is fine for most people. Already use ComfyUI? Point Rocsy at it so you don’t download your models twice.';
+      $('comfy-root-field').hidden = removing;
+      $('intro-review').textContent = removing ? 'Check your choices, then press the button below. Nothing is removed until you do.'
+        : `Check your choices, then press ${verb}. You can leave this window open and do something else; progress shows at the bottom.`;
+      $('rail-intro').textContent = `${active.length} short steps${setupStyle() === 'quick' && !removing ? ' (quick setup)' : ''}. Nothing changes on this machine until you press ${verb} on the last one.`;
+    }
+    // The step after (or before) this one in the current setup style, even from a skipped step.
+    function neighbour(direction) {
+      const active = activeSteps(), at = STEPS.indexOf(step);
+      const pool = direction > 0 ? active.filter(name => STEPS.indexOf(name) > at) : active.filter(name => STEPS.indexOf(name) < at).reverse();
+      return pool[0] || step;
     }
     document.querySelectorAll('#steps [data-step]').forEach(button => button.addEventListener('click', () => showStep(button.dataset.step)));
     document.querySelectorAll('[data-next]').forEach(button => button.addEventListener('click', () => {
       const problem = stepProblem(step);
-      if (problem) { flash(button, problem); return; }
-      showStep(STEPS[Math.min(STEPS.indexOf(step) + 1, STEPS.length - 1)]);
+      if (problem) { showProblem(step, problem); return; }
+      showStep(neighbour(1));
     }));
-    document.querySelectorAll('[data-back]').forEach(button => button.addEventListener('click', () => showStep(STEPS[Math.max(STEPS.indexOf(step) - 1, 0)])));
+    document.querySelectorAll('[data-back]').forEach(button => button.addEventListener('click', () => showStep(neighbour(-1))));
+    document.querySelectorAll('input[name="setup-style"]').forEach(input => input.addEventListener('change', () => {
+      $('svc-custom').open = setupStyle() === 'custom';
+      placeTips();
+      renderRail();
+      renderStepStates();
+    }));
+    // Where to send someone to fix a step's problem.
+    function problemTarget(name) {
+      if (name === 'location' && inspection?.installed && !selected('install-mode')) return $('existing-options');
+      if (name === 'location' && uninstalling()) return $('uninstall-phrase');
+      if (name === 'location') return folderError || inspection?.has_files === false ? $('destination') : inspection?.has_files && !$('allow-existing').checked ? $('allow-existing') : $('existing-options');
+      if (name === 'access') return selected('password-mode') === 'none' ? $('no-password-ack') : !passwordRulesOk($('new-password').value) ? $('new-password') : $('confirm-password');
+      if (name === 'components') return $('svc-tips').querySelector('button.primary') || $('svc-tips');
+      return null;
+    }
+    function showProblem(name, text) {
+      const page = document.querySelector(`[data-page="${name}"]`);
+      let note = page.querySelector('.problem-note');
+      if (!note) { note = document.createElement('p'); note.className = 'problem-note'; note.setAttribute('role', 'alert'); page.querySelector('.pager').after(note); }
+      note.textContent = text + '.';
+      note.hidden = false;
+      const target = problemTarget(name);
+      if (target) { target.scrollIntoView({block: 'center', behavior: 'smooth'}); target.focus?.({preventScroll: true}); target.classList.add('nudge'); setTimeout(() => target.classList.remove('nudge'), 1200); }
+    }
+    function clearSolvedProblems() {
+      document.querySelectorAll('.problem-note:not([hidden])').forEach(note => {
+        const name = note.closest('[data-page]').dataset.page, problem = stepProblem(name);
+        if (problem && activeSteps().includes(name)) note.textContent = problem + '.'; else note.hidden = true;
+      });
+    }
     function flash(button, text) {
       const old = button.textContent;
       button.textContent = text;
@@ -398,36 +712,373 @@
     }
     document.querySelectorAll('[data-page] h2').forEach(h2 => h2.setAttribute('tabindex', '-1'));
 
-    // ---- components ----
+    // ---- components: the service map ----
+    // Every part of Rocsy. Optional ones (app / backend) are the installer's components; core ones are always installed.
+    const SERVICES = {
+      motion: {group: 'app', mono: 'Mo', name: 'Motion', short: 'Video renderer', flag: '3.5 GB', desc: 'Renders the Master Agent’s video edits, titles and motion graphics (Remotion).'},
+      rea: {group: 'app', mono: 'RE', name: 'REA', short: 'Game modding tools', flag: 'experimental · 7 GB', desc: 'Reverse Engineer Anything: guided game modding tools, given to Hermes as MCP tools.'},
+      trainer: {group: 'app', mono: 'Tr', name: 'Trainer', short: 'LoRA training', flag: 'about 40 GB', big: true, desc: 'LoRA training for the image, video, music and LLM models; publishes straight into the studios.'},
+      sillytavern: {group: 'app', mono: 'ST', name: 'SillyTavern', short: 'Character chat', flag: 'experimental · 1 GB', desc: 'Chat frontend for characters and role-play at /SillyTavern, behind the Rocsy login. Manage and update it in Models → Core Backend.'},
+      comfyui: {group: 'backend', mono: 'Cf', name: 'ComfyUI', short: 'Render engine', flag: 'about 10 GB', big: true, desc: 'The engine the studios render with. Downloads ComfyUI and PyTorch for ROCm into the Rocsy folder, then sets up the supervisor that starts it on demand.'},
+      hermes: {group: 'backend', mono: 'He', name: 'Hermes Agent', short: 'Agent runtime', flag: 'about 7 GB', desc: 'Runs the Master Agent and Agentic modes. Installs Personal Hermes (the hermes command) and Rocsy’s patched copy, then builds its container.'},
+      ytdlp: {group: 'backend', mono: 'yt', name: 'yt-dlp', short: 'Web video fetcher', flag: 'small', desc: 'Lets the agent download web videos to use as references.'},
+      music: {group: 'backend', mono: 'Co', name: 'Music covers', short: 'Covers & voices', flag: 'about 15 GB', big: true, desc: 'Covers and custom voices in Music: the YuE2 pack, RSP, the Seed-VC voice converter and every model they load, each checked against its SHA-256. YuE2 weights are non-commercial (CC BY-NC 4.0).'},
+      video: {group: 'core', mono: 'Vi', name: 'Video', short: 'Video studio', desc: 'Text- and image-to-video, edits and upscales.'},
+      image: {group: 'core', mono: 'Im', name: 'Image', short: 'Image studio', desc: 'Pictures, edits and inpainting.'},
+      studio_music: {group: 'core', mono: 'Mu', name: 'Music', short: 'Music studio', desc: 'Songs, stems and sound effects.'},
+      voice: {group: 'core', mono: 'Vo', name: 'Voice', short: 'Speech & cloning', desc: 'Text to speech, voice cloning and speech recognition.'},
+      model3d: {group: 'core', mono: '3D', name: '3D Models', short: 'Models from pictures', flag: 'experimental', desc: 'Textured, rigged 3D models from a picture or a prompt (Hunyuan3D, TRELLIS.2, Pixal3D).'},
+      agent: {group: 'core', mono: 'MA', name: 'Master Agent', short: 'Drives the studios', desc: 'One chat that plans and runs work across Video, Image, Music and the Trainer.'},
+      llama: {group: 'core', mono: 'Ll', name: 'Llama', short: 'Local LLMs (llama-swap)', desc: 'Serves your local LLMs through llama-swap, loading each model when something asks for it.'},
+      models: {group: 'core', mono: 'Md', name: 'Models', short: 'Downloads & updates', desc: 'Searches Civitai and Hugging Face, downloads models, checks they fit your GPU.'},
+      connections: {group: 'core', mono: 'Cn', name: 'Connections', short: 'Remote access & accounts', desc: 'Tunnels to reach Rocsy from anywhere, plus the social accounts the agent can post to.'},
+      queue: {group: 'core', mono: 'Qu', name: 'GPU queue', short: 'Shares the GPU', desc: 'Takes turns on the GPU so jobs from different studios never run out of memory together.'},
+    };
+    // [from, to, kind, why]: "needs" = doesn't work without it; "uses" = works better with it.
+    const LINKS = [
+      ['video', 'comfyui', 'needs', 'Renders through ComfyUI.'],
+      ['image', 'comfyui', 'needs', 'Renders through ComfyUI.'],
+      ['studio_music', 'comfyui', 'needs', 'Renders through ComfyUI.'],
+      ['model3d', 'comfyui', 'needs', 'Hunyuan3D, TRELLIS.2 and Pixal3D run in ComfyUI.'],
+      ['model3d', 'image', 'uses', 'Draws the reference picture for a text prompt.'],
+      ['music', 'comfyui', 'needs', 'YuE2, RSP and Seed-VC run as ComfyUI nodes.'],
+      ['music', 'studio_music', 'uses', 'Adds Covers and custom voices to the Music studio.'],
+      ['agent', 'hermes', 'needs', 'Hermes runs the Master Agent and Agentic modes.'],
+      ['agent', 'video', 'uses', 'Makes and edits videos for you.'],
+      ['agent', 'image', 'uses', 'Makes pictures for you.'],
+      ['agent', 'studio_music', 'uses', 'Makes songs for you.'],
+      ['hermes', 'llama', 'uses', 'Thinks with your local LLM (or a cloud provider you add).'],
+      ['motion', 'agent', 'uses', 'Renders the video projects the Master Agent writes.'],
+      ['ytdlp', 'agent', 'uses', 'The agent downloads web video references with it.'],
+      ['rea', 'hermes', 'needs', 'Its tools are served to Hermes (MCP).'],
+      ['sillytavern', 'llama', 'needs', 'Chats with your local LLMs through llama-swap.'],
+      ['sillytavern', 'voice', 'uses', 'Reads replies aloud and listens to you (Rocsy Addons).'],
+      ['sillytavern', 'image', 'uses', 'Draws character pictures in chat (Rocsy Addons).'],
+      ['trainer', 'comfyui', 'uses', 'Trains on the base models in ComfyUI’s folder.'],
+      ['trainer', 'image', 'uses', 'Publishes finished LoRAs to Image, Music and Llama.'],
+      ['models', 'comfyui', 'uses', 'Downloads image, video and audio models into ComfyUI’s folder.'],
+      ['models', 'llama', 'uses', 'Adds downloaded LLMs to llama-swap.'],
+      ['connections', 'agent', 'uses', 'Accounts the agent can post to.'],
+      ...['video', 'image', 'studio_music', 'voice', 'model3d', 'llama', 'trainer'].map(id => [id, 'queue', 'needs', 'Waits its turn on the GPU.']),
+    ];
+    const BACKENDS = ['comfyui', 'hermes', 'ytdlp', 'music'];
+    const COMPONENT_NAMES = Object.fromEntries(['motion', 'rea', 'trainer', 'sillytavern', ...BACKENDS].map(id => [id, SERVICES[id].name]));
+    const componentBoxes = () => [...document.querySelectorAll('input[data-component]')];
+    const optional = id => SERVICES[id].group !== 'core';
+    const box = id => document.querySelector(`input[data-component="${id}"]`);
+    let focusId = null, pinnedId = null, toastHtml = '';
+
+    (function buildMap() {
+      for (const [id, s] of Object.entries(SERVICES)) {
+        const card = document.createElement(optional(id) ? 'label' : 'button');
+        card.className = 'svc';
+        card.dataset.svc = id;
+        if (!optional(id)) { card.type = 'button'; card.setAttribute('aria-label', `${s.name}: always included. Show its connections.`); }
+        card.innerHTML = (optional(id) ? `<input type="checkbox" data-component="${id}"${COMPONENTS_DEFAULT[id] ? ' checked' : ''}>` : '')
+          + `<span class="mono">${s.mono}</span><span class="name">${s.name}</span><span class="short">${s.short}</span>`
+          + `<span class="rel"></span><span class="flag${s.big ? ' big' : ''}">${s.flag || ''}</span>`;
+        document.querySelector(`.svc-grid[data-group="${s.group}"]`).append(card);
+        // Hover previews for a mouse only: a tap selects (and touch has no "leave").
+        card.addEventListener('pointerenter', event => { if (event.pointerType === 'mouse') setFocus(id, false); });
+        card.addEventListener('pointerleave', event => { if (event.pointerType === 'mouse') setFocus(pinnedId, false); });
+        card.addEventListener('focusin', () => setFocus(id, true));
+        if (!optional(id)) card.addEventListener('click', () => setFocus(id, true));
+        else card.querySelector('input').addEventListener('change', event => { setFocus(id, true); toggled(id, event.target.checked); });
+      }
+      window.addEventListener('resize', () => drawLinks());
+    })();
+
+    function ownComfy() { return !!$('comfy-root').value.trim(); }
+    function keptBackend(id) { return existingKept() && BACKENDS.includes(id) && !!inspection.current?.components?.[id]; }
+    function isOn(id) { return !optional(id) || box(id).checked; }
+    // A "needs" link to ComfyUI is met by the user's own ComfyUI folder too (only the on-demand supervisor is missing).
+    function linkKind(to, kind) { return kind === 'needs' && to === 'comfyui' && ownComfy() ? 'uses' : kind; }
+    function linksOf(id) {
+      return {out: LINKS.filter(([from]) => from === id), in: LINKS.filter(([, to]) => to === id)};
+    }
+    // Optional services that are off but something on needs or works better with, grouped by that service.
+    function missing() {
+      const found = new Map();
+      for (const [from, to, kind] of LINKS) {
+        if (!isOn(from) || !optional(to) || isOn(to)) continue;
+        const entry = found.get(to) || {needs: [], uses: []};
+        entry[linkKind(to, kind)].push(from);
+        found.set(to, entry);
+      }
+      return found;
+    }
+    const names = ids => {
+      const list = ids.map(id => SERVICES[id].name);
+      return list.length < 3 ? list.join(' and ') : list.slice(0, -1).join(', ') + ' and ' + list.at(-1);
+    };
+
+    function toggled(id, on) {
+      const s = SERVICES[id];
+      const {out, in: incoming} = linksOf(id);
+      const parts = [];
+      if (on) {
+        // Turn on what it can't work without, and say what it relies on that is always there.
+        const turnedOn = out.filter(([, to, kind]) => linkKind(to, kind) === 'needs' && optional(to) && !isOn(to)).map(([, to]) => to);
+        turnedOn.forEach(to => { box(to).checked = true; });
+        if (turnedOn.length) parts.push(`Also turned on <b>${names(turnedOn)}</b>: ${s.name} needs ${turnedOn.length > 1 ? 'them' : 'it'}.`);
+        const core = out.filter(([, to]) => !optional(to)).map(([, to]) => to);
+        if (core.length) parts.push(`It works with <b>${names(core)}</b>, ${core.length > 1 ? 'which are' : 'which is'} always included.`);
+        const recommend = out.filter(([, to, kind]) => linkKind(to, kind) === 'uses' && optional(to) && !isOn(to)).map(([, to]) => to);
+        if (recommend.length) parts.push(`Recommended: <b>${names(recommend)}</b> (see below).`);
+        toastHtml = `<div class="svc-tip done"><p><span class="kind">on</span><b>${s.name}</b> is on. ${parts.join(' ')}</p>`
+          + (turnedOn.length ? `<div class="actions"><button class="mini" type="button" data-undo="${turnedOn.join(',')}">Undo</button></div>` : '') + '</div>';
+      } else {
+        const hurt = incoming.filter(([from, , kind]) => linkKind(id, kind) === 'needs' && isOn(from)).map(([from]) => from);
+        toastHtml = hurt.length ? '' : `<div class="svc-tip done"><p><span class="kind">off</span><b>${s.name}</b> won’t be installed.${keptBackend(id) ? '' : ' You can add it later in Models → Core Backend.'}</p></div>`;
+      }
+      renderComponents();
+    }
+
+    function renderTips() {
+      const rows = [];
+      for (const [id, {needs, uses}] of missing()) {
+        const s = SERVICES[id];
+        // Something you chose can't work without it: a warning. Only always-included parts (e.g. the Master Agent
+        // without Hermes): a heads-up, since leaving it out is a fine choice that just keeps them idle.
+        const chosenNeed = needs.some(optional);
+        const severity = chosenNeed ? 'needs' : 'uses';
+        let text = chosenNeed ? `<span class="kind">needed</span><b>${s.name}</b> is off, but ${names(needs)} ${needs.length > 1 ? 'need' : 'needs'} it.`
+          : needs.length ? `<span class="kind">heads-up</span>${names(needs)} ${needs.length > 1 ? 'stay' : 'stays'} idle without <b>${s.name}</b>. That’s fine if you won’t use ${needs.length > 1 ? 'them' : 'it'}; add it now or later.`
+          : `<span class="kind">recommended</span>${names(uses)} ${uses.length > 1 ? 'work' : 'works'} best with <b>${s.name}</b>.`;
+        if (needs.length && uses.length) text += ` <span class="muted">${names(uses)} also ${uses.length > 1 ? 'use' : 'uses'} it.</span>`;
+        if (id === 'comfyui' && ownComfy()) text += ' <span class="muted">Your ComfyUI folder is used either way; this adds the supervisor that starts it on demand.</span>';
+        const offers = needs.filter(optional);
+        rows.push(`<div class="svc-tip ${severity}"><p>${text}</p><div class="actions">`
+          + offers.map(from => `<button class="mini" type="button" data-off="${from}">Skip ${SERVICES[from].name}</button>`).join('')
+          + `<button class="mini primary" type="button" data-on="${id}">Turn on ${s.name}</button></div></div>`);
+      }
+      $('svc-tips').innerHTML = toastHtml + rows.join('');
+    }
+    $('svc-tips').addEventListener('click', event => {
+      const button = event.target.closest('button');
+      if (!button) return;
+      if (button.dataset.on) { box(button.dataset.on).checked = true; toggled(button.dataset.on, true); setFocus(button.dataset.on, true); }
+      if (button.dataset.off) { box(button.dataset.off).checked = false; toggled(button.dataset.off, false); }
+      if (button.dataset.keep !== undefined) { applyPreset('current'); return; }
+      if (button.dataset.undo) { button.dataset.undo.split(',').forEach(id => { box(id).checked = false; }); toastHtml = ''; renderComponents(); }
+    });
+
+    function setFocus(id, pin) {
+      if (pin) pinnedId = id;
+      focusId = id;
+      const map = $('svc-map');
+      map.classList.toggle('focusing', !!id);
+      const {out, in: incoming} = id ? linksOf(id) : {out: [], in: []};
+      for (const card of map.querySelectorAll('.svc')) {
+        const other = card.dataset.svc;
+        const o = out.find(([, to]) => to === other), i = incoming.find(([from]) => from === other);
+        const kind = o ? linkKind(other, o[2]) : null;
+        card.classList.toggle('is-focus', other === id);
+        card.classList.toggle('rel-needs', kind === 'needs');
+        card.classList.toggle('rel-uses', kind === 'uses');
+        card.classList.toggle('rel-by', !o && !!i);
+        card.querySelector('.rel').textContent = kind === 'needs' ? 'needed' : kind === 'uses' ? 'works with' : i ? (linkKind(id, i[2]) === 'needs' ? 'needs this' : 'uses this') : '';
+      }
+      renderDetail();
+      drawLinks();
+    }
+
+    function renderDetail() {
+      const id = focusId || pinnedId;
+      const panel = $('svc-detail');
+      if (!id) {
+        const on = Object.keys(SERVICES).filter(key => optional(key) && isOn(key)).length;
+        panel.innerHTML = `<p class="empty" style="margin:0">Hover or tap any service to see what it needs, what it works with and what uses it.</p>`
+          + `<h5>Your selection</h5><p style="margin:0">${on} optional part${on === 1 ? '' : 's'} on, plus the ${Object.values(SERVICES).filter(s => s.group === 'core').length} always included.</p>`;
+        return;
+      }
+      const s = SERVICES[id];
+      const {out, in: incoming} = linksOf(id);
+      const state = !optional(id) ? ['core', 'always included'] : keptBackend(id) ? ['core', 'installed'] : isOn(id) ? ['on', 'on'] : ['', 'off'];
+      const status = other => !optional(other) ? '<span class="st ok">included</span>' : isOn(other) ? '<span class="st ok">on</span>' : '<span class="st bad">off</span>';
+      const item = (other, why, showStatus) => `<li><button class="link" type="button" data-goto="${other}">${SERVICES[other].name}</button>${showStatus ? status(other) : '<span></span>'}<span class="why">${why}</span></li>`;
+      const section = (title, rows) => rows.length ? `<h5>${title}</h5><ul>${rows.join('')}</ul>` : '';
+      const desc = id === 'comfyui' && ownComfy() ? 'Uses the ComfyUI folder you entered in step 2 and sets up the supervisor that starts it on demand.' : s.desc;
+      panel.innerHTML = `<div class="head"><span class="mono">${s.mono}</span><div><h4>${s.name}</h4><span class="pill ${state[0]}">${state[1]}</span></div></div><p>${desc}</p>`
+        + section('Needs', out.filter(([, to, kind]) => linkKind(to, kind) === 'needs').map(([, to, , why]) => item(to, why, true)))
+        + section('Works with', out.filter(([, to, kind]) => linkKind(to, kind) === 'uses').map(([, to, , why]) => item(to, why, true)))
+        + section('Used by', incoming.map(([from, , kind, why]) => item(from, (linkKind(id, kind) === 'needs' ? 'Needs it. ' : '') + why, true)))
+        + (optional(id) && !keptBackend(id) ? `<button class="mini toggle${isOn(id) ? '' : ' primary'}" type="button" data-flip="${id}">${isOn(id) ? 'Don’t install ' : 'Install '}${s.name}</button>` : '');
+    }
+    $('svc-detail').addEventListener('click', event => {
+      const button = event.target.closest('button');
+      if (!button) return;
+      if (button.dataset.goto) { setFocus(button.dataset.goto, true); document.querySelector(`.svc[data-svc="${button.dataset.goto}"]`)?.scrollIntoView({block: 'nearest', behavior: 'smooth'}); }
+      if (button.dataset.flip) { const b = box(button.dataset.flip); b.checked = !b.checked; toggled(button.dataset.flip, b.checked); }
+    });
+
+    function drawLinks() {
+      const map = $('svc-map'), group = $('svc-paths');
+      group.innerHTML = '';
+      if (!focusId || map.closest('[data-page]').hidden) return;
+      const origin = map.getBoundingClientRect();
+      const rect = id => { const r = document.querySelector(`.svc[data-svc="${id}"]`).getBoundingClientRect(); return {x: r.left - origin.left, y: r.top - origin.top, w: r.width, h: r.height}; };
+      // Where the line from the centre of a toward b leaves rectangle a (plus a small gap).
+      const edge = (a, b, gap) => {
+        const cx = a.x + a.w / 2, cy = a.y + a.h / 2, dx = b.x + b.w / 2 - cx, dy = b.y + b.h / 2 - cy;
+        const t = Math.min(dx ? (a.w / 2 + gap) / Math.abs(dx) : Infinity, dy ? (a.h / 2 + gap) / Math.abs(dy) : Infinity);
+        return [cx + dx * t, cy + dy * t];
+      };
+      const {out, in: incoming} = linksOf(focusId);
+      for (const [from, to, kind] of [...out, ...incoming]) {
+        const a = rect(from), b = rect(to);
+        const [x1, y1] = edge(a, b, 2), [x2, y2] = edge(b, a, 4);
+        // A gentle curve so lines that share a card fan out instead of overlapping.
+        const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, len = Math.hypot(x2 - x1, y2 - y1) || 1;
+        const bend = Math.min(40, len * .18), nx = -(y2 - y1) / len * bend, ny = (x2 - x1) / len * bend;
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', `M${x1.toFixed(1)} ${y1.toFixed(1)} Q${(mx + nx).toFixed(1)} ${(my + ny).toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`);
+        path.setAttribute('class', linkKind(to, kind) + (isOn(from) && isOn(to) ? '' : ' off'));
+        group.append(path);
+      }
+    }
+
     function components() {
-      return Object.fromEntries(componentBoxes().map(box => [box.dataset.component, box.checked]));
+      return Object.fromEntries(componentBoxes().map(input => [input.dataset.component, input.checked]));
     }
     function existingKept() { return !!inspection?.installed && selected('install-mode') !== 'reinstall'; }
     function renderComponents() {
       const have = existingKept() ? inspection.current?.components || {} : {};
-      for (const box of componentBoxes()) {
-        const name = box.dataset.component;
+      const gaps = missing();
+      for (const card of document.querySelectorAll('.svc')) {
+        const id = card.dataset.svc, input = card.querySelector('input');
         // Backends an install already has stay; uninstall them in Models → Core Backend.
-        const kept = BACKENDS.includes(name) && have[name];
-        box.disabled = !!kept;
-        if (kept) box.checked = true;
-        const label = box.closest('label');
-        label.querySelector('.installed')?.remove();
-        if (kept) { const tag = document.createElement('span'); tag.className = 'installed'; tag.textContent = 'INSTALLED'; label.querySelector('strong').after(tag); }
+        const kept = keptBackend(id);
+        if (input) { input.disabled = kept; if (kept) input.checked = true; }
+        card.classList.toggle('is-core', !optional(id));
+        card.classList.toggle('is-kept', kept);
+        card.classList.toggle('is-on', optional(id) && isOn(id));
+        card.classList.toggle('is-off', optional(id) && !isOn(id));
+        card.classList.toggle('is-warn', !!gaps.get(id)?.needs.some(optional));
+        const flag = card.querySelector('.flag');
+        flag.textContent = kept ? 'installed' : id === 'comfyui' && (ownComfy() || have.comfyui) ? '' : SERVICES[id].flag || '';
+        flag.classList.toggle('big', !kept && !!SERVICES[id].big);
       }
-      const ownComfy = !!$('comfy-root').value.trim();
-      $('comfy-plan').textContent = ownComfy ? 'Uses the ComfyUI folder you entered' : 'Downloads ComfyUI and PyTorch for ROCm into the Rocsy folder';
-      $('comfy-size').hidden = ownComfy || !!have.comfyui;
       $('components-hint').textContent = existingKept()
-        ? 'Turning a service off stops and removes its container; its saved data stays. Installed backends are kept; remove them in Models → Manager → Core Backend.'
-        : 'Anything you skip can be installed later in Models → Manager → Core Backend.';
+        ? 'Turning a part off removes it, but its saved data stays. ComfyUI, Hermes, yt-dlp and Music covers stay once installed; remove those in Models → Manager → Core Backend.'
+        : 'Anything you skip can be added later in Models → Manager → Core Backend.';
       $('components-hint').className = 'hint';
       if (!$('host-helper').checked) {
-        $('components-hint').textContent += ' That needs the host services helper (step 5), which is turned off.';
+        $('components-hint').textContent += ' That needs the host services helper (Desktop & helpers), which is turned off.';
         $('components-hint').className = 'hint warn';
       }
+      $('header-components').textContent = existingKept() ? 'Anything to add or remove?' : 'What will you use Rocsy for?';
+      $('intro-components').textContent = existingKept()
+        ? 'Your update keeps everything you have now (“Keep what I have”). Pick a preset or Fine-tune only if you want to add or remove parts. Video, Image, Music, Voice, 3D Models and the rest of the core always stay.'
+        : 'Pick a preset. Video, Image, Music, Voice, 3D Models and the rest of the core are always included; presets add the extras that suit you. Nothing is final: add or remove parts later in Models → Manager → Core Backend.';
+      renderTips();
+      renderPresets();
+      renderSize();
+      const extras = Object.keys(SERVICES).filter(id => optional(id) && isOn(id)).map(id => SERVICES[id].name);
+      $('svc-count').textContent = extras.length ? `On: ${extras.join(', ')}` : 'Only the core apps';
+      setFocus(focusId, false);
       renderStepStates();
     }
+
+    // ---- presets ----
+    const matchesPreset = preset => Object.keys(COMPONENTS_DEFAULT).every(id => keptBackend(id) || box(id).checked === preset.on.includes(id));
+    const currentOn = () => Object.keys(COMPONENTS_DEFAULT).filter(id => inspection?.current?.components?.[id]);
+    const KEEP_PRESET = {id: 'current', name: 'Keep what I have', icon: 'refresh', tag: 'for updates', blurb: 'Update everything you already use and change nothing else.', get on() { return currentOn(); }};
+    const allPresets = () => existingKept() ? [KEEP_PRESET, ...PRESETS] : PRESETS;
+    function presetSize(on) {
+      const core = existingKept() ? 0 : SIZES_GB.core;
+      return core + on.filter(id => !keptBackend(id) && !installedNow(id)).reduce((sum, id) => sum + SIZES_GB[id], 0);
+    }
+    const gb = value => value >= 10 ? Math.round(value) + ' GB' : value >= 1 ? value.toFixed(1).replace(/\.0$/, '') + ' GB' : Math.max(1, Math.round(value * 1000)) + ' MB';
+    let presetSet = '';
+    function buildPresets() {
+      const list = allPresets();
+      if (presetSet === list.map(item => item.id).join()) return;
+      presetSet = list.map(item => item.id).join();
+      const chips = on => on.filter(id => id !== 'comfyui').map(id => `<span>${SERVICES[id].name}</span>`).join('') || '<span>Core apps</span>';
+      $('presets').innerHTML = list.map(preset => `<button type="button" class="preset" role="radio" aria-checked="false" data-preset="${preset.id}">`
+        + (preset.tag ? `<span class="p-tag">${preset.tag}</span>` : '')
+        + `<span class="p-icon"><svg viewBox="0 0 24 24">${ICON[preset.icon]}</svg></span><span class="p-name">${preset.name}</span>`
+        + `<span class="p-blurb">${preset.blurb}</span><span class="p-chips">${chips(preset.on)}</span><span class="p-size" data-size></span></button>`).join('')
+        + `<div class="preset custom" role="radio" aria-checked="false" data-preset="custom"><span class="p-icon"><svg viewBox="0 0 24 24">${ICON.sliders}</svg></span>`
+        + `<span class="p-name">Your own mix</span><span class="p-blurb">Pick each part yourself: tap here to open Fine-tune.</span><span class="p-chips"></span><span class="p-size" data-size></span></div>`;
+    }
+    buildPresets();
+    {
+      $('presets').addEventListener('click', event => {
+        const card = event.target.closest('button.preset');
+        if (card) applyPreset(card.dataset.preset);
+        if (event.target.closest('[data-preset="custom"]')) {
+          $('svc-custom').open = true;
+          $('svc-custom').scrollIntoView({behavior: 'smooth', block: 'start'});
+        }
+      });
+      $('presets').addEventListener('keydown', event => {   // arrow keys move between presets, like a radio group
+        if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'].includes(event.key)) return;
+        const cards = [...$('presets').querySelectorAll('button.preset')];
+        const at = cards.indexOf(document.activeElement);
+        if (at < 0) return;
+        event.preventDefault();
+        const next = cards[(at + (/Right|Down/.test(event.key) ? 1 : -1) + cards.length) % cards.length];
+        next.focus();
+        applyPreset(next.dataset.preset);
+      });
+    }
+    function applyPreset(id) {
+      const preset = allPresets().find(item => item.id === id);
+      for (const key of Object.keys(COMPONENTS_DEFAULT)) if (!keptBackend(key)) box(key).checked = preset.on.includes(key);
+      const kept = Object.keys(COMPONENTS_DEFAULT).filter(key => keptBackend(key) && !preset.on.includes(key));
+      const removed = existingKept() ? currentOn().filter(key => !keptBackend(key) && !box(key).checked) : [];
+      toastHtml = `<div class="svc-tip ${removed.length ? 'needs' : 'done'}"><p><span class="kind">preset</span><b>${preset.name}</b> selected.`
+        + (removed.length ? ` This <b>removes ${names(removed)}</b>, which you have now (saved data stays).` : '')
+        + (kept.length ? ` ${names(kept)} stay${kept.length > 1 ? '' : 's'} installed; remove ${kept.length > 1 ? 'them' : 'it'} in Models → Core Backend.` : '') + '</p>'
+        + (removed.length ? `<div class="actions"><button class="mini primary" type="button" data-keep>Keep what I have</button></div>` : '') + '</div>';
+      renderComponents();
+    }
+    function renderPresets() {
+      buildPresets();
+      let any = false;
+      for (const card of $('presets').querySelectorAll('.preset')) {
+        const preset = allPresets().find(item => item.id === card.dataset.preset);
+        const on = preset ? matchesPreset(preset) && !any : false;
+        if (on) any = true;
+        card.setAttribute('aria-checked', String(on));
+        if (card.tagName === 'BUTTON') card.tabIndex = on ? 0 : -1;
+        const size = preset ? presetSize(preset.on) : 0;
+        card.querySelector('[data-size]').textContent = !preset ? '' : size < 0.5 ? 'nothing new to download' : (existingKept() ? 'adds about ' : 'about ') + gb(size);
+      }
+      const custom = $('presets').querySelector('[data-preset="custom"]');
+      custom.setAttribute('aria-checked', String(!any));
+      custom.querySelector('[data-size]').textContent = any ? '' : 'about ' + gb(presetSize(Object.keys(COMPONENTS_DEFAULT).filter(isOn)));
+      if (!any) { const first = $('presets').querySelector('button.preset'); first.tabIndex = 0; }
+    }
+    function renderSize() {
+      const chosen = Object.keys(COMPONENTS_DEFAULT).filter(id => isOn(id) && !keptBackend(id) && !installedNow(id));
+      const core = existingKept() ? 0 : SIZES_GB.core;
+      const extra = chosen.reduce((sum, id) => sum + SIZES_GB[id], 0);
+      const total = core + extra;
+      const free = inspection?.free_bytes != null ? inspection.free_bytes / 1e9 : null;
+      const roomForModels = 30;   // a few starter models
+      const scale = Math.max(total, free || 0, 1);
+      const bar = `<div class="track" title="Core apps and extras"><i class="core" style="width:${core / scale * 100}%"></i><i style="width:${extra / scale * 100}%"></i></div>`;
+      let status = '';
+      if (free != null) {
+        status = free < total ? `<span class="bad">Only ${gb(free)} free on that drive: not enough. Choose a smaller preset or another folder.</span>`
+          : free < total + roomForModels ? `<span class="warn">${gb(free)} free: it fits, but leave room for models (each is 2–25 GB).</span>`
+          : `${gb(free)} free on that drive.`;
+      }
+      const sizeBar = $('size-bar');
+      sizeBar.className = 'size-bar' + (free != null && free < total ? ' short' : free != null && free < total + roomForModels ? ' tight' : '');
+      sizeBar.innerHTML = existingKept() && total < 0.5 ? `<div class="disk"><b>Nothing new to download</b> besides the update itself${bar}</div><div>${status || ''}</div>` : `<div class="disk"><b>About ${gb(total)}</b> of disk space`
+        + (existingKept() ? ' for the parts you’re adding' : ` · core apps ${gb(core)}${extra ? ` + extras ${gb(extra)}` : ''}`)
+        + `${bar}</div><div>${status || 'Models you download later need their own space.'}</div>`;
+    }
+    function placeTips() {
+      // Inside the fine-tune panel's side column while it's open (no layout jumps under the pointer); above it otherwise.
+      const target = $('svc-custom').open ? document.querySelector('.svc-side') : $('tips-top');
+      if ($('svc-tips').parentElement !== target) target.prepend($('svc-tips'));
+    }
+    $('svc-custom').addEventListener('toggle', () => { placeTips(); requestAnimationFrame(drawLinks); });
 
     // ---- access ----
     function passwordNeeded() {
@@ -442,12 +1093,46 @@
     function renderPassword() {
       const value = $('new-password').value, again = $('confirm-password').value;
       $('password-rules').className = value && !passwordRulesOk(value) ? 'hint warn' : 'hint';
+      const score = passwordRulesOk(value) ? passwordScore(value) : value ? 1 : 0;
+      const meter = $('pw-meter').firstElementChild;
+      meter.style.width = score * 25 + '%';
+      meter.style.background = ['var(--error)', 'var(--error)', 'var(--warn)', 'var(--success)', 'var(--success)'][score];
       $('password-match').hidden = !again;
       $('password-match').textContent = again !== value ? 'The passwords don’t match yet.' : 'The passwords match.';
       $('password-match').className = again !== value ? 'hint warn' : 'hint';
       renderStepStates();
     }
-    ['new-password', 'confirm-password'].forEach(id => $(id).addEventListener('input', renderPassword));
+    let generatedPassword = '';
+    function passwordScore(value) {
+      if (!value) return 0;
+      const kinds = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/].filter(rule => rule.test(value)).length;
+      return Math.min(4, Math.floor(value.length / 4) + kinds - 2);
+    }
+    $('generate-password').addEventListener('click', () => {
+      const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+      const bytes = crypto.getRandomValues(new Uint8Array(20));
+      const raw = [...bytes].map(b => alphabet[b % alphabet.length]).join('');
+      generatedPassword = raw.match(/.{1,5}/g).join('-');   // groups of five: easier to read and type
+      $('new-password').value = $('confirm-password').value = generatedPassword;
+      setPasswordVisible(true);
+      $('copy-password').hidden = false;
+      $('generated-note').hidden = false;
+      renderPassword();
+    });
+    function setPasswordVisible(show) {
+      ['new-password', 'confirm-password'].forEach(id => { $(id).type = show ? 'text' : 'password'; });
+      $('show-password').textContent = show ? 'Hide' : 'Show';
+      $('show-password').setAttribute('aria-pressed', String(show));
+    }
+    $('show-password').addEventListener('click', () => setPasswordVisible($('new-password').type === 'password'));
+    $('copy-password').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText($('new-password').value); flash($('copy-password'), 'Copied'); }
+      catch { $('new-password').select(); flash($('copy-password'), 'Press Ctrl+C'); }
+    });
+    ['new-password', 'confirm-password'].forEach(id => $(id).addEventListener('input', () => {
+      if ($('new-password').value !== generatedPassword) { generatedPassword = ''; $('generated-note').hidden = true; $('copy-password').hidden = !$('new-password').value; }
+      renderPassword();
+    }));
     $('no-password-ack').addEventListener('change', renderStepStates);
 
     // ---- choices that depend on the folder ----
@@ -467,7 +1152,24 @@
       $('access-kept').hidden = !(installed && !reinstall);
       $('custom-password-row').hidden = selected('password-mode') !== 'custom';
       $('no-password-warning').hidden = selected('password-mode') !== 'none';
-      if (!preview) $('install').textContent = installed ? ({update: 'Update Rocsy', repair: 'Repair Rocsy', reinstall: 'Delete and reinstall Rocsy'}[selected('install-mode')] || 'Choose an action in step 2') : 'Install and build Rocsy';
+      const deleting = uninstalling() && selected('uninstall-files') === 'delete';
+      if (!preview) $('install').textContent = installed ? ({update: 'Update Rocsy', repair: 'Repair Rocsy', reinstall: 'Delete and reinstall Rocsy',
+        uninstall: deleting ? 'Uninstall and delete everything' : 'Uninstall Rocsy'}[selected('install-mode')] || 'Choose Update, Repair or Uninstall first') : 'Install and build Rocsy';
+      $('install').classList.toggle('danger', deleting || (installed && selected('install-mode') === 'reinstall'));
+      $('uninstall-options').hidden = !uninstalling();
+      const deleteChoice = document.querySelector('input[name="uninstall-files"][value="delete"]');
+      deleteChoice.disabled = installed && !inspection.can_reinstall;
+      $('uninstall-delete-option').hidden = deleteChoice.disabled;
+      $('uninstall-delete-unavailable').hidden = !deleteChoice.disabled;
+      if (deleteChoice.disabled && deleteChoice.checked) document.querySelector('input[name="uninstall-files"][value="keep"]').checked = true;
+      $('uninstall-delete-confirm').hidden = !deleting;
+      $('uninstall-folder').textContent = inspection?.destination || $('destination').value;
+      if (installed) {
+        const current = inspection.current?.components || {};
+        const imageGb = SIZES_GB.core + Object.keys(COMPONENTS_DEFAULT).filter(id => current[id] && id !== 'ytdlp' && id !== 'music' && id !== 'comfyui').reduce((sum, id) => sum + SIZES_GB[id], 0);
+        $('uninstall-images-size').textContent = 'about ' + gb(imageGb);
+      }
+      renderRail();
       renderComponents();
       if (step === 'review') renderSummary();
     }
@@ -475,7 +1177,14 @@
       const destination = $('destination').value;
       const response = await fetch('/inspect', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({token: config.token, destination})});
       const data = await response.json();
-      if (!response.ok) throw Error(data.error || 'Could not inspect the install folder.');
+      if (!response.ok) {
+        folderError = data.error || 'Rocsy can’t use that folder.';
+        renderFolderStatus();
+        renderRail();
+        renderStepStates();
+        throw Error(folderError);
+      }
+      folderError = '';
       if (destination !== $('destination').value) return null;
       if (destination !== inspectedDestination) {
         document.querySelectorAll('input[name="install-mode"]').forEach(input => { input.checked = false; });
@@ -485,18 +1194,39 @@
       }
       inspectedDestination = destination;
       inspection = data;
+      if (/folder|drive|installer itself/.test($('result').textContent) && $('result').classList.contains('bad')) { $('result').textContent = ''; $('result').className = 'result'; }
+      renderFolderStatus();
+      renderRail();
       renderChoices();
       return data;
     }
+    let folderError = '';
+    function renderFolderStatus() {
+      const status = $('folder-status');
+      if (folderError) { status.textContent = folderError; status.className = 'hint warn'; return; }
+      if (!inspection) { status.textContent = 'Any folder you own. Rocsy creates it if it doesn’t exist.'; status.className = 'hint'; return; }
+      status.className = 'hint';
+      status.textContent = inspection.installed ? `Rocsy is already installed in ${inspection.destination}. Choose what to do with it below.`
+        : inspection.has_files ? `${inspection.destination} already has other files in it. Pick an empty or new folder, or tick the box below to add Rocsy anyway.`
+        : `Rocsy will go in ${inspection.destination}.`;
+      if (inspection.has_files) status.className = 'hint warn';
+    }
     $('destination').value = config.default_dir || '~/Rocsy';
-    $('destination').addEventListener('change', () => { if (!preview) inspectDestination().catch(error => { $('result').textContent = error.message; $('result').className = 'result bad'; }); });
+    // Check the folder as soon as typing pauses, not only when the field loses focus.
+    let folderTimer = 0;
+    const checkFolder = () => { clearTimeout(folderTimer); if (!preview) inspectDestination().catch(() => {}); };
+    $('destination').addEventListener('change', checkFolder);
+    $('destination').addEventListener('input', () => { clearTimeout(folderTimer); folderTimer = setTimeout(checkFolder, 600); });
+    $('allow-existing').addEventListener('change', renderStepStates);
     $('destination').addEventListener('input', renderStepStates);
-    document.querySelectorAll('input[name="install-mode"], input[name="password-mode"]').forEach(input => input.addEventListener('change', renderChoices));
+    document.querySelectorAll('input[name="install-mode"], input[name="password-mode"], input[name="uninstall-files"]').forEach(input => input.addEventListener('change', renderChoices));
+    $('uninstall-phrase').addEventListener('input', renderStepStates);
     $('reinstall-phrase').addEventListener('input', renderStepStates);
     $('comfy-root').addEventListener('input', renderComponents);
     $('host-helper').addEventListener('change', renderComponents);
     componentBoxes().forEach(box => box.addEventListener('change', renderStepStates));
     ['desktop-app', 'terminal-command', 'desktop-launcher'].forEach(id => $(id).addEventListener('change', renderStepStates));
+    placeTips();
     renderChoices();
     if (!preview) inspectDestination().catch(() => {});
     if (preview) {
@@ -571,32 +1301,81 @@
       const rows = [];
       const add = (term, value, target, muted = false) => rows.push([term, value, target, muted]);
       add('System', $('platform').textContent + (preview ? '' : Object.values(config.prerequisites || {}).every(Boolean) ? ' · ready' : ' · Docker is set up during the install'), 'system');
-      const mode = inspection?.installed ? ({update: 'Update the existing installation', repair: 'Repair the existing installation', reinstall: 'Delete and reinstall'}[selected('install-mode')] || 'Choose what to do with the existing installation') : 'New installation';
-      add('Folder', `${$('destination').value} · ${mode}`, 'location');
+      const mode = inspection?.installed ? ({update: 'Update the existing installation', repair: 'Repair the existing installation', reinstall: 'Delete and reinstall', uninstall: 'Uninstall'}[selected('install-mode')] || 'Choose what to do with the existing installation') : 'New installation';
+      add('Folder', `${inspection?.destination || $('destination').value} · ${mode}`, 'location');
+      if (uninstalling()) {
+        const keep = selected('uninstall-files') !== 'delete';
+        add('Removed', 'Rocsy’s apps, background helpers, shortcuts and the rocsy command', 'location');
+        add('Your files', keep ? 'Kept: what you made, your models and settings stay in the folder' : 'Deleted: the whole folder, including what you made and your models', 'location');
+        add('Disk space', $('uninstall-images').checked ? `App images removed (${$('uninstall-images-size').textContent})` : 'App images kept (faster to install again)', 'location');
+        $('header-review').textContent = 'Ready to uninstall';
+        $('what-happens').querySelector('h3').textContent = 'What happens next';
+        renderHappens();
+        $('summary').replaceChildren(...rows.map(summaryRow));
+        const problems = activeSteps().filter(name => name !== 'review').map(stepProblem).filter(Boolean);
+        if (!preview && !document.body.classList.contains('installing') && !$('result').classList.contains('done'))
+          $('install-note').textContent = problems.length ? `Before uninstalling: ${problems.join('; ')}.` : 'Nothing has been changed yet.';
+        return;
+      }
+      $('header-review').textContent = inspection?.installed && selected('install-mode') === 'update' ? 'Ready to update' : inspection?.installed && selected('install-mode') === 'repair' ? 'Ready to repair' : 'Ready to install';
       const chosen = components();
       const comfyKept = existingKept() && inspection.current?.components?.comfyui;
       add('ComfyUI', comfyKept ? 'Already set up (kept)' : !chosen.comfyui ? 'Not set up now' : $('comfy-root').value.trim() ? `Your folder ${$('comfy-root').value.trim()}, plus the supervisor` : 'Downloaded into the Rocsy folder, plus the supervisor', 'components', !chosen.comfyui);
-      const services = ['motion', 'rea', 'trainer'].filter(key => chosen[key]).map(key => COMPONENT_NAMES[key]);
-      const backends = ['hermes', 'ytdlp', 'music'].filter(key => chosen[key]).map(key => COMPONENT_NAMES[key]);
-      add('Optional services', services.length ? services.join(', ') : 'None', 'components', !services.length);
-      add('Other backends', backends.length ? backends.join(', ') : 'None', 'components', !backends.length);
+      const preset = allPresets().find(matchesPreset);
+      const extras = ['hermes', 'ytdlp', 'music', 'motion', 'rea', 'trainer', 'sillytavern'].filter(key => chosen[key]).map(key => COMPONENT_NAMES[key]);
+      add('What you get', (preset ? preset.name + (preset.id === 'current' ? ': ' : ' preset: ') : 'Your own mix: ') + 'all studios' + (extras.length ? ', ' + extras.join(', ') : ''), 'components');
+      add('Disk space', $('size-bar').querySelector('.disk b')?.textContent.replace('About', 'About') + (existingKept() ? ' for new parts' : ''), 'components');
       add('Access', !passwordNeeded() ? 'Keeps the current password' : selected('password-mode') === 'none' ? 'No password' : passwordValid() ? 'Your own password' : 'Password not set yet', 'access');
       const desk = [['desktop-app', isWindows() ? 'Windows shortcuts' : 'Rocsy Desktop'], ['windows-autostart', 'Start with Windows'], ['terminal-command', 'rocsy command'], ['desktop-launcher', 'Desktop launcher'], ['host-helper', 'Host services helper']].filter(([id]) => $(id).checked).map(([, label]) => label);
       add('Desktop & helpers', desk.length ? desk.join(', ') : 'None', 'desktop', !desk.length);
-      $('summary').replaceChildren(...rows.map(([term, value, target, muted]) => {
-        const row = document.createElement('div');
-        const dt = document.createElement('dt'); dt.textContent = term;
-        const dd = document.createElement('dd');
-        if (muted) { const span = document.createElement('span'); span.className = 'muted'; span.textContent = value; dd.append(span); } else dd.textContent = value;
-        const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = 'Change'; edit.addEventListener('click', () => showStep(target));
-        row.append(dt, dd, edit);
-        return row;
-      }));
-      const problems = STEPS.slice(0, 5).map(stepProblem).filter(Boolean);
-      if (!preview && !document.body.classList.contains('installing') && !$('result').textContent)
+      renderHappens();
+      $('summary').replaceChildren(...rows.map(summaryRow));
+      const problems = activeSteps().filter(name => name !== 'review').map(stepProblem).filter(Boolean);
+      if (!preview && !document.body.classList.contains('installing') && !$('result').classList.contains('done')) {
         $('install-note').textContent = problems.length ? `Before installing: ${problems.join('; ')}.` : 'Nothing has been changed yet.';
+        if (!problems.length && $('result').classList.contains('bad') && !$('progress-dock').classList.contains('is-error')) { $('result').textContent = ''; $('result').className = 'result'; }
+      }
     }
 
+    function summaryRow([term, value, target, muted]) {
+      const row = document.createElement('div');
+      const dt = document.createElement('dt'); dt.textContent = term;
+      const dd = document.createElement('dd');
+      if (muted) { const span = document.createElement('span'); span.className = 'muted'; span.textContent = value; dd.append(span); } else dd.textContent = value;
+      const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = 'Change'; edit.addEventListener('click', () => showStep(target));
+      row.append(dt, dd, edit);
+      return row;
+    }
+    function renderHappens() {
+      if (uninstalling()) {
+        const keep = selected('uninstall-files') !== 'delete';
+        $('happen-list').innerHTML = ['<b>Stop Rocsy</b> and remove its apps.', '<b>Remove the background helpers</b>, shortcuts and the rocsy command.',
+          ...(keep ? [] : ['<b>Delete the Rocsy folder</b> and everything in it.']),
+          ...($('uninstall-images').checked ? ['<b>Free up disk space</b> by removing Rocsy’s app images.'] : []),
+          keep ? '<b>Done.</b> Your folder stays; run this installer again any time to bring Rocsy back.' : '<b>Done.</b> Rocsy is gone from this computer.'].map(item => `<li>${item}</li>`).join('');
+        $('time-estimate').textContent = 'Usually takes a minute or two.';
+        return;
+      }
+      const chosen = components();
+      const fresh = !existingKept();
+      const dockerMissing = !preview && !Object.values(config.prerequisites || {}).every(Boolean);
+      const items = [
+        ...(dockerMissing ? ['<b>Set up Docker.</b> You may be asked for your administrator password.'] : []),
+        `<b>${fresh ? 'Copy Rocsy into' : 'Update the app files in'} ${escapeHtml($('destination').value)}.</b>`,
+        `<b>Build the apps.</b> The longest part${fresh ? ' the first time' : ''}; later updates reuse most of it.`,
+        ...(chosen.comfyui && !keptBackend('comfyui') ? [ownComfy() ? '<b>Connect your ComfyUI folder</b> and set up its on-demand starter.' : '<b>Download ComfyUI and PyTorch for your GPU.</b>'] : []),
+        ...(chosen.hermes && !keptBackend('hermes') ? ['<b>Set up Hermes Agent</b> for the Master Agent.'] : []),
+        ...(chosen.music && !keptBackend('music') ? ['<b>Download the Music covers models</b> (about 15 GB, each one checked).'] : []),
+        '<b>Start Rocsy.</b> The finish screen has a button to open it.',
+      ];
+      $('happen-list').innerHTML = items.map(item => `<li>${item}</li>`).join('');
+      const total = parseFloat(($('size-bar').querySelector('.disk b')?.textContent || '').replace(/[^0-9.]/g, '')) || 0;
+      const round5 = value => Math.max(5, Math.round(value / 5) * 5);
+      $('time-estimate').textContent = `Roughly ${round5(10 + total * 0.5)}–${round5(20 + total * 1.5)} minutes on a fast connection, mostly downloading. Your computer stays usable meanwhile; if something fails, the parts that worked are kept and you can retry.`;
+    }
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
+    }
     // ---- install ----
     const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
     $('install-log').addEventListener('toggle', () => document.body.classList.toggle('log-open', $('install-log').open));
@@ -612,9 +1391,55 @@
       $('log-lines').scrollTop = $('log-lines').scrollHeight;
     }
     function showResult(body, simulated) {
+      if (!simulated && body) return showDone(body);
       $('result').textContent = simulated ? 'Simulation complete. No packages or files were changed.' : `Rocsy was ${body.mode === 'update' ? 'updated' : body.mode === 'repair' ? 'repaired' : 'built and started'} in ${body.destination}\n${body.password ? 'Initial Rocsy password: ' + body.password + '\nSave this password now.\n' : ''}${body.no_password ? 'No password is set. Anyone who can reach Rocsy can use it.\n' : ''}${body.docker_group_added ? 'Your account was added to the Docker group. Sign out and back in before using docker compose without sudo. No computer restart is needed.\n' : body.docker_session_needs_refresh ? 'Your Docker group access is not active in this login session. Sign out and back in before using docker compose without sudo. No computer restart is needed.\n' : ''}Open ${body.url}\n${body.desktop_launcher ? 'Desktop launcher: ' + body.desktop_launcher + '\n' : ''}${body.terminal_command ? 'Terminal command: rocsy (' + body.terminal_command.path + ')' + (body.terminal_command.on_path ? '' : ' — add ~/.local/bin to your PATH, then open a new terminal') + '\n' : ''}${body.desktop_app ? 'Rocsy Desktop is in your app menu' + (body.desktop_app.app_window ? '' : ' (install Chromium for its own window; until then it opens in your browser)') + '\n' : ''}${(body.windows_shortcuts || []).map(link => 'Windows shortcut: ' + link + '\n').join('')}${body.windows ? 'Windows support is untested. Report problems with the full log (install.log in the Rocsy folder).\n' : ''}${(body.backends || []).map(item => `${item.ok ? '✓' : '✗'} ${item.name}: ${item.message}`).join('\n')}${(body.backends || []).length ? '\n' : ''}To rebuild later:\n${body.command}`;
       $('result').className = !simulated && (body.backends || []).some(item => !item.ok) ? 'result bad' : 'result ok';
       $('install-note').textContent = simulated ? 'Preview finished.' : 'Done. You can close this window.';
+    }
+    function showDone(body) {
+      if (body.mode === 'uninstall') {
+        $('result').innerHTML = `<h3>Rocsy is uninstalled</h3>`
+          + (body.kept_files ? `<p>Your files are still in ${escapeHtml(body.destination)}: what you made, your models and settings. To bring Rocsy back, run this installer again and choose Update.</p>`
+                             : `<p>The Rocsy folder has been deleted.</p>`)
+          + `<h4>Good to know</h4><ul>${[body.images_removed ? 'Rocsy’s app images were removed to free disk space.' : 'Rocsy’s app images are still there, so installing again is quicker. Remove them later with: docker image prune -a',
+              'Docker itself is still installed; other programs may use it.',
+              'If you used Personal Hermes (the hermes command), it’s still in ~/.hermes.'].map(note => `<li>${escapeHtml(note)}</li>`).join('')}</ul>`;
+        $('result').className = 'result done';
+        $('install-note').textContent = 'Done. You can close this window.';
+        $('install').hidden = true;
+        document.querySelectorAll('[data-back]').forEach(b => { b.hidden = true; });
+        $('result').scrollIntoView({behavior: 'smooth', block: 'start'});
+        return;
+      }
+      const verb = body.mode === 'update' ? 'updated' : body.mode === 'repair' ? 'repaired' : 'installed';
+      const password = body.password || generatedPassword;
+      const notes = [
+        body.docker_group_added ? 'Your account was added to the Docker group. Sign out and back in once so terminal docker commands work without sudo. No restart needed.' : '',
+        !body.docker_group_added && body.docker_session_needs_refresh ? 'Sign out and back in once so terminal docker commands work without sudo. No restart needed.' : '',
+        body.no_password ? 'No password is set: anyone who can reach Rocsy can use it. Add one in Settings → Security.' : '',
+        body.desktop_app ? 'Rocsy Desktop is in your app menu' + (body.desktop_app.app_window ? '.' : ' (install Chromium to give it its own window).') : '',
+        ...(body.windows_shortcuts || []).map(link => 'Windows shortcut: ' + link),
+        body.terminal_command ? 'Terminal: type rocsy' + (body.terminal_command.on_path ? '.' : ' (add ~/.local/bin to your PATH, then open a new terminal).') : '',
+        body.desktop_launcher ? 'Desktop launcher: ' + body.desktop_launcher : '',
+        body.windows ? 'Windows support is untested. If something goes wrong, share install.log from the Rocsy folder.' : '',
+      ].filter(Boolean);
+      const backends = body.backends || [];
+      const failed = backends.filter(item => !item.ok);
+      $('result').innerHTML = `<h3>Rocsy is ${verb}${failed.length ? ', with ' + failed.length + ' thing' + (failed.length > 1 ? 's' : '') + ' to retry' : ''}</h3>`
+        + `<p>It’s running in ${escapeHtml(body.destination)}.</p>`
+        + `<div class="open-row"><a class="button large" href="${escapeHtml(body.url)}" target="_blank" rel="noopener">Open Rocsy</a><code>${escapeHtml(body.url)}</code></div>`
+        + (password ? `<div class="secret"><span>Your password:</span><code id="done-password">${escapeHtml(password)}</code><button class="mini" type="button" id="done-copy">Copy</button><span class="muted" style="color:var(--muted);font-size:12px">Save it now.</span></div>` : '')
+        + (backends.length ? `<h4>Set up</h4><ul>${backends.map(item => `<li class="${item.ok ? '' : 'bad-item'}">${item.ok ? '✓' : '✗'} <b>${escapeHtml(item.name)}</b>: ${escapeHtml(item.message)}</li>`).join('')}</ul>` : '')
+        + `<h4>First steps</h4><ol><li>Open Rocsy and sign in.</li><li>Go to <b>Models → Manager</b> and download a starter model for each studio you want (it suggests ones that fit your GPU).</li><li>Make something: start in Image or Video, or ask the Master Agent.</li></ol>`
+        + (notes.length ? `<h4>Good to know</h4><ul>${notes.map(note => `<li>${escapeHtml(note)}</li>`).join('')}</ul>` : '')
+        + `<details><summary>Technical details</summary><pre>To rebuild later:\n${escapeHtml(body.command)}</pre></details>`;
+      $('result').className = 'result done';
+      $('done-copy')?.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(password); flash($('done-copy'), 'Copied'); } catch { flash($('done-copy'), 'Select and copy'); }
+      });
+      $('install-note').textContent = 'Done. You can close this window.';
+      $('install').hidden = !preview;   // the developer preview can simulate again
+      $('result').scrollIntoView({behavior: 'smooth', block: 'start'});
     }
     async function simulateInstall() {
       const chosen = components();
@@ -640,18 +1465,26 @@
         log.push(message);
         showProgress(percent, message, log);
       }
-      showResult(null, true);
+      showDone({mode: 'install', destination: $('destination').value, url: 'http://127.0.0.1:8080', password: generatedPassword || '',
+        backends: [...(chosen.comfyui ? [{name: 'ComfyUI', ok: true, message: 'Ready; the studios start it when they need it.'}] : []),
+                   ...(chosen.hermes ? [{name: 'Hermes Agent', ok: true, message: 'Installed and running.'}] : [])],
+        terminal_command: $('terminal-command').checked ? {on_path: true} : null, desktop_app: $('desktop-app').checked ? {app_window: true} : null,
+        command: 'cd ' + $('destination').value + '/BunnyBytes && docker compose up -d --build'});
+      $('install-note').textContent = 'Preview finished: nothing was changed.';
     }
     async function realInstall() {
       const current = await inspectDestination();
       if (!current) throw Error('Install location changed. Try again.');
       const mode = current.installed ? selected('install-mode') : 'install';
-      if (!mode) throw Error('Choose Update, Repair, or Complete reinstall in step 2.');
-      if (mode === 'reinstall' && ($('reinstall-phrase').value !== 'REINSTALL ROCSY' || (current.password_required && !$('current-password').value))) throw Error(current.password_required ? 'Type REINSTALL ROCSY and enter the current password (step 2).' : 'Type REINSTALL ROCSY to confirm deletion (step 2).');
+      if (!mode) throw Error('Choose Update, Repair, or Complete reinstall on the Location step.');
+      if (mode === 'reinstall' && ($('reinstall-phrase').value !== 'REINSTALL ROCSY' || (current.password_required && !$('current-password').value))) throw Error(current.password_required ? 'Type REINSTALL ROCSY and enter the current password on the Location step.' : 'Type REINSTALL ROCSY to confirm deletion on the Location step.');
+      if (mode === 'uninstall') return runJob({token: config.token, destination: $('destination').value, mode,
+        files: selected('uninstall-files'), confirmation_phrase: $('uninstall-phrase').value.trim().toUpperCase(),
+        remove_images: $('uninstall-images').checked});
       const passwordMode = selected('password-mode');
       if (mode === 'install' || mode === 'reinstall') {
-        if (passwordMode === 'custom' && ($('new-password').value !== $('confirm-password').value || !$('new-password').value)) throw Error('New passwords must match (step 4).');
-        if (passwordMode === 'none' && !$('no-password-ack').checked) throw Error('Acknowledge the no-password warning in step 4 to continue.');
+        if (passwordMode === 'custom' && ($('new-password').value !== $('confirm-password').value || !$('new-password').value)) throw Error('The two passwords don’t match (Access step).');
+        if (passwordMode === 'none' && !$('no-password-ack').checked) throw Error('Tick “I understand” on the Access step to go without a password.');
       }
       const payload = {token: config.token, destination: $('destination').value, comfy_root: $('comfy-root').value, allow_existing: $('allow-existing').checked, desktop_launcher: $('desktop-launcher').checked,
         terminal_command: $('terminal-command').checked, desktop_app: $('desktop-app').checked, host_helper: $('host-helper').checked, allow_system_upgrade: $('allow-system-upgrade').checked, mode,
@@ -659,6 +1492,9 @@
         password_mode: passwordMode, new_password: passwordMode === 'custom' ? $('new-password').value : '', no_password_ack: $('no-password-ack').checked,
         confirmation_phrase: mode === 'reinstall' ? $('reinstall-phrase').value : '', current_password: mode === 'reinstall' ? $('current-password').value : '',
         components: components()};
+      return runJob(payload);
+    }
+    async function runJob(payload) {
       const response = await fetch('/install', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
       const start = await response.json();
       if (!response.ok) throw Error(start.error || 'Could not start installation.');
@@ -675,25 +1511,39 @@
     }
     $('install').addEventListener('click', async () => {
       const button = $('install');
+      const unfinished = activeSteps().find(name => name !== 'review' && stepProblem(name));
+      if (unfinished && !preview) {
+        showStep(unfinished);
+        showProblem(unfinished, 'Almost there: ' + stepProblem(unfinished).replace(/^./, ch => ch.toLowerCase()));
+        return;
+      }
       button.disabled = true;
       document.body.classList.add('installing');
       $('result').textContent = '';
       $('result').className = 'result';
       $('progress-dock').classList.remove('is-error');
       $('install-log').open = false;
-      $('install-note').textContent = preview ? 'Simulating…' : 'Installing. Keep this window open.';
-      showProgress(0, preview ? 'Starting simulation…' : 'Starting installation…', []);
+      const word = uninstalling() ? 'Uninstalling' : inspection?.installed ? ({update: 'Updating', repair: 'Repairing'}[selected('install-mode')] || 'Installing') : 'Installing';
+      $('install-note').textContent = preview ? 'Simulating…' : `${word}. Keep this window open.`;
+      showProgress(0, preview ? 'Starting simulation…' : `${word}…`, []);
       try {
         if (preview) await simulateInstall(); else await realInstall();
       } catch (error) {
         $('progress-dock').classList.add('is-error');
         const lines = $('log-lines').textContent.split('\n').filter(Boolean);
         lines.push('Error: ' + error.message);
-        showProgress(Number($('progress-track').getAttribute('aria-valuenow')), 'Installation failed.', lines);
+        showProgress(Number($('progress-track').getAttribute('aria-valuenow')), uninstalling() ? 'Uninstall didn’t finish.' : 'Something went wrong.', lines);
         $('install-log').open = true;
         $('result').textContent = error.message;
         $('result').className = 'result bad';
         $('install-note').textContent = 'Fix the problem above, then press the button again.';
+        // Password mistakes are fixed where the password is typed.
+        if (/password/i.test(error.message) && !uninstalling() && selected('install-mode') === 'reinstall') {
+          showStep('location');
+          showProblem('location', error.message.replace(/\.$/, ''));
+          const field = $('current-password');
+          field.value = ''; field.focus();
+        }
       } finally {
         button.disabled = false;
         document.body.classList.remove('installing');

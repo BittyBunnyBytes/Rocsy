@@ -47,12 +47,30 @@ async def _get(client: httpx.AsyncClient, url: str, headers: dict[str, str] | No
 # portraits (the Voice card's backdrop) are accepted as sources.
 _THUMB_SRC = re.compile(r"^/(?:Krea/api/outputs/[0-9a-f]{32}/stream\?index=\d+(?:&v=\d+)?"
                         r"|Trainer/api/datasets/[A-Za-z0-9][A-Za-z0-9_-]{0,79}/(?:media|thumb)/[^/?#]+\?v=\d+"
-                        r"|Voice/api/voices/[\w-]{1,100}/portrait\?v=\d+)$")
+                        r"|Voice/api/voices/[\w-]{1,100}/portrait\?v=\d+"
+                        r"|Model3D/files/\d{8}-\d{6}-[0-9a-f]{6}/front\.png)$")
 _thumbs: OrderedDict[str, bytes] = OrderedDict()
 
 
+# Plugin backdrop pictures (home.background "plugin") are shrunk the same way: plugin path -> (upstream,
+# strip_prefix), filled by app.py. Only pictures under a registered plugin path are fetched.
+PLUGIN_THUMBS: dict[str, tuple[str, bool]] = {}
+_PLUGIN_PIC = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/-]+\.(?:png|jpe?g|webp)(?:\?[A-Za-z0-9=&._-]*)?$", re.I)
+
+
+def _plugin_source(src: str) -> str | None:
+    """The upstream URL of a plugin backdrop picture, or None when it isn't one."""
+    if not _PLUGIN_PIC.match(src) or "//" in src or ".." in src:
+        return None
+    prefix = "/" + src.split("/")[1]
+    if prefix not in PLUGIN_THUMBS:
+        return None
+    upstream, strip = PLUGIN_THUMBS[prefix]
+    return f"{upstream}{src[len(prefix):] if strip else src}"
+
+
 def thumb_url(src: str) -> str:
-    return f"/api/home/thumb?src={quote(src, safe='')}" if _THUMB_SRC.match(src) else src
+    return f"/api/home/thumb?src={quote(src, safe='')}" if _THUMB_SRC.match(src) or _plugin_source(src) else src
 
 
 def _shrink(raw: bytes, side: int = 640, quality: int = 78) -> bytes:
@@ -65,19 +83,22 @@ def _shrink(raw: bytes, side: int = 640, quality: int = 78) -> bytes:
     return out.getvalue()
 
 
-async def thumbnail(upstreams: dict[str, str], src: str, lite: bool = False) -> bytes | None:
-    """`lite` (mobile data saver) makes a smaller, lower-quality copy."""
-    if not _THUMB_SRC.match(src):
+async def thumbnail(upstreams: dict[str, str], src: str, lite: bool = False, big: bool = False) -> bytes | None:
+    """`lite` (mobile data saver) makes a smaller, lower-quality copy; `big` a wider
+    one for a card that spans a whole row (lite wins)."""
+    plugin_url = None if _THUMB_SRC.match(src) else _plugin_source(src)
+    if not plugin_url and not _THUMB_SRC.match(src):
         return None
-    key = f"lite|{src}" if lite else src
+    big = big and not lite
+    key = f"lite|{src}" if lite else f"big|{src}" if big else src
     if key in _thumbs:
         _thumbs.move_to_end(key)
         return _thumbs[key]
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{upstreams[src.split('/')[1]]}{src}")
+            response = await client.get(plugin_url or f"{upstreams[src.split('/')[1]]}{src}")
             response.raise_for_status()
-        data = await asyncio.to_thread(_shrink, response.content, *((360, 62) if lite else ()))
+        data = await asyncio.to_thread(_shrink, response.content, *((360, 62) if lite else (1280, 76) if big else ()))
     except Exception:  # noqa: BLE001 - gone or not an image
         return None
     _thumbs[key] = data
@@ -132,6 +153,7 @@ async def _plugin_art(latest: dict[str, Any], recent: list[dict[str, Any]], hidd
         kind, slideshow = spec["background"], spec["slideshow"]
         if kind == "plugin":
             pictures, asked = plugins.art_pictures(spec["path"], replies.get(pid))
+            pictures = [thumb_url(src) for src in pictures]
             slideshow = slideshow or asked
         elif kind == "recent":
             pictures = [item["thumb"] for item in recent[:8] if item.get("thumb")] if slideshow else \
@@ -147,10 +169,11 @@ async def _plugin_art(latest: dict[str, Any], recent: list[dict[str, Any]], hidd
 async def _snapshot(upstreams: dict[str, str], llama_key: str, hidden: set[str] = frozenset(),
                     art_exclude: frozenset[str] = frozenset()) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=3.0) as client:
-        vid, krea, mus, trainer, queue, llama, connections, agent, voice, voice_show, models, rea = await asyncio.gather(
+        vid, krea, mus, m3d, trainer, queue, llama, connections, agent, voice, voice_show, models, rea = await asyncio.gather(
             _get(client, f"{upstreams['Vid']}/Video/api/jobs"),
             _get(client, f"{upstreams['Krea']}/Image/api/jobs"),
             _get(client, f"{upstreams['Mus']}/Music/api/jobs"),
+            _get(client, f"{upstreams['Model3D']}/Model3D/api/jobs"),
             _get(client, f"{upstreams['Trainer']}/Trainer/api/jobs"),
             _get(client, f"{upstreams['Queue']}/Queue/api/queue"),
             _get(client, f"{upstreams['Llama']}/running", {"authorization": f"Bearer {llama_key}"}),
@@ -166,6 +189,7 @@ async def _snapshot(upstreams: dict[str, str], llama_key: str, hidden: set[str] 
         "Vid": _activity(vid_jobs, "rendering"),
         "Krea": _activity(krea_jobs, "generating"),
         "Mus": _activity(mus_jobs, "composing"),
+        "Model3D": _activity(_jobs(m3d), "shaping"),
         "Trainer": _activity(trainer_jobs, "training"),
     }
     # Trainer card backdrop: the dataset being trained as a slideshow, otherwise
@@ -185,6 +209,10 @@ async def _snapshot(upstreams: dict[str, str], llama_key: str, hidden: set[str] 
     song = next((job for job in mus_jobs or [] if job.get("state") == "complete" and job.get("output_url")), None)
     if song:
         studios["Mus"]["art"] = {"id": song.get("id"), "audio": song["output_url"]}
+    # 3D Models card backdrop: the input pictures of the newest finished models, as a slideshow.
+    m3d_pictures = [thumb_url(job["inputs"]["front"]) for job in (_jobs(m3d) or [])
+                    if job.get("state") == "complete" and isinstance(job.get("inputs"), dict) and job["inputs"].get("front")][:12]
+    studios["Model3D"]["art"] = {"pictures": [src for src in m3d_pictures if src.startswith("/api/home/thumb")]}
     studios["Voice"] = {"online": voice is not None, "active": 0, "waiting": 0,
                          "text": "Offline" if voice is None else
                          "Qwen ready" if voice.get("qwen_installed") else "Choose a model"}
@@ -260,7 +288,10 @@ async def _snapshot(upstreams: dict[str, str], llama_key: str, hidden: set[str] 
 
     busy = [name for name, info in studios.items() if info.get("active") and name not in ("Queue", "Llama") and name not in hidden]
     return {"studios": studios, "recent": recent[:8], "latest": latest, "busy": busy, "hidden": sorted(hidden),
-            "plugin_art": await _plugin_art(latest, recent, hidden) if PLUGIN_ART else {},
+            # The 3D Models card reuses the plugin-card slideshow painter (static/home.js paintPluginArt).
+            "plugin_art": {**(await _plugin_art(latest, recent, hidden) if PLUGIN_ART else {}),
+                           **({"Model3D": {"pictures": studios["Model3D"]["art"]["pictures"], "slideshow": True}}
+                              if "Model3D" not in hidden and studios["Model3D"].get("art", {}).get("pictures") else {})},
             "code_activity": [] if "Code" in hidden else await _code_activity()}
 
 

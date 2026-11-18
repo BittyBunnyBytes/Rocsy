@@ -14,7 +14,8 @@ from typing import Any
 
 from .checkpoints import loader_node
 from .lora_graph import model_with_loras
-from .models import H3_IMAGE_CFG, H3_IMAGE_STEPS, GenerationRequest
+from .models import (H3_IMAGE_CFG, H3_IMAGE_FAST_STEPS, H3_IMAGE_PDMD_LORA, H3_IMAGE_PDMD_SHIFT, H3_IMAGE_STEPS,
+                     GenerationRequest)
 
 # MiniMaxH3ImageConditioning's own sizing (comfy_extras/nodes_minimax_h3.py), for the job card.
 _CANVAS = 32
@@ -60,6 +61,15 @@ def build_workflow(request: GenerationRequest, seed: int, clip_name: str, vae_na
         graph[node_id] = {"class_type": "LoadImage", "inputs": {"image": ref.image}}
         graph["5"]["inputs"][f"images.image_{index}"] = [node_id, 0]
     graph["7"]["inputs"]["model"] = model_with_loras(graph, "1", request)
+    fast = H3_IMAGE_FAST_STEPS.get(request.h3_fast or "")
+    if fast:
+        # Speedup & Saves -> Fewer steps: the pDMD LoRA on top of the user's LoRAs, H3's sigma shift at 12 and a
+        # plain flow-matching grid of 2-4 steps (the author's verified ComfyUI graph; KSampler at CFG 1 = BasicGuider).
+        graph["60"] = {"class_type": "LoraLoaderModelOnly", "inputs": {
+            "model": graph["7"]["inputs"]["model"], "lora_name": H3_IMAGE_PDMD_LORA, "strength_model": 1.0}}
+        graph["61"] = {"class_type": "MiniMaxH3SigmaShift", "inputs": {
+            "model": ["60", 0], "shift_video": H3_IMAGE_PDMD_SHIFT, "shift_audio": 3.0}}
+        graph["7"]["inputs"].update(model=["61", 0], steps=fast)
     graph["9"] = {"class_type": "SaveImage", "inputs": {
         "images": ["8", 0], "filename_prefix": f"H3Image/H3Image_{time.strftime('%Y%m%d-%H%M%S')}"}}
     return graph

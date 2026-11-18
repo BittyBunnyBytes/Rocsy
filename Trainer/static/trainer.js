@@ -507,7 +507,7 @@
     box.append(row);
     return box;
   }
-  const IMAGE_FAMILIES = ["krea2", "qwen_image_21", "moss_image", "anima"];
+  const IMAGE_FAMILIES = ["krea2", "qwen_image_21", "moss_image", "anima", "h3_image"];
 
   // ---- epoch tests: a start form, then pages of renders (one page per prompt, or per epoch), each prompt + seed
   // rendered on every saved epoch. Optional agent review: a vision model scores each render live (Hermes terminal
@@ -1441,7 +1441,7 @@
       } else {
         const kind = job.request?.kind || "lora";
         const video = ["minimax_h3", "ltx25"].includes(job.model) && kind === "lora";
-        const image = ["krea2", "qwen_image_21", "moss_image", "anima"].includes(job.model) && kind === "lora";
+        const image = ["krea2", "qwen_image_21", "moss_image", "anima", "h3_image"].includes(job.model) && kind === "lora";
         const music = ["yue2", "minimax_music3"].includes(job.model) && kind === "lora";
         if (kind === "finetune" && job.state === "complete" && job.outputs?.length) {
           // A checkpoint as an ordinary LoRA (Fizgig's Extract "From a fine-tune": rank 64 ≈ the full checkpoint).

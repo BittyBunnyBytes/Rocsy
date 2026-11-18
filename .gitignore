@@ -14,9 +14,40 @@
 !/Krea
 !/Video
 !/Trainer
+!/Model3D
+!/SillyTavern
 !/.gitignore
 !/.github
 !/LICENSE
+
+# ---- SillyTavern: only its README, .gitignore and the Rocsy add-ons are published ----
+# Repeats SillyTavern/.gitignore so the private folders stay out even without it.
+# Allowlist: everything under SillyTavern/ stays local unless listed here.
+/SillyTavern/*
+!/SillyTavern/README.md
+!/SillyTavern/.gitignore
+!/SillyTavern/addons/
+/SillyTavern/addons/*
+!/SillyTavern/addons/rocsy-addons/
+!/SillyTavern/addons/rocsy-visual-overhaul/
+/SillyTavern/addons/*/**
+!/SillyTavern/addons/*/**/
+!/SillyTavern/addons/*/**/*.js
+!/SillyTavern/addons/*/**/*.mjs
+!/SillyTavern/addons/*/**/*.css
+!/SillyTavern/addons/*/**/README.md
+!/SillyTavern/addons/*/manifest.json
+# Secrets, chat logs and card exports anywhere.
+**/secrets.json
+*.jsonl
+# Character cards, chats and user folders anywhere in the repo.
+**/default-user/
+*.charx
+*.card.png
+**/characters/*.png
+**/characters/*.json
+**/chats/*.jsonl
+**/group chats/
 
 # ---- repo-wide: never upload these (added 2026-10-15 for the GitHub upload) ----
 # local backups made before every edit (*.bak-YYYYMMDD-what) and editor/OS junk
@@ -170,7 +201,3 @@ auth.json
 /BunnyBytes/cloudflared/*
 !/BunnyBytes/cloudflared/README-manual-steps.md
 !/BunnyBytes/cloudflared/config.example.yml
-# SillyTavern (plugin, chats, cards, secrets), wherever it ends up
-**/sillytavern/
-**/SillyTavern/
-**/*sillytavern*/

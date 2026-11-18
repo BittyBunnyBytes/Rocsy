@@ -39,7 +39,7 @@ HERMES_URL = "https://github.com/NousResearch/hermes-agent.git"
 HERMES_PATCH = Path(__file__).resolve().parent / "patches/hermes/rocsy-addons.patch"
 # The saved Rocsy patch was made against this commit. A fresh install must
 # start here; the older stable tag does not contain all of its patch context.
-HERMES_PATCH_BASE = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"  # v0.23.0
+HERMES_PATCH_BASE = "3b421578588243f920886e6fe79a6faa87ea026e"  # v0.23.1
 # Earlier Rocsy patches (<base commit>.patch). A checkout still carrying one is recognised, and an update
 # takes that one off before moving to the new release and putting the current patch on.
 HERMES_LEGACY_PATCHES = Path(__file__).resolve().parent / "patches/hermes/previous"
@@ -833,7 +833,11 @@ def hermes_stable_target(checkout: Path = HERMES, *, forward_only: bool = True) 
             "target = resolve_source_target('stable', ['git'], os.getcwd(), "
             "forward_only=bool(int(os.environ['CORE_HERMES_FORWARD_ONLY']))); "
             "print(json.dumps({'commit': target.commit, 'version': target.version}))")
-    result = subprocess.run([sys.executable, "-c", code], cwd=checkout,
+    # Hermes' own modules need its dependencies (ruamel.yaml...), which the host python may lack:
+    # use the Personal Hermes venv when there is one.
+    python = next((str(p) for p in (PERSONAL_HERMES / "venv/bin/python", PERSONAL_HERMES / ".venv/bin/python")
+                   if p.is_file()), sys.executable)
+    result = subprocess.run([python, "-c", code], cwd=checkout,
                             env={**os.environ, "PYTHONPATH": str(checkout), "GIT_TERMINAL_PROMPT": "0",
                                  "CORE_HERMES_FORWARD_ONLY": "1" if forward_only else "0"},
                             capture_output=True, text=True, timeout=90)
@@ -1860,6 +1864,11 @@ def run(job: str) -> int:
 
 
 def handle(method: str, path: str) -> tuple[int, dict]:
+    # Trainer tools, SillyTavern and Rocsy's own update have modules of their own.
+    for prefix, module in (("/core/extras/trainer-tools", "trainertools"), ("/core/extras/sillytavern", "sillytavern"),
+                           ("/core/extras/rocsy-update", "selfupdate")):
+        if path == prefix or path.startswith(prefix + "/"):
+            return __import__(module).handle(method, path)
     try:
         route = urlsplit(path)
         if method == "GET" and route.path == "/core/extras/hermes-addons":

@@ -1,8 +1,8 @@
 # Rocsy Addons patch for Hermes
 
 `rocsy-addons.patch` is the saved diff of the 14 local edits in the Rocsy
-Hermes checkout, based on stable **v0.23.0** (`2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`,
-ported November 8, 2026). The patch applies only to the separate `~/AI/hermes-rocsy`
+Hermes checkout, based on stable **v0.23.1** (`3b421578588243f920886e6fe79a6faa87ea026e`,
+refreshed November 13, 2026). The patch applies only to the separate `~/AI/hermes-rocsy`
 source checkout used to build the Rocsy container.
 It adds API run reasoning and terminal events (on both v0.23 run paths: the
 canonical admission turn and the direct agent), changes goal handling to allow
@@ -14,7 +14,7 @@ tools with `browser_exec`, so screenshots now come from the agent's own
 Dockerfile layer with the VA-API media drivers and the Manager-managed yt-dlp link.
 
 Earlier patches are kept in `previous/<base commit>.patch` (`a12c3417.patch`:
-the October 11, 2026 base). A checkout still carrying one shows that in Manager;
+the October 11, 2026 base; `2bd378ed.patch`: the v0.23.0 base). A checkout still carrying one shows that in Manager;
 **Update** takes it off, moves to the release and puts the current patch on, and
 puts the checkout back exactly as it was if any step fails.
 

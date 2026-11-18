@@ -319,6 +319,21 @@
               <p class="speedup-why" id="te-cache-why"></p>
             </div>
           </div>
+          <div class="speedup-tier h3-only" id="h3-fast-tier" hidden>
+            <h4 class="speedup-tier-title">Fewer steps</h4>
+            <div class="speedup-row">
+              <div class="field-row">
+                <label for="h3-fast">Sampling</label>
+                <select id="h3-fast">
+                  <option value="" selected>Standard · 6 steps</option>
+                  <option value="pdmd2">pDMD LoRA · 2 steps (fastest)</option>
+                  <option value="pdmd3">pDMD LoRA · 3 steps</option>
+                  <option value="pdmd4">pDMD LoRA · 4 steps (more detail)</option>
+                </select>
+              </div>
+              <p class="speedup-why" id="h3-fast-why"></p>
+            </div>
+          </div>
           <div class="speedup-tier">
             <h4 class="speedup-tier-title">Inference</h4>
             <div class="speedup-row">

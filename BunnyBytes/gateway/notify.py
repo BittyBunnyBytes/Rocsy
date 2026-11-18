@@ -49,6 +49,8 @@ CATALOG: dict[str, dict[str, Any]] = {
         "complete": ("Image ready", True), "failed": ("Generation failed", True)}},
     "Mus": {"label": "Music", "note": "Music generation", "events": {
         "complete": ("Track ready", True), "failed": ("Generation failed", True)}},
+    "Model3D": {"label": "3D Models", "note": "Pictures to 3D models", "events": {
+        "complete": ("3D model ready", True), "failed": ("Generation failed", True)}},
     "Trainer": {"label": "Trainer", "note": "LoRA training", "events": {
         "complete": ("Training finished", True), "failed": ("Training failed", True)}},
     "Agent": {"label": "Master Agent", "note": "Agentic sessions", "events": {
@@ -231,14 +233,15 @@ def _summary(text: Any) -> str:
 
 
 async def watch_services(hub: NotificationHub, upstreams: dict[str, str], interval: float = 5.0) -> None:
-    """Polls Krea / Mus job lists and the GPU queue; notifies on transitions
+    """Polls Krea / Mus / Model3D job lists and the GPU queue; notifies on transitions
     it actually saw (a job first seen already finished never notifies)."""
-    states: dict[str, dict[str, str]] = {"Krea": {}, "Mus": {}, "Queue": {}}
+    states: dict[str, dict[str, str]] = {"Krea": {}, "Mus": {}, "Model3D": {}, "Queue": {}}
     primed: set[str] = set()
     async with httpx.AsyncClient(timeout=10.0) as client:
         while True:
             for service, labels in (("Krea", ("Image ready", "Image generation failed")),
-                                    ("Mus", ("Track ready", "Music generation failed"))):
+                                    ("Mus", ("Track ready", "Music generation failed")),
+                                    ("Model3D", ("3D model ready", "3D model failed"))):
                 jobs = await _poll_jobs(client, f"{upstreams[service]}{page_url(service).rstrip('/')}/api/jobs")
                 if jobs is None:
                     continue
@@ -250,7 +253,7 @@ async def watch_services(hub: NotificationHub, upstreams: dict[str, str], interv
                     if service not in primed or before is None or before == state or before in _TERMINAL:
                         continue
                     if state in ("complete", "failed"):
-                        detail = job.get("error") if state == "failed" else (job.get("prompt") or job.get("style"))
+                        detail = job.get("error") if state == "failed" else (job.get("prompt") or job.get("style") or job.get("name"))
                         try:
                             await hub.notify(service, state, labels[state == "failed"], _summary(detail),
                                              url=page_url(service), tag=f"bb-{service}-{job_id}")

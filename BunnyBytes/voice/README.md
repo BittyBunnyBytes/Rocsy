@@ -23,6 +23,11 @@ downloaded on startup. The worker's
 Voice tab shows an engine as Ready only when the worker and its checkpoint are
 available. Qwen readiness is checked separately in the container.
 
+**Real-time voice conversion** (speak live in a character's voice, for games and voice chat) is
+a separate host service, `rocsy-voice-realtime` on loopback port 8953, with a WebSocket API at
+`/Voice/v1/realtime` and a game client that makes a "Rocsy Voice" virtual microphone. See
+[`realtime/README.md`](realtime/README.md).
+
 Characters live in `voice/data/voices/` and are managed by Rocsy's Voice API.
 The gallery, reference samples, portraits, new character saving and deletion
 all use that directory. The worker reads these profiles when generating speech.

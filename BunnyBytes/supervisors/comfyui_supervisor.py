@@ -281,20 +281,53 @@ def _gemm_env() -> dict[str, str]:
 
 
 # Which GPUs each profile's ComfyUI can see (ROCR_VISIBLE_DEVICES, so the
-# other card doesn't exist for that process at all). ROCm enumerates by PCI
-# bus: 0 = RX 7900 XTX (0a:00.0, main card, drives the desktop), 1 = RX 7800 XT
-# (0d:00.0). Only Video's multi-GPU settings (Conditioning / Conditioning
-# and VAEs on GPU 1 -> h3_multi, Split weights -> h3_split, Parallel split ->
-# h3_parallel) get both cards; everything else runs on the XTX alone.
+# other cards don't exist for that process at all). With two or more cards the
+# GPU queue decides (Queue page -> GPUs, lock/src/gpu.rs): role "comfyui" for
+# every profile, "comfyui_multi" for Video's multi-GPU settings (Conditioning /
+# Conditioning and VAEs on GPU 1 -> h3_multi, Split weights -> h3_split,
+# Parallel split -> h3_parallel). Its answer is GPU UUIDs in order, so cuda:0 is
+# always the role's first card and cuda:1 the next, whatever slot each is in.
+# With one card, or the queue unreachable, the plain indices below are used
+# (ROCm numbers cards in PCI bus order). COMFYUI_PRIMARY_GPUS /
+# COMFYUI_MULTI_GPUS set in the environment always win.
 PRIMARY_GPUS = os.environ.get("COMFYUI_PRIMARY_GPUS", "0")
 MULTI_GPUS = os.environ.get("COMFYUI_MULTI_GPUS", "0,1")
 MULTI_GPU_PROFILES = {"h3_multi", "h3_split", "h3_parallel"}
 # Inherited GPU selectors would re-filter/re-number what ROCR_VISIBLE_DEVICES exposes.
 _GPU_SELECTOR_VARS = ("ROCR_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES", "GPU_DEVICE_ORDINAL")
+_LOCK_URL = os.environ.get("BUNNY_LOCK_URL", "http://127.0.0.1:8600").rstrip("/")
+_LAYOUT: dict = {"at": 0.0, "roles": None}
+_LAYOUT_TTL = 15.0
+
+
+def _queue_roles() -> dict[str, str] | None:
+    """role -> ROCR_VISIBLE_DEVICES from the GPU queue when it sees 2+ cards, else None."""
+    now = time.monotonic()
+    if now - _LAYOUT["at"] < _LAYOUT_TTL:
+        return _LAYOUT["roles"]
+    roles = None
+    try:
+        with urllib.request.urlopen(f"{_LOCK_URL}/v2/gpus", timeout=2) as resp:
+            layout = json.loads(resp.read().decode("utf-8"))
+        if len(layout.get("cards") or []) >= 2:
+            roles = {r["role"]: r.get("visible") or "" for r in layout.get("roles") or [] if r.get("role")}
+    except (OSError, ValueError, KeyError, TypeError):
+        roles = _LAYOUT["roles"]  # keep the last answer while the queue restarts
+    if roles != _LAYOUT["roles"] and roles is not None:
+        log.info("GPU layout from the queue: comfyui=%s comfyui_multi=%s",
+                 roles.get("comfyui"), roles.get("comfyui_multi"))
+    _LAYOUT.update(at=now, roles=roles)
+    return roles
 
 
 def _profile_gpus(profile: str) -> str:
-    return MULTI_GPUS if profile in MULTI_GPU_PROFILES else PRIMARY_GPUS
+    multi = profile in MULTI_GPU_PROFILES
+    if not os.environ.get("COMFYUI_MULTI_GPUS" if multi else "COMFYUI_PRIMARY_GPUS"):
+        roles = _queue_roles()
+        value = roles and roles.get("comfyui_multi" if multi else "comfyui")
+        if value:
+            return value
+    return MULTI_GPUS if multi else PRIMARY_GPUS
 
 
 _FLASH: dict = {}

@@ -58,6 +58,9 @@ pub struct Entry {
     pub config: Option<String>,
     /// The app's own VRAM guess in MiB: can only raise the recorded peak.
     pub vram_mb: Option<u64>,
+    /// Which GPU role the job runs on when it isn't its app's usual one
+    /// (Video's two-GPU H3 modes: "comfyui_multi"). See `gpu::ROLES`.
+    pub gpu_role: Option<String>,
 }
 
 impl Entry {
@@ -81,23 +84,73 @@ impl Entry {
     }
 }
 
-/// When jobs may share the GPU: set by the server from the VRAM monitor and
+/// One GPU as the queue plans with it (MiB).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CardBudget {
+    /// Usable VRAM of the card.
+    pub total_mb: u64,
+    /// The live reading (everything: desktop, cached models, running jobs).
+    pub used_mb: u64,
+    /// What the card uses with no jobs at all (desktop).
+    pub floor_mb: u64,
+}
+
+/// When jobs may share the GPUs: set by the server from the VRAM monitor and
 /// the settings. Disabled (the default) means one job at a time.
+///
+/// Cards are indexed in ROCm order (PCI bus order). Each job runs on the cards
+/// of its role (`cards_of`); a job is admitted when it fits on every one of
+/// its cards, so jobs on different cards never compete for VRAM.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Admission {
     pub enabled: bool,
-    /// Usable VRAM of the card, MiB.
-    pub total_mb: u64,
-    /// The live reading, MiB (everything: desktop, cached models, running jobs).
-    pub used_mb: u64,
-    /// What the card uses with no jobs at all (desktop), MiB.
-    pub floor_mb: u64,
-    /// Always kept free, MiB.
+    /// Always kept free on each card.
     pub reserve_mb: u64,
-    /// vram_key -> recorded peak, MiB.
+    pub cards: Vec<CardBudget>,
+    /// The card everything runs on unless a role says otherwise.
+    pub primary: usize,
+    /// role -> card indices (see `gpu::ROLES`); a missing role = the primary card.
+    pub roles: HashMap<String, Vec<usize>>,
+    /// vram_key -> recorded peak (the highest of its cards), MiB.
     pub estimates: HashMap<String, u64>,
-    /// vram_key -> MiB set by hand on the queue page (replaces the peak).
+    /// vram_key -> card index -> recorded peak on that card, MiB.
+    pub card_estimates: HashMap<String, HashMap<usize, u64>>,
+    /// vram_key -> MiB set by hand on the queue page (replaces the peak, on every card).
     pub overrides: HashMap<String, u64>,
+}
+
+impl Admission {
+    /// The cards a role runs on.
+    pub fn role_cards(&self, role: &str) -> Vec<usize> {
+        match self.roles.get(role) {
+            Some(cards) if !cards.is_empty() => cards.clone(),
+            _ => vec![self.primary],
+        }
+    }
+
+    /// The cards a job can put VRAM on. An LLM turn (`uses_llm: true`) only
+    /// loads llama-swap's model: the LLM's cards. A job that never needs the
+    /// LLM: its role's (`gpu_role`, else its app's). Unknown: both.
+    pub fn cards_of(&self, e: &Entry) -> Vec<usize> {
+        if e.uses_llm == Some(true) && e.gpu_role.is_none() {
+            return self.role_cards("llama");
+        }
+        let role = e
+            .gpu_role
+            .as_deref()
+            .unwrap_or_else(|| crate::gpu::app_role(&e.app));
+        let mut cards = self.role_cards(role);
+        if e.uses_llm != Some(false) {
+            cards.extend(self.role_cards("llama"));
+        }
+        let mut seen = Vec::with_capacity(cards.len());
+        cards.retain(|c| {
+            let new = !seen.contains(c);
+            seen.push(*c);
+            new
+        });
+        cards
+    }
 }
 
 pub struct NewEntry {
@@ -112,6 +165,7 @@ pub struct NewEntry {
     pub model: Option<String>,
     pub config: Option<String>,
     pub vram_mb: Option<u64>,
+    pub gpu_role: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -150,6 +204,9 @@ pub struct Queue {
     ttl: Duration,
     dirty: BTreeSet<String>,
     admission: Admission,
+    /// Holders whose lease ran out, found during another call (enqueue,
+    /// heartbeat, release): the server logs and counts them (`take_reaped`).
+    reaped: Vec<Entry>,
 }
 
 pub fn new_token() -> String {
@@ -170,9 +227,21 @@ impl Queue {
             ttl,
             dirty: BTreeSet::new(),
             admission: Admission::default(),
+            reaped: Vec::new(),
         };
         q.sort();
         q
+    }
+
+    pub fn take_reaped(&mut self) -> Vec<Entry> {
+        std::mem::take(&mut self.reaped)
+    }
+
+    /// reap_expired for calls that aren't the periodic reap: keep what it
+    /// removed so the server can still log it.
+    fn reap_noting(&mut self, now: DateTime<Utc>) {
+        let gone = self.reap_expired(now);
+        self.reaped.extend(gone);
     }
 
     pub fn take_dirty(&mut self) -> Vec<String> {
@@ -234,36 +303,72 @@ impl Queue {
         }
     }
 
+    /// The VRAM this entry is expected to need on one card, MiB: the user's
+    /// override, else the peak recorded on that card (the job's highest peak
+    /// when it never ran there), raised by the app's own guess.
+    pub fn estimate_on(&self, e: &Entry, card: usize) -> Option<u64> {
+        let key = e.vram_key();
+        if let Some(mb) = self.admission.overrides.get(&key) {
+            return Some(*mb);
+        }
+        let peak = self
+            .admission
+            .card_estimates
+            .get(&key)
+            .and_then(|cards| cards.get(&card))
+            .copied()
+            .or_else(|| self.admission.estimates.get(&key).copied());
+        match (peak, e.vram_mb) {
+            (Some(p), Some(h)) => Some(p.max(h)),
+            (p, h) => p.or(h),
+        }
+    }
+
     /// Can `candidate` start now, next to the jobs already running?
     /// Every job's estimate must be known; at most one job per app and one LLM
-    /// job (they share llama-swap) run at once; and the estimates plus the
-    /// reserve must fit the card, also by the live reading.
+    /// job (they share llama-swap) run at once; and on each of the candidate's
+    /// cards, the estimates of the jobs there plus the reserve must fit, also
+    /// by the live reading. Jobs on other cards don't count.
     pub fn fits_alongside(&self, candidate: &Entry) -> bool {
         let a = &self.admission;
-        if !a.enabled || a.total_mb == 0 || candidate.uses_llm.is_none() {
+        if !a.enabled || a.cards.is_empty() || candidate.uses_llm.is_none() {
             return false;
         }
-        let Some(need) = self.estimate(candidate) else {
+        if self.estimate(candidate).is_none() {
             return false;
-        };
-        let mut planned = a.floor_mb;
+        }
         for e in self.actives() {
             if e.app == candidate.app
                 || e.uses_llm.is_none()
                 || (e.uses_llm == Some(true) && candidate.uses_llm == Some(true))
+                || self.estimate(e).is_none()
             {
                 return false;
             }
-            let Some(est) = self.estimate(e) else {
+        }
+        for card in a.cards_of(candidate) {
+            let Some(budget) = a.cards.get(card) else {
                 return false;
             };
-            planned += est;
+            if budget.total_mb == 0 {
+                return false;
+            }
+            let Some(need) = self.estimate_on(candidate, card) else {
+                return false;
+            };
+            let mut planned = budget.floor_mb;
+            for e in self.actives().filter(|e| a.cards_of(e).contains(&card)) {
+                planned += self.estimate_on(e, card).unwrap_or(0);
+            }
+            // The live reading covers what estimates miss (models other apps left
+            // loaded, a job using more than measured); the plan covers jobs granted
+            // a moment ago that haven't loaded yet.
+            let occupied = planned.max(budget.used_mb);
+            if occupied + need + a.reserve_mb > budget.total_mb {
+                return false;
+            }
         }
-        // The live reading covers what estimates miss (models other apps left
-        // loaded, a job using more than measured); the plan covers jobs granted
-        // a moment ago that haven't loaded yet.
-        let occupied = planned.max(a.used_mb);
-        occupied + need + a.reserve_mb <= a.total_mb
+        true
     }
 
     pub fn first_waiting(&self) -> Option<&Entry> {
@@ -338,7 +443,7 @@ impl Queue {
     /// Insert, promote and (if asked) move to the front in one step, so two
     /// simultaneous enqueues into an empty queue can never both win the slot.
     pub fn enqueue(&mut self, new: NewEntry, now: DateTime<Utc>) -> Enqueued {
-        self.reap_expired(now);
+        self.reap_noting(now);
         let sort_order = self.entries.iter().map(|e| e.sort_order).max().unwrap_or(0) + 1;
         let entry_id = new_token();
         let seq = self.next_seq;
@@ -365,6 +470,9 @@ impl Queue {
             model: new.model.filter(|m| !m.is_empty()),
             config: new.config.filter(|c| !c.is_empty()),
             vram_mb: new.vram_mb.filter(|v| *v > 0),
+            gpu_role: new
+                .gpu_role
+                .filter(|r| crate::gpu::ROLES.contains(&r.as_str())),
         });
         self.touch(&entry_id);
         self.sort();
@@ -395,7 +503,7 @@ impl Queue {
         instance: Option<&str>,
         now: DateTime<Utc>,
     ) -> Option<Entry> {
-        self.reap_expired(now);
+        self.reap_noting(now);
         let ttl = self.ttl;
         let entry = self
             .entries
@@ -423,7 +531,7 @@ impl Queue {
     /// active it counts as released (and promotes whoever waits). Returns
     /// (released, newly active entries).
     pub fn release(&mut self, token: &str, now: DateTime<Utc>) -> (bool, Vec<Entry>) {
-        self.reap_expired(now);
+        self.reap_noting(now);
         if !self.has_active() {
             return (true, self.fill(now));
         }
@@ -614,6 +722,7 @@ fn unreachable_entry(entry_id: &str) -> Entry {
         model: None,
         config: None,
         vram_mb: None,
+        gpu_role: None,
     }
 }
 
@@ -639,6 +748,7 @@ mod tests {
             model: None,
             config: None,
             vram_mb: None,
+            gpu_role: None,
         }
     }
 
@@ -653,16 +763,114 @@ mod tests {
     fn admission(estimates: &[(&str, u64)]) -> Admission {
         Admission {
             enabled: true,
-            total_mb: 24_576,
-            used_mb: 1_024,
-            floor_mb: 1_024,
             reserve_mb: 1_024,
+            cards: vec![CardBudget {
+                total_mb: 24_576,
+                used_mb: 1_024,
+                floor_mb: 1_024,
+            }],
             estimates: estimates
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), *v))
                 .collect(),
-            overrides: HashMap::new(),
+            ..Admission::default()
         }
+    }
+
+    /// Card 0: 24 GiB (1 GiB desktop); card 1: 20 GiB (0.5 GiB idle). The
+    /// LLM is placed on card 1, everything else stays on card 0.
+    fn two_card_admission(estimates: &[(&str, u64)]) -> Admission {
+        let mut a = admission(estimates);
+        a.cards.push(CardBudget {
+            total_mb: 20_480,
+            used_mb: 512,
+            floor_mb: 512,
+        });
+        a.roles.insert("llama".into(), vec![1]);
+        a.roles.insert("comfyui_multi".into(), vec![0, 1]);
+        a
+    }
+
+    #[test]
+    fn jobs_on_different_cards_do_not_compete() {
+        let mut q = queue();
+        // 18 GiB render + 16 GiB LLM: together far over one 24 GiB card.
+        q.set_admission(two_card_admission(&[
+            ("Krea", 18_432),
+            ("Agent · LLM", 16_384),
+        ]));
+        q.enqueue(new("Krea", "img"), t0());
+        assert_eq!(
+            q.enqueue(llm("Agent", "chat"), t0()).entry.state,
+            State::Active
+        );
+        // The same pair on one card waits.
+        let mut q = queue();
+        q.set_admission(admission(&[("Krea", 18_432), ("Agent · LLM", 16_384)]));
+        q.enqueue(new("Krea", "img"), t0());
+        assert_eq!(
+            q.enqueue(llm("Agent", "chat"), t0()).entry.state,
+            State::Waiting
+        );
+    }
+
+    #[test]
+    fn placement_follows_roles_llm_use_and_gpu_role() {
+        let a = two_card_admission(&[]);
+        let mut q = queue();
+        let img = q.enqueue(new("Krea", "img"), t0()).entry;
+        let chat = q.enqueue(llm("Agent", "chat"), t0()).entry;
+        let plan = q.enqueue(llm("Vid", "plan"), t0()).entry;
+        let mut split = new("Vid", "split");
+        split.gpu_role = Some("comfyui_multi".into());
+        let split = q.enqueue(split, t0()).entry;
+        let mut bogus = new("Mus", "x");
+        bogus.gpu_role = Some("nope".into());
+        let bogus = q.enqueue(bogus, t0()).entry;
+        assert_eq!(a.cards_of(&img), [0]);
+        assert_eq!(a.cards_of(&chat), [1], "an LLM turn: only the LLM's card");
+        assert_eq!(a.cards_of(&plan), [1]);
+        let mut unknown = img.clone();
+        unknown.uses_llm = None;
+        assert_eq!(a.cards_of(&unknown), [0, 1], "might use the LLM: both");
+        assert_eq!(a.cards_of(&split), [0, 1]);
+        assert_eq!(bogus.gpu_role, None, "unknown roles are dropped");
+        // One card: everything is card 0.
+        let one = admission(&[]);
+        assert_eq!(one.cards_of(&chat), [0]);
+        assert_eq!(one.cards_of(&split), [0]);
+    }
+
+    #[test]
+    fn a_split_job_must_fit_on_each_of_its_cards() {
+        let mut a = two_card_admission(&[("Agent · LLM", 6_000), ("Vid", 10_000)]);
+        // The split render was measured at 10 GiB on card 0 and 15 GiB on card 1.
+        a.card_estimates
+            .insert("Vid".into(), HashMap::from([(0, 10_000), (1, 15_000)]));
+        let mut q = queue();
+        q.set_admission(a.clone());
+        q.enqueue(llm("Agent", "chat"), t0());
+        let mut split = new("Vid", "split");
+        split.gpu_role = Some("comfyui_multi".into());
+        // Card 1: 512 floor + 6000 LLM + 15000 + 1024 reserve > 20480.
+        assert_eq!(q.enqueue(split, t0()).entry.state, State::Waiting);
+        // A plain render (card 0 only) would have fit.
+        let mut q = queue();
+        q.set_admission(a);
+        q.enqueue(llm("Agent", "chat"), t0());
+        assert_eq!(
+            q.enqueue(new("Vid", "plain"), t0()).entry.state,
+            State::Active
+        );
+        assert_eq!(q.estimate_on(&split_entry(&q), 1), Some(15_000));
+    }
+
+    fn split_entry(q: &Queue) -> Entry {
+        let mut e = q.entries()[0].clone();
+        e.app = "Vid".into();
+        e.uses_llm = Some(false);
+        e.gpu_role = Some("comfyui_multi".into());
+        e
     }
 
     fn active_jobs(q: &Queue) -> Vec<String> {
@@ -909,11 +1117,11 @@ mod tests {
         );
         // Something outside the queue fills the card: the live reading counts.
         let mut a = admission(&[("Mus", 6_144), ("Krea", 4_096)]);
-        a.used_mb = 20_000;
+        a.cards[0].used_mb = 20_000;
         q.set_admission(a);
         assert!(q.fill(t0()).is_empty());
         let mut a = admission(&[("Mus", 6_144), ("Krea", 4_096), ("Trainer", 1_024)]);
-        a.used_mb = 3_000;
+        a.cards[0].used_mb = 3_000;
         q.set_admission(a);
         let started: Vec<String> = q.fill(t0()).into_iter().map(|e| e.job_id).collect();
         assert_eq!(started, ["big", "small"]);
@@ -1015,10 +1223,15 @@ mod tests {
         /// free, locked waiting entries never move, and every entry is either
         /// still queued or was explicitly removed.
         #[test]
-        fn invariants_hold(ops in proptest::collection::vec(op(), 1..60), concurrent in any::<bool>()) {
+        fn invariants_hold(ops in proptest::collection::vec(op(), 1..60), concurrent in any::<bool>(),
+                           two_cards in any::<bool>()) {
             let mut q = queue();
             if concurrent {
-                q.set_admission(admission(&[("Krea", 9_000), ("Mus", 6_000), ("Agent · LLM", 7_000)]));
+                q.set_admission(if two_cards {
+                    two_card_admission(&[("Krea", 9_000), ("Mus", 6_000), ("Agent · LLM", 7_000)])
+                } else {
+                    admission(&[("Krea", 9_000), ("Mus", 6_000), ("Agent · LLM", 7_000)])
+                });
             }
             let mut now = t0();
             for op in ops {
@@ -1057,8 +1270,13 @@ mod tests {
                     prop_assert!(q.actives().filter(|e| e.uses_llm == Some(true)).count() <= 1);
                     if active > 1 {
                         let a = q.admission();
-                        let planned: u64 = q.actives().filter_map(|e| q.estimate(e)).sum();
-                        prop_assert!(a.floor_mb + planned + a.reserve_mb <= a.total_mb, "over budget");
+                        for (card, budget) in a.cards.iter().enumerate() {
+                            let on: Vec<&Entry> = q.actives().filter(|e| a.cards_of(e).contains(&card)).collect();
+                            if on.len() > 1 {
+                                let planned: u64 = on.iter().filter_map(|e| q.estimate_on(e, card)).sum();
+                                prop_assert!(budget.floor_mb + planned + a.reserve_mb <= budget.total_mb, "over budget");
+                            }
+                        }
                     }
                 } else {
                     prop_assert!(active <= 1);
@@ -1081,5 +1299,25 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn lease_expired_during_another_call_is_reported() {
+        let mut q = queue();
+        let a = q.enqueue(new("Vid", "a"), t0()).entry;
+        assert_eq!(a.state, State::Active);
+        assert!(q.take_reaped().is_empty());
+        // Vid's lease ran out unnoticed; Krea's enqueue finds it and takes the GPU.
+        let later = t0() + Duration::seconds(91);
+        let b = q.enqueue(new("Krea", "b"), later).entry;
+        assert_eq!(b.state, State::Active);
+        let reaped = q.take_reaped();
+        assert_eq!(reaped.len(), 1);
+        assert_eq!(reaped[0].entry_id, a.entry_id);
+        assert!(q.take_reaped().is_empty());
+        // The periodic reap reports through its own return value, not take_reaped.
+        let (expired, _) = q.reap(later + Duration::seconds(91));
+        assert_eq!(expired.len(), 1);
+        assert!(q.take_reaped().is_empty());
     }
 }

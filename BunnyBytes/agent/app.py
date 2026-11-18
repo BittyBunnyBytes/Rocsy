@@ -41,6 +41,9 @@ import studios
 from bunnylock import BunnyLock
 import media_import
 import guide_rag
+import plugins
+import project_setup
+import frames
 import video_edit
 from brief import DEFAULT_BRIEF, REQUIRED, SCRIPT
 
@@ -101,8 +104,9 @@ PERMISSIONS: list[dict[str, Any]] = [
      "on": "You may use the GPU yourself when a task needs it. Video: ffmpeg on the GPU's media engine, never the CPU "
            "(decode `-hwaccel vaapi -hwaccel_device /dev/dri/renderD128`; encode `-vaapi_device /dev/dri/renderD128 -vf "
            "format=nv12,hwupload -c:v h264_vaapi -qp 20`). Compute (torch/ROCm, already installed): first check VRAM with "
-           "`cat /sys/class/drm/card1/device/mem_info_vram_used /sys/class/drm/card1/device/mem_info_vram_total` and keep at "
-           "least 6 GB free (the desktop runs on this GPU and crashes when VRAM fills); free it when done. Never load "
+           "`grep . /sys/class/drm/card*/device/mem_info_vram_used /sys/class/drm/card*/device/mem_info_vram_total` (one line "
+           "per GPU when there are several; the one with boot_vga 1 drives the desktop) and keep at least 6 GB free on the "
+           "card you use (the desktop crashes when its VRAM fills); free it when done. Never load "
            "image/video/music models yourself: generation goes through the studios and their GPU queue.",
      "off": "Don't use the GPU yourself: GPU work goes through the studios (postedit, montage, motion, captions)."},
     {"key": "memory", "label": "Memory and skills", "default": True,
@@ -183,6 +187,7 @@ DEFAULTS: dict[str, Any] = {
     "loop_guard": "off",         # repeated tool calls: off (nothing), warn (tell you, keep going), stop (Hermes halts, goal pauses)
     "limit_restarts": 0,         # Hermes' iteration limit ended a run: restart it this many times in a row (0 = off, -1 = no limit)
     "image_engine": "duckduckgo",     # `$R images` search engine (IMAGE_ENGINES)
+    "browser_autoconnect": True,      # connect the live /browser Chromium when a chat starts working (Settings → Agentic)
     "image_mode": "headless",         # headless (the service fetches the results) or browser (the agent, in the visible /browser Chromium)
     # Context compression summarizes with the session's own model; hostctl copies this backup into
     # Hermes' auxiliary.compression.fallback_chain for when that model can't answer ("" = none).
@@ -308,6 +313,7 @@ class Config:
         except (TypeError, ValueError):
             out["limit_restarts"] = 0
         out["image_mode"] = values.get("image_mode") if values.get("image_mode") in IMAGE_MODES else "headless"
+        out["browser_autoconnect"] = values.get("browser_autoconnect") is not False
         engine = values.get("image_engine") if values.get("image_engine") in IMAGE_ENGINES else "duckduckgo"
         out["image_engine"] = engine if out["image_mode"] == "browser" or IMAGE_ENGINES[engine]["headless"] else "duckduckgo"
         out["compress_backup_model"] = str(values.get("compress_backup_model") or "")[:200]
@@ -357,18 +363,26 @@ class Sessions:
         self.dir = DATA / "sessions"
         self.items: dict[str, dict[str, Any]] = {}
         self.dirty: set[str] = set()
+        self.orphans: list[dict[str, str]] = []     # runs left going by sessions a restart interrupted
 
     def load(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
         for file in self.dir.glob("*.json"):
-            with suppress(OSError, ValueError):
+            with suppress(OSError, ValueError, KeyError, TypeError):
                 item = json.loads(file.read_text())
                 for j in item.get("jobs") or []:
                     if j.get("deferred") and not j.get("job_id") and j.get("state") not in studios.DONE:
-                        j.update(state="failed", error="the Agent service restarted before it finished; run captions again")
+                        j.update(state="failed", error="the Agent service restarted before it started; run it again")
                 if compact_terminals(item.get("events") or []):
                     self.dirty.add(item["id"])   # rewritten smaller on the next flush
                 if item.get("state") in BUSY:    # the service restarted mid-turn
+                    # Its Hermes run (or host CLI run) may still be going with nobody reading it and no GPU
+                    # turn held: the local model would keep generating next to a render. Stopped at startup.
+                    if item.get("run_id") or item.get("cli_run"):
+                        self.orphans.append({"run": str(item.get("run_id") or ""), "cli": str(item.get("cli_run") or "")})
+                    item["run_id"] = None
+                    item.pop("cli_run", None)
+                    self.dirty.add(item["id"])
                     item["state"] = "rendering" if unfinished(item) else "interrupted"
                     item["pending"] = None
                 self.items[item["id"]] = item
@@ -502,10 +516,118 @@ def ev(s: dict[str, Any], kind: str, text: str, **extra: Any) -> None:
         compact_terminal(s["events"], extra["tool_id"])
     s["events"].append({"i": s["next_event"], "t": now(), "kind": kind, "text": text, **extra})
     s["next_event"] += 1
+    if kind in ("assistant", "say") and text and ("::VIDEO" in text or "```h3" in text):
+        ledger_capture(s, text)
+    if kind in ("assistant", "say") and text and "```" in text:
+        custom_capture(s, text)
+    if kind in ("assistant", "say") and text and s.get("setup") and "::PROJECT" in text:
+        setup_capture(s, text)
     if len(s["events"]) > MAX_EVENTS:
         del s["events"][: len(s["events"]) - MAX_EVENTS]
     s["updated"] = now()
     sessions.save(s["id"])
+
+
+def ledger_on(s: dict[str, Any]) -> bool:
+    return plugins.plugin_on(projects.items.get(s.get("project") or ""), "prompt_ledger")
+
+
+def ledger_hermes_folder(s: dict[str, Any]) -> str:
+    return f"{HERMES_WORKSPACE}/{s['id']}/{plugins.LEDGER_DIR}"
+
+
+def custom_capture(s: dict[str, Any], text: str) -> None:
+    """Custom plugins: their ```block Title ...``` blocks in the agent's reply go into the chat's collections."""
+    project = projects.items.get(s.get("project") or "")
+    if not project or not plugins.enabled(project):
+        return
+    try:
+        notes = plugins.capture_custom(s, text, project, WORKSPACE_DIR)
+    except Exception as exc:                 # never let bookkeeping break the chat
+        log.warning("custom plugin capture failed for %s: %s", s.get("id"), exc)
+        return
+    for note in notes:
+        s["events"].append({"i": s["next_event"], "t": now(), "kind": "system", "text": note})
+        s["next_event"] += 1
+
+
+def setup_capture(s: dict[str, Any], text: str) -> None:
+    """Setup chats: the ::PROJECT draft block in a reply merges into the chat's project draft."""
+    try:
+        part = project_setup.parse(text)
+        if part is None:
+            return
+        setup = s["setup"]
+        old = setup.get("draft")
+        setup["draft"] = project_setup.merge(old, part, PROJECT_ICONS, PROJECT_COLORS)
+        if setup["draft"] is old:
+            return                           # the same draft again (a reply repeated it): nothing to announce
+        project_setup.write_files(setup["draft"], WORKSPACE_DIR / s["id"] / "project-draft")
+        note = f"Project draft v{setup['draft']['version']}: {project_setup.summary(setup['draft'])}"
+    except Exception as exc:                 # never let bookkeeping break the chat
+        log.warning("project setup capture failed for %s: %s", s.get("id"), exc)
+        note = f"⚠ Couldn't read the project draft in that reply ({exc})"
+    s["events"].append({"i": s["next_event"], "t": now(), "kind": "system", "text": note, "setup": True})
+    s["next_event"] += 1
+
+
+def setup_target(s: dict[str, Any]) -> dict[str, Any] | None:
+    return projects.items.get((s.get("setup") or {}).get("project") or "")
+
+
+def setup_extra(s: dict[str, Any]) -> tuple[str, str]:
+    """(system part, per-turn part) for a setup chat, else ("", "")."""
+    setup = s.get("setup")
+    if not setup:
+        return "", ""
+    target = setup_target(s)
+    head = project_setup.prompt_block(target, plugins.options(), PROJECT_ICONS, PROJECT_COLORS)
+    folder = f"{HERMES_WORKSPACE}/{s['id']}/project-draft" if setup.get("draft") else ""
+    return head, project_setup.context(setup.get("draft"), setup.get("applied"), target["name"] if target else "", folder)
+
+
+def tool_error_text(preview: Any) -> str:
+    """Why a tool failed, from Hermes' result preview (already secret-redacted, at most 500 characters):
+    the "error" field of a JSON result, else the text, on one line."""
+    text = str(preview or "").strip()
+    if not text:
+        return ""
+    with suppress(ValueError, TypeError):
+        data = json.loads(text)
+        if isinstance(data, dict):
+            text = str(data.get("error") or data.get("message") or data.get("detail") or text)
+    if text.startswith("{") and (m := re.search(r'"(?:error|message)"\s*:\s*"((?:[^"\\]|\\.)*)', text)):
+        text = m[1].replace('\\"', '"').replace("\\n", " ")       # a JSON preview cut at 500 characters
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:300] + ("…" if len(text) > 300 else "")
+
+
+def ledger_capture(s: dict[str, Any], text: str) -> None:
+    """Prompt ledger plugin: clip prompts in the agent's reply go into the chat's ledger."""
+    if not ledger_on(s):
+        return
+    try:
+        got = plugins.capture(s, text, WORKSPACE_DIR)
+    except Exception as exc:                 # never let bookkeeping break the chat
+        log.warning("prompt ledger capture failed for %s: %s", s.get("id"), exc)
+        return
+    saved, locked = got["saved"], got["locked"]
+    parts = []
+    if saved:
+        parts.append(f"saved clip{'s' if len(saved) > 1 else ''} {plugins.spans(saved)} as written")
+    if locked:
+        parts.append(f"left verified clip{'s' if len(locked) > 1 else ''} {plugins.spans(locked)} unchanged "
+                     "(the agent must save them explicitly to change them)")
+    if got["missing"]:
+        parts.append("⚠ " + got["note"])
+    if not parts:
+        return
+    checks = got["reports"]
+    s["events"].append({"i": s["next_event"], "t": now(), "kind": "system",
+                        "text": "Prompt ledger: " + "; ".join(parts)
+                                + ("\nChecks: " + "\n".join(checks[:12]) + (f"\n… {len(checks) - 12} more" if len(checks) > 12 else "")
+                                   if checks else (" · checks OK" if saved else ""))})
+    s["next_event"] += 1
 
 
 def set_state(s: dict[str, Any], state: str, stage: str = "") -> None:
@@ -680,12 +802,15 @@ def helper_only(command: str, sid: str) -> bool:
     steps = [x.strip() for x in re.split(r"\n|;|&&", plain) if x.strip()]
     if not steps or any(c in step for step in steps for c in "|&<>\\"):
         return False
-    called = False
+    called = assigned = False
     for step in steps:
         if step == f'R="{direct}"':
+            assigned = True
             continue
         if not (step == "$R" or step.startswith("$R ") or step.startswith(direct + " ")):
             return False
+        if step.startswith("$R") and not assigned:
+            return False      # R must be set in this same command: unset, `$R rm x` would run `rm x`
         words = step.removeprefix(direct).removeprefix("$R").split()
         if words and words[0] == "grab" and not re.fullmatch(r"img\d+", words[1] if len(words) > 1 else ""):
             return False      # `grab URL` runs a site script from the workspace
@@ -707,7 +832,8 @@ def native_block(s: dict[str, Any], tool_name: str, args: dict[str, Any] | None 
             return off
         if tool_name == "terminal" and not helper_only(str((args or {}).get("command") or ""), s["id"]):
             return off + (" Only the helper still runs: one `$R` command at a time, with values in plain quotes "
-                          "(no pipes, redirects, $(...) or `grab URL`).")
+                          "(no pipes, redirects, $(...) or `grab URL`), and with the line "
+                          f"R=\"python3 {SCRIPT} {s['id']}\" at the start of the same command.")
     service = NATIVE_SERVICE_TOOLS.get(tool_name)
     if service and (access.get("services") or {}).get(service) is False:
         return f"{ASK_SERVICES[service]} is off in this project. Tell the user; don't use a substitute."
@@ -740,6 +866,7 @@ def public_project(pr: dict[str, Any], chats: bool = False) -> dict[str, Any]:
     out = {k: pr[k] for k in ("id", "name", "icon", "color", "instructions", "created", "updated")}
     out["model"] = pr.get("model") or {}
     out["access"] = pr.get("access") or {}
+    out["plugins"] = pr.get("plugins") or {}
     out["sources"] = [{k: a.get(k) for k in ("id", "ref", "name", "mime", "kind", "size", "url")} | {"tools": a.get("tools") or []}
                       for a in pr["sources"]]
     rows = project_chats(pr["id"])
@@ -770,7 +897,8 @@ def project_block(s: dict[str, Any]) -> str:
     if access.get("subagents") is False or access.get("terminal") is False:
         limits.append("subagents")
     if access.get("terminal") is False:
-        limits.append("the terminal, except single `$R` helper commands with values in plain quotes (no pipes, redirects or $(...)); `$R grab URL` is refused too")
+        limits.append("the terminal, except single `$R` helper commands with values in plain quotes (no pipes, redirects or $(...)), "
+                      "each command starting with the R=\"python3 ...\" line from your brief; `$R grab URL` is refused too")
     if limits:
         parts.append("OFF IN THIS PROJECT, and refused if you try: " + "; ".join(limits)
                      + ". This also covers subagents you start and reaching these services any other way. "
@@ -795,8 +923,8 @@ def project_block(s: dict[str, Any]) -> str:
 def link_source(s: dict[str, Any], src: dict[str, Any]) -> dict[str, Any]:
     """A chat's own attachment sharing the source's bytes."""
     import shutil
-    if len(s.get("attachments") or []) >= 200:
-        raise ValueError("this session already holds 200 attachments")
+    if attachments_full(s):
+        raise ValueError(f"this session already holds {MAX_ATTACHMENTS} attachments")
     aid = uuid.uuid4().hex
     folder = ATTACH_DIR / aid
     folder.mkdir(parents=True, exist_ok=True)
@@ -837,7 +965,28 @@ def public(s: dict[str, Any], since: int = -1) -> dict[str, Any]:
     out["boards"] = public_boards(s)
     out["queued"] = [{"text": q["text"][:200]} for q in s.get("queued") or []]
     out["local"] = bool(config.load()["gpu_guard"] and is_local(config.load(), s))
+    if s.get("setup"):
+        out["setup"] = public_setup(s, full=False)
     return out
+
+
+def public_setup(s: dict[str, Any], full: bool = True) -> dict[str, Any]:
+    """A setup chat's draft for the page; the stream snapshot gets document previews only."""
+    setup = s["setup"]
+    target = setup_target(s)
+    d = copy.deepcopy(setup.get("draft")) if setup.get("draft") else None
+    if d:
+        d["documents"] = [{"name": n, "chars": len(t), "text": t if full else t[:400]} for n, t in d["documents"].items()]
+        d["new_plugins"] = list(d["new_plugins"].values())
+        d["summary"] = project_setup.summary(setup["draft"])
+        if d.get("plugins") is not None:
+            new = {project_setup.key(spec["label"]) for spec in d["new_plugins"]}
+            labels = {o["id"]: f"{o.get('icon') or '🧩'} {o.get('label')}" for o in plugins.options()}
+            d["plugin_labels"] = [labels.get(plugin_ref(n), f"{n} (new)" if project_setup.key(n) in new else f"{n} (unknown, skipped)")
+                                  for n in d["plugins"]]
+    return {"project": target["id"] if target else "", "project_name": target["name"] if target else "",
+            "gone": bool(setup.get("project")) and not target,     # the project it was updating was deleted
+            "draft": d, "applied": setup.get("applied") if target else None}
 
 
 # ---------------- attachments ----------------
@@ -957,6 +1106,31 @@ def public_attachments(items: list[dict[str, Any]] | None) -> list[dict[str, Any
     return [{k: a.get(k) for k in ("id", "ref", "name", "mime", "kind", "size", "url")} for a in items or []]
 
 
+MAX_ATTACHMENTS = 200          # per chat: what the user sent and what the agent shared, grabbed or made
+MAX_AUTO_ATTACHMENTS = 300     # per chat: screenshots the service posts by itself; the oldest make room
+
+
+def auto_attachment(a: dict[str, Any]) -> bool:
+    """Screenshots posted by the service (the live browser, Hermes' browser pages, test runs). They
+    used to count toward the chat's 200: a long scouting or mod session filled it up, and from then
+    on share, grab and scan failed for good."""
+    source = str(a.get("source") or "")
+    return bool(a.get("auto")) or "/.live/" in source or "/.browser-screenshots/" in source
+
+
+def attachments_full(s: dict[str, Any]) -> bool:
+    return sum(1 for a in s.get("attachments") or [] if not auto_attachment(a)) >= MAX_ATTACHMENTS
+
+
+def trim_auto_attachments(s: dict[str, Any]) -> None:
+    import shutil
+    auto = [a for a in s.get("attachments") or [] if auto_attachment(a)]
+    for a in auto[:max(0, len(auto) - MAX_AUTO_ATTACHMENTS + 1)]:
+        s["attachments"].remove(a)
+        if ATTACH_ID.fullmatch(a.get("id", "")):
+            shutil.rmtree(ATTACH_DIR / a["id"], ignore_errors=True)
+
+
 def claim_attachments(s: dict[str, Any], ids: list[str]) -> list[dict[str, Any]]:
     """Attach uploads to a session (att1, att2, ...); unknown ids are refused."""
     out = []
@@ -968,7 +1142,10 @@ def claim_attachments(s: dict[str, Any], ids: list[str]) -> list[dict[str, Any]]
         meta = attachment_meta(aid)
         if not meta or not meta.get("complete", True):
             raise HTTPException(422, "An attachment is missing or didn't finish uploading; attach it again")
-        meta.update(ref=f"att{len(s['attachments']) + 1}", session=s["id"], studio={})
+        # The next free number, not the count: old screenshots are removed, and a count would reuse a ref.
+        taken = [int(m.group(1)) for a in s["attachments"] if (m := re.fullmatch(r"att(\d+)", str(a.get("ref") or "")))]
+        s["att_next"] = max(int(s.get("att_next") or 0), max(taken, default=0)) + 1
+        meta.update(ref=f"att{s['att_next']}", session=s["id"], studio={})
         if ATTACH_ID.fullmatch(aid):
             (ATTACH_DIR / aid / "meta.json").write_text(json.dumps(meta))
         s["attachments"].append(meta)
@@ -1542,6 +1719,19 @@ def permissions_block(cfg: dict[str, Any]) -> str:
                      "--ref) and also takes a direct image URL or a page that shows it. Don't curl images yourself, and never "
                      "build or guess URLs. Look at every grabbed picture with your vision tool before using it. If 3 grabs "
                      "fail, stop: go on without it, or `ask` the user for a picture.")
+        lines.append("- Stills from a film/show/video scene: `$R frames \"show scene description\" [--n 6] [--at M:SS] [--url URL]` "
+                     "finds the clip with yt-dlp, downloads it and returns ONE numbered contact sheet (ready when the command "
+                     "returns) plus other matching videos; look at the sheet with vision, then `$R frames pick SLUG K --name NAME` "
+                     "shares frame K as an attachment. The same works on a video the user sent: `$R frames URL` (any yt-dlp "
+                     "link; long videos are sampled across their whole length without a full download), `$R frames att3` (an "
+                     "upload), `$R frames vid2` (a finished render) or a workspace video path; add `--at M:SS` for a close look "
+                     "at one moment. Don't write your own yt-dlp/ffmpeg frame scripts for this. Your vision "
+                     "tool takes attachment refs too (image_url \"att14\").")
+        lines.append("- Recreating or reusing a video the user gave (link, upload, render): `$R transcript SRC` gives its dialogue "
+                     "with times (GPU Whisper; keep lines word for word), `$R frames SRC --shots` lists every shot with start-end "
+                     "times (and the lines spoken in it once transcribed) on 16-panel sheets, and `$R cut SRC 0:05-0:15[,...]` "
+                     "turns the scenes you pick into H3 video references (5-15 s pieces, shared as attN; at most 3 per clip, "
+                     "15 s in all). For a long video with no timestamps: transcript, then --shots, find the scenes, then cut.")
     if perm(cfg, "web") and perm(cfg, "terminal") and perm(cfg, "files") != "none":
         lines.append(f"- Video downloads: `yt-dlp` is on your PATH (kept up to date in the Manager) for any site it supports, e.g. "
                      f"`yt-dlp -P {HERMES_WORKSPACE} -f 'bv*[height<=1080]+ba/b' --merge-output-format mp4 --no-playlist URL` "
@@ -1667,7 +1857,12 @@ def build_input(s: dict[str, Any], request: str, browser: dict[str, Any] | None 
                   + ", ".join(f"{kind}={cfg[f'{kind}_model']}" for kind in ("video", "voice", "image", "music"))
                   + ". An explicit user model choice overrides these defaults.\n")
     extra = model_note + review_block(cfg) + ask_block(s, cfg) + h3_script_block(s) + attachments_block(s) + browser_block(browser) + goal_block(s) + naming_block(s)
-    project = project_block(s)
+    if ledger_on(s):
+        extra += plugins.context_block(s, ledger_hermes_folder(s))
+    extra += plugins.custom_context(s, projects.items.get(s.get("project") or ""), HERMES_WORKSPACE)
+    setup_head, setup_note = setup_extra(s)
+    project = project_block(s) + setup_head
+    extra += setup_note
     if not split:
         return text + project + extra
     head, _, tail = text.partition(marker)
@@ -1886,7 +2081,8 @@ async def drive(s: dict[str, Any], request: str) -> None:
                                 ev(s, "tool", f"{e.get('tool')}  {preview[:400]}")
                         elif kind == "tool.completed" and e.get("error"):
                             if e.get("tool") not in ("terminal", "exec_command"):
-                                ev(s, "warn", f"{e.get('tool')} failed after {e.get('duration', 0):.1f}s")
+                                ev(s, "warn", f"{e.get('tool')} failed after {float(e.get('duration') or 0):.1f}s"
+                                              + (f": {why}" if (why := tool_error_text(e.get("preview"))) else ""))
                         elif kind == "tool.completed" and e.get("screenshot_path"):
                             post_browser_screenshot(s, e)
                         elif kind == "tool.completed" and s.get("live_shots") and str(e.get("tool") or "").startswith("browser_"):
@@ -2024,11 +2220,29 @@ async def drive_cli(s: dict[str, Any], request: str, browser: Any, model: str, c
         sessions.save(s["id"])
 
 
+async def autoconnect_browser(s: dict[str, Any], cfg: dict[str, Any]) -> None:
+    """Settings → Agentic → "Connect the live browser when a chat starts": like /browser connect, before the run."""
+    if not cfg.get("browser_autoconnect") or not perm(cfg, "web"):
+        return
+    state = await browser_state(fresh=True)
+    if state is None or state.get("connected"):        # host helper unreachable, or already connected
+        return
+    try:
+        state = await hostctl("POST", "/browser/connect", {"url": ""}, timeout=60)
+        browser_cache.update(t=now(), data=state)
+        if state.get("connected"):
+            ev(s, "system", "🌐 Connected the live browser for this chat (Settings → Agentic → Connect the live browser when a chat starts)")
+    except RuntimeError as exc:
+        ev(s, "warn", f"Couldn't connect the live browser at chat start ({exc}); /browser connect to try again")
+
+
 async def conversation(sid: str, request: str) -> None:
     """Run turns until the agent is done: a run, then (if it left jobs running) wait for
     them with the GPU handed over, then resume it with the results."""
     s = sessions.items[sid]
     cfg = config.load()
+    with suppress(Exception):
+        await autoconnect_browser(s, cfg)
     guard = cfg["gpu_guard"] and is_local(cfg, s)
     cut_offs = fresh_starts = halts = limits = 0   # recoveries since the last turn that finished cleanly
     s.pop("offer", None); s.pop("offers", None)    # offers left by a stopped run are stale
@@ -2746,7 +2960,7 @@ async def run_gametest(s: dict[str, Any], j: dict[str, Any]) -> None:
         pictures = []
         for shot in r.get("screenshots") or []:
             with suppress(ValueError, OSError):
-                pictures.append(share_file(s, hermes_path(shot)))
+                pictures.append(share_file(s, hermes_path(shot), auto=True))
         errs = r.get("errors") or []
         added = r.get("new_errors") or []
         shared = r.get("baseline_errors") or []
@@ -2817,7 +3031,7 @@ async def run_reatest(s: dict[str, Any], j: dict[str, Any]) -> None:
         pictures = []
         for shot in [x for x in run.get("shots") or [] if not x.get("base")][:3]:
             with suppress(ValueError, OSError):
-                pictures.append(share_file(s, f"{folder}/shots/{shot['file']}", f"test-{run['id']}-{shot['file']}"))
+                pictures.append(share_file(s, f"{folder}/shots/{shot['file']}", f"test-{run['id']}-{shot['file']}", auto=True))
         labels = [x["label"] for x in run.get("shots") or [] if not x.get("base")][:3]
         summary = (f"test run {run['id']} {run.get('state')}: {run.get('summary') or ''}"
                    + (f"; errors: {' | '.join(str(e) for e in (run.get('errors') or [])[:8])}" if run.get("errors") else "")
@@ -3055,6 +3269,13 @@ async def run_command(s: dict[str, Any], text: str) -> str | None:
         verb, _, arg = rest.partition(" ")
         verb = verb.lower()
         g = s.get("goal")
+        # "/goal stop the flicker in clip 3" is an objective, not the stop command: a command word
+        # followed by more words (or by something that isn't its argument) is the goal's first word.
+        extra = arg.strip().lower()
+        if ((verb in ("status", "show", "pause", "resume", "clear", "stop", "done") and extra)
+                or (verb == "reopen" and extra and not extra.isdigit())
+                or (verb == "budget" and extra and extra not in UNLIMITED and not extra.isdigit())):
+            verb = "(objective)"
         if verb in ("", "status", "show"):
             say(goal_line(g))
             return None
@@ -3201,7 +3422,8 @@ async def run_command(s: dict[str, Any], text: str) -> str | None:
             say("The Master Agent is still working; /stop first.")
             return None
         say("Sending your last message again.")
-        return "The user asks you to try their last request again (do it differently if it went wrong):\n" + last["text"]
+        prefix = "The user asks you to try their last request again (do it differently if it went wrong):\n"
+        return prefix + last["text"].removeprefix(prefix)       # a second /retry doesn't wrap the first one
     if head == "/fresh":
         s.pop("hermes_session", None)
         s.update(hermes_runs=0, hermes_gen=s.get("hermes_gen", 0) + 1)
@@ -3277,6 +3499,7 @@ async def lifespan(_: FastAPI):
     timer = asyncio.create_task(scheduler())
     answerer = asyncio.create_task(auto_answerer())
     spawn(backfill_agentic_clips())
+    spawn(stop_orphan_runs())
     for s in sessions.items.values():          # restarted while its jobs rendered: keep watching them
         if s["state"] == "rendering":
             runners[s["id"]] = asyncio.create_task(resume_after_restart(s["id"]))
@@ -3289,6 +3512,22 @@ async def lifespan(_: FastAPI):
         answerer.cancel()
         await gpu_queue.stop()
         sessions.flush()
+
+
+async def stop_orphan_runs() -> None:
+    """After a restart: end the runs of sessions that were mid-turn (see Sessions.load). A run that
+    already finished just answers with an error, which is ignored."""
+    orphans, sessions.orphans = sessions.orphans, []
+    for item in orphans:
+        if item["run"]:
+            with suppress(Exception):
+                async with httpx.AsyncClient(timeout=20) as client:
+                    await client.post(f"{HERMES_URL}/v1/runs/{item['run']}/stop", headers=hermes_headers())
+        if item["cli"]:
+            with suppress(Exception):
+                await hostctl("POST", "/clis/stop", {"run": item["cli"]})
+    if orphans:
+        log.info("stopped %d run(s) left over from before the restart", len(orphans))
 
 
 def auto_answer_at(s: dict[str, Any]) -> float | None:
@@ -3486,20 +3725,26 @@ async def scheduler() -> None:
     while True:
         await asyncio.sleep(20)
         try:
-            items, dirty, t = load_schedules(), False, now()
-            for x in items:
+            updates: dict[str, dict[str, Any]] = {}
+            t = now()
+            for x in load_schedules():
                 if not x.get("enabled") or not x.get("next") or x["next"] > t:
                     continue
+                change: dict[str, Any] = {}
                 if t - x["next"] <= 600:
-                    x["last_session"] = await run_schedule(x)
-                    x["last_run"] = t
+                    change.update(last_session=await run_schedule(x), last_run=t)
                 else:
                     log.warning("schedule %s missed its %s start", x["id"], x["time"])
-                    x["missed"] = x["next"]
-                x["next"] = next_run(x, t)
-                x["enabled"] = x["next"] is not None
-                dirty = True
-            if dirty:
+                    change["missed"] = x["next"]
+                change["next"] = next_run(x, t)
+                change["enabled"] = change["next"] is not None
+                updates[x["id"]] = change
+            if updates:
+                # Read again and change only the schedules that ran: starting one takes a moment, and a
+                # schedule added or edited meanwhile was overwritten by the list read before it.
+                items = load_schedules()
+                for x in items:
+                    x.update(updates.get(x["id"], {}))
                 save_schedules(items)
             for sid, s in list(sessions.items.items()):
                 g = s.get("goal") or {}
@@ -3579,6 +3824,7 @@ class SessionBody(BaseModel):
     model: ModelChoice | None = None
     tz: str = Field(default="", max_length=64)       # the page's timezone, for /schedule times
     cleared: list[str] = Field(default_factory=list, max_length=10)   # Ask first: services the caller already approved (a scheduled post)
+    setup: str | None = Field(default=None, max_length=40)   # a project setup chat: "new" or the project id to update
 
 
 class ScheduleBody(BaseModel):
@@ -4023,8 +4269,19 @@ async def create_session(body: SessionBody, request: Request) -> dict[str, Any]:
     choice = await check_model_choice(body.model)
     if body.project and body.project not in projects.items:
         raise HTTPException(422, "That project no longer exists")
+    for aid in body.attachments:       # checked before the session exists: a refusal used to leave a ghost "starting" chat
+        if not (meta := attachment_meta(aid)) or not meta.get("complete", True):
+            raise HTTPException(422, "An attachment is missing or didn't finish uploading; attach it again")
+    if body.setup and body.setup != "new" and body.setup not in projects.items:
+        raise HTTPException(422, "That project no longer exists")
     s = new_session(text or "Attachment: " + ", ".join((attachment_meta(a) or {}).get("name", "file") for a in body.attachments))
     set_model_choice(s, choice)
+    if body.setup:
+        target = "" if body.setup == "new" else body.setup
+        s["setup"] = {"project": target, "project_name": projects.items[target]["name"] if target else "",
+                      "draft": None, "applied": None, "made_plugins": {}}
+        s["title"] = ("Set up: " + projects.items[target]["name"]) if target else "New project setup"
+        s["named"] = "user"
     if body.project:
         s["project"] = body.project
         projects.items[body.project]["updated"] = now()
@@ -4195,6 +4452,7 @@ class ProjectBody(BaseModel):
     instructions: str | None = Field(default=None, max_length=8000)
     model: ModelChoice | None = None
     access: dict[str, Any] | None = None
+    plugins: dict[str, Any] | None = None
 
 
 def apply_project(pr: dict[str, Any], body: ProjectBody) -> None:
@@ -4215,6 +4473,8 @@ def apply_project(pr: dict[str, Any], body: ProjectBody) -> None:
         pr["instructions"] = body.instructions
     if body.access is not None:
         pr["access"] = clean_access(body.access)
+    if body.plugins is not None:
+        pr["plugins"] = plugins.clean_plugins(body.plugins)
 
 
 def get_project_or_404(pid: str) -> dict[str, Any]:
@@ -4251,7 +4511,54 @@ async def project_options() -> dict[str, Any]:
                          for k, label in ASK_SERVICES.items()],
             "source_tools": [{"key": k, "label": ASK_SERVICES[k].split(" (")[0]} for k in SOURCE_TOOLS],
             "agentic_on": bool(cfg["use_agentic"]), "subagents_on": bool(perm(cfg, "delegate")),
-            "terminal_on": bool(perm(cfg, "terminal"))}
+            "terminal_on": bool(perm(cfg, "terminal")), "plugins": plugins.options()}
+
+
+class CustomPluginBody(BaseModel):
+    label: str | None = Field(default=None, max_length=200)
+    icon: str | None = Field(default=None, max_length=40)
+    description: str | None = Field(default=None, max_length=2000)
+    instructions: str | None = Field(default=None, max_length=8000)
+    capture: str | None = Field(default=None, max_length=40)
+    feed_back: bool | None = None
+    button: bool | None = None
+
+
+@app.post(p("/api/plugins/custom"), status_code=201)
+async def create_custom_plugin(body: CustomPluginBody, request: Request) -> dict[str, Any]:
+    """Project → Plugins → New plugin: a user-made plugin, available to every project."""
+    json_only(request)
+    try:
+        return plugins.create_custom(body.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@app.patch(p("/api/plugins/custom/{plugin_id}"))
+async def edit_custom_plugin(plugin_id: str, body: CustomPluginBody, request: Request) -> dict[str, Any]:
+    json_only(request)
+    try:
+        return plugins.update_custom(plugin_id, body.model_dump(exclude_none=True))
+    except KeyError:
+        raise HTTPException(404, "No such plugin") from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@app.delete(p("/api/plugins/custom/{plugin_id}"))
+async def delete_custom_plugin(plugin_id: str, request: Request) -> dict[str, Any]:
+    """Deletes the plugin and turns it off in every project (chats keep what it saved in their files)."""
+    json_only(request)
+    if not plugins.delete_custom(plugin_id):
+        raise HTTPException(404, "No such plugin")
+    changed = False
+    for pr in projects.items.values():
+        if plugin_id in (pr.get("plugins") or {}):
+            pr["plugins"].pop(plugin_id, None)
+            changed = True
+    if changed:
+        projects.save()
+    return {"deleted": plugin_id}
 
 
 @app.get(p("/api/projects/{pid}"))
@@ -4477,6 +4784,131 @@ async def move_session(sid: str, body: MoveBody, request: Request) -> dict[str, 
     return {"id": sid, "project": body.project}
 
 
+@app.get(p("/api/sessions/{sid}/setup"))
+async def get_setup(sid: str) -> dict[str, Any]:
+    s = sessions.items.get(sid)
+    if not s or not s.get("setup"):
+        raise HTTPException(404, "No such setup chat")
+    return public_setup(s)
+
+
+class SetupApplyBody(BaseModel):
+    version: int = Field(ge=1)
+
+
+def write_text_source(pr: dict[str, Any], name: str, text: str) -> None:
+    """A draft document becomes (or replaces) a project source with that name."""
+    data = text.encode()
+    mime = mimetypes.guess_type(name)[0] or "text/plain"
+    if not mime.startswith("text/"):
+        mime = "text/plain"
+    old = next((a for a in pr["sources"] if a.get("name") == name and ATTACH_ID.fullmatch(a.get("id", ""))), None)
+    if old:
+        (ATTACH_DIR / old["id"] / name).write_bytes(data)
+        old.update(size=len(data), total=len(data), mime=mime, t=now())
+        (ATTACH_DIR / old["id"] / "meta.json").write_text(json.dumps(old))
+        return
+    if len(pr["sources"]) >= MAX_PROJECT_SOURCES:
+        raise HTTPException(422, f"A project holds up to {MAX_PROJECT_SOURCES} sources")
+    aid = uuid.uuid4().hex
+    (ATTACH_DIR / aid).mkdir(parents=True, exist_ok=True)
+    (ATTACH_DIR / aid / name).write_bytes(data)
+    meta = {"id": aid, "name": name, "mime": mime, "kind": "file", "size": len(data), "total": len(data),
+            "complete": True, "t": now(), "url": p(f"/api/attachments/{aid}"),
+            "hermes_path": f"{HERMES_ATTACH_DIR}/{aid}/{name}", "session": None,
+            "project": pr["id"], "ref": f"src{pr['next_source']}"}
+    pr["next_source"] += 1
+    (ATTACH_DIR / aid / "meta.json").write_text(json.dumps(meta))
+    pr["sources"].append(meta)
+
+
+@app.post(p("/api/sessions/{sid}/setup/apply"))
+async def apply_setup(sid: str, body: SetupApplyBody, request: Request) -> dict[str, Any]:
+    """The setup chat's Create project / Apply changes button: the draft becomes the project.
+    Everything is checked first, on a copy, so a refusal leaves the project and plugins as they were."""
+    import shutil
+    json_only(request)
+    s = sessions.items.get(sid)
+    if not s or not s.get("setup"):
+        raise HTTPException(404, "No such setup chat")
+    setup, d = s["setup"], s["setup"].get("draft")
+    if not d:
+        raise HTTPException(422, "There's no draft yet: keep chatting until the agent proposes one")
+    if d.get("version") != body.version:
+        raise HTTPException(409, "The draft changed while you were looking; check it and press the button again")
+    live = setup_target(s)
+    created = live is None
+    if created:                          # a new project, or the one this chat was updating was deleted since
+        name = d.get("name") or setup.get("project_name") or ""
+        if not name:
+            raise HTTPException(422, "The draft has no project name yet; ask the agent for one")
+        pr = {"id": uuid.uuid4().hex, "name": name, "icon": "folder", "color": "blue", "instructions": "", "sources": [],
+              "next_source": 1, "created": now(), "updated": now()}
+    else:
+        pr = copy.deepcopy(live)
+    apply_project(pr, ProjectBody(name=d.get("name") or None, icon=d.get("icon") or None, color=d.get("color") or None,
+                                  instructions=d.get("instructions")))
+    # Check the new plugins before making any (made once per chat, updated on later applies).
+    made = setup.setdefault("made_plugins", {})          # plugin name key -> id, so applying again updates it
+    captures: dict[str, str] = {}
+    for label, spec in d.get("new_plugins", {}).items():
+        current = plugins.custom_plugins().get(made.get(project_setup.key(label)) or "")
+        try:
+            plugins._clean_spec(spec, current)
+        except ValueError as exc:
+            raise HTTPException(422, f"Plugin {label}: {exc}. Ask the agent to fix it.") from None
+        if spec.get("capture") and captures.setdefault(spec["capture"], label) != label:
+            raise HTTPException(422, f"Plugins {captures[spec['capture']]} and {label} both save ```{spec['capture']} "
+                                     "blocks. Ask the agent to rename one.")
+    new_names = [n for n in d.get("documents", {}) if not any(a.get("name") == n for a in pr["sources"])]
+    removed = [a for a in pr["sources"] if any(a.get("ref") == n or a.get("name") == n for n in d.get("remove", []))]
+    if len(pr["sources"]) - len(removed) + len(new_names) > MAX_PROJECT_SOURCES:
+        raise HTTPException(422, f"A project holds up to {MAX_PROJECT_SOURCES} sources")
+    # Commit.
+    labels = {}
+    for label, spec in d.get("new_plugins", {}).items():
+        k = project_setup.key(label)
+        if made.get(k) in plugins.custom_plugins():
+            plugins.update_custom(made[k], spec)
+        else:
+            made[k] = plugins.create_custom(spec)["id"]
+        labels[k] = made[k]
+    ids = [pid for name in (d["plugins"] if d.get("plugins") is not None else [*(pr.get("plugins") or {}), *labels.values()])
+           if (pid := plugin_ref(name, labels))]
+    pr["plugins"] = plugins.clean_plugins({pid: {"on": True} for pid in ids})
+    for a in removed:
+        if ATTACH_ID.fullmatch(a["id"]):
+            shutil.rmtree(ATTACH_DIR / a["id"], ignore_errors=True)
+    pr["sources"] = [a for a in pr["sources"] if a not in removed]
+    for name, text in d.get("documents", {}).items():
+        write_text_source(pr, name, text)
+    pr["updated"] = now()
+    projects.items[pr["id"]] = pr
+    projects.save()
+    setup.update(project=pr["id"], project_name=pr["name"], applied=d["version"])
+    d["remove"] = []                     # done; a later apply mustn't delete a new source with that name
+    s["project"] = pr["id"]
+    if s.get("named") != "user" or s["title"] in ("New project setup", f"Set up: {live['name'] if live else ''}"):
+        s["title"] = f"Set up: {pr['name']}"
+    s["events"].append({"i": s["next_event"], "t": now(), "kind": "system", "setup": True,
+                        "text": f"{'Created' if created else 'Updated'} the project {pr['name']} from draft v{d['version']}"})
+    s["next_event"] += 1
+    s["updated"] = now()
+    sessions.save(sid)
+    changed(sid)
+    return {"project": public_project(pr, chats=True), "session": public(s), "created": created}
+
+
+def plugin_ref(name: str, made: dict[str, str] | None = None) -> str:
+    """A plugin id from an id or a (case-insensitive) label; "" if unknown."""
+    if plugins.known(name):
+        return name
+    key = project_setup.key(name)
+    if made and key in made:
+        return made[key]
+    return next((o["id"] for o in plugins.options() if project_setup.key(o.get("label", "")) == key), "")
+
+
 @app.get(p("/api/sessions/{sid}"))
 async def get_session(sid: str, since: int = -1) -> dict[str, Any]:
     s = sessions.items.get(sid)
@@ -4506,8 +4938,15 @@ async def rename_session(sid: str, body: RenameBody, request: Request) -> dict[s
 
 
 def remove_session(sid: str) -> None:
+    import shutil
     drop_attachments(sessions.items.pop(sid))
     sessions.save(sid)
+    goal_mirrored.pop(sid, None)
+    # Its workspace folder too (fetched job copies, frames, grabs, imports, Motion projects): it used to
+    # stay behind for good. In a thread: a Motion project's node_modules is tens of thousands of files.
+    folder = WORKSPACE_DIR / sid
+    if PROJECT_ID.fullmatch(sid) and folder.is_dir() and not folder.is_symlink():
+        spawn(asyncio.to_thread(shutil.rmtree, folder, True))
 
 
 @app.delete(p("/api/sessions/{sid}"))
@@ -5976,12 +6415,15 @@ async def look_tool(s: dict[str, Any], args: dict[str, Any], cfg: dict[str, Any]
         return "error: give a question"
     content: list[dict[str, Any]] = [{"type": "text", "text": question}]
     image = str(args.get("image") or "").strip()
+    image = attachment_path(s, image) or image          # attN or an attachment's file name
     if image:
-        if not image.startswith(HERMES_WORKSPACE + "/"):
-            return f"error: the image must be in {HERMES_WORKSPACE}/"
-        local = (WORKSPACE_DIR / image[len(HERMES_WORKSPACE) + 1:]).resolve()
-        if not local.is_relative_to(WORKSPACE_DIR.resolve()) or not local.is_file():
-            return f"error: {image} doesn't exist"
+        roots = [(HERMES_WORKSPACE, WORKSPACE_DIR), (HERMES_ATTACH_DIR, ATTACH_DIR)]
+        root = next(((h, here) for h, here in roots if image.startswith(h + "/")), None)
+        if not root:
+            return f"error: the image must be an attachment (attN) or in {HERMES_WORKSPACE}/"
+        local = (root[1] / image[len(root[0]) + 1:]).resolve()
+        if not local.is_relative_to(root[1].resolve()) or not local.is_file():
+            return f"error: {image} doesn't exist" + (" yet (still being written? wait for the process that makes it)" if root[0] == HERMES_WORKSPACE else "")
         kind = sniff_media(local.read_bytes()[:64])
         if not kind or not kind[0].startswith("image/"):
             return f"error: {image} isn't an image"
@@ -6333,7 +6775,7 @@ def image_size(data: bytes, mime: str) -> tuple[int, int] | None:
     return None
 
 
-def share_file(s: dict[str, Any], path: str, name: str = "") -> dict[str, Any]:
+def share_file(s: dict[str, Any], path: str, name: str = "", auto: bool = False) -> dict[str, Any]:
     """Copy a file from the agent's workspace (or an attachment) into this session's attachments.
     The type comes from the file's bytes, not its name: an extension-less --name still makes an
     image, and an HTML error page saved as .png is refused."""
@@ -6357,8 +6799,11 @@ def share_file(s: dict[str, Any], path: str, name: str = "") -> dict[str, Any]:
     size = local.stat().st_size
     if not 0 < size <= MAX_UPLOAD:
         raise ValueError(f"files can be 1 byte to {MAX_UPLOAD // 1024 // 1024} MB")
-    if len(s.get("attachments") or []) >= 200:
-        raise ValueError("this session already holds 200 attachments")
+    auto = auto or auto_attachment({"source": str(local)})
+    if auto:
+        trim_auto_attachments(s)        # the service's own screenshots: the oldest make room
+    elif attachments_full(s):
+        raise ValueError(f"this session already holds {MAX_ATTACHMENTS} attachments")
     name = safe_name(name or local.name)
     with local.open("rb") as fh:
         head = fh.read(512)
@@ -6376,7 +6821,7 @@ def share_file(s: dict[str, Any], path: str, name: str = "") -> dict[str, Any]:
     shutil.copyfile(local, ATTACH_DIR / aid / name)
     meta = {"id": aid, "name": name, "mime": mime, "kind": attachment_kind(mime), "size": size, "total": size, "complete": True,
             "t": now(), "url": p(f"/api/attachments/{aid}"), "hermes_path": f"{HERMES_ATTACH_DIR}/{aid}/{name}",
-            "session": None, "by": "agent", "source": str(local)}
+            "session": None, "by": "agent", "source": str(local), **({"auto": True} if auto else {})}
     (ATTACH_DIR / aid / "meta.json").write_text(json.dumps(meta))
     return claim_attachments(s, [aid])[0]
 
@@ -6598,6 +7043,14 @@ async def image_search(query: str, n: int = 10, min_side: int = 600, engine_id: 
         if junk_image(x, x["site"]):        # clip art, stock and free-PNG sites: low-quality references
             continue
         out.append(x)
+    if not out and errors and engine_id != "bing+commons":
+        # The chosen engine refused (DuckDuckGo's i.js answers 403 to scripts since 2026-11): fall back to Bing + Commons
+        with suppress(ValueError):
+            out = await image_search(query, n, min_side, "bing+commons")
+            for x in out:
+                x["fallback"] = f"{engine_id} failed ({', '.join(errors)})"
+            if out:
+                return out[:n]
     if not out and errors:
         raise ValueError("image search failed (" + ", ".join(errors) + ")")
     return out[:n]
@@ -6951,7 +7404,162 @@ async def tool_check(sid: str, request: Request) -> dict[str, Any]:
     s = sessions.items.get(sid)
     if not s or not isinstance(body, dict):
         return {"block": "", "limited": False}
-    return {"block": native_block(s, str(body.get("tool") or ""), body.get("args") if isinstance(body.get("args"), dict) else {}), "limited": bool(project_access(s))}
+    tool = str(body.get("tool") or "")
+    args = body.get("args") if isinstance(body.get("args"), dict) else {}
+    out: dict[str, Any] = {"block": native_block(s, tool, args), "limited": bool(project_access(s))}
+    if tool == "vision_analyze" and isinstance(args.get("image_url"), str):
+        # vision on "att14" or an attachment's file name: the real file path (the agent kept guessing these).
+        if (path := attachment_path(s, args["image_url"])) and path != args["image_url"]:
+            out["args"] = {"image_url": path}
+    return out
+
+
+# --- `$R frames` / `$R transcript` / `$R cut`: a video the user gave (link, upload, render, workspace file) --------
+
+async def media_source(s: dict[str, Any], word: str, url: str = "") -> dict[str, Any]:
+    """{"url", "local", "label", "again" (how to name it in a follow-up command), "id" (stable per source)}; neither url
+    nor local means the word is a search. Raises ValueError with a message for the agent."""
+    word = (word or "").strip().strip("'\"")
+    out: dict[str, Any] = {"url": url, "local": None, "label": "", "again": url, "id": f"url:{url}" if url else ""}
+    if not url and re.fullmatch(r"(?i)https?://\S+", word):
+        out.update(url=word, again=word, id=f"url:{word}")
+    elif re.fullmatch(r"(?i)@?att\d+", word):
+        a = next((x for x in s.get("attachments") or [] if x["ref"] == word.lstrip("@").lower()), None)
+        if not a:
+            raise ValueError(f"no attachment {word} in this chat (`$R attachments`)")
+        if a["kind"] != "video":
+            raise ValueError(f"{a['ref']} is {'an' if a['kind'][0] in 'aeiou' else 'a'} {a['kind']} (\"{a['name']}\"), not a video")
+        out.update(local=ATTACH_DIR / a["hermes_path"][len(HERMES_ATTACH_DIR) + 1:], label=a["name"], again=a["ref"], id=f"att:{a['id']}")
+    elif re.fullmatch(r"(?i)[a-z]+\d+", word) and any(j["ref"] == word.lower() for j in s.get("jobs") or []):
+        try:
+            j = finished_job(s, word.lower())
+        except studios.StudioError as exc:
+            raise ValueError(str(exc)) from None
+        files = [p for kind, p in await fetch_job_files(s, j) if kind == "video"]
+        if not files:
+            raise ValueError(f"{word} has no finished video")
+        out.update(local=WORKSPACE_DIR / files[0][len(HERMES_WORKSPACE) + 1:], label=f"{word.lower()} (your render)",
+                   again=word.lower(), id=f"job:{word.lower()}")
+    elif word.startswith(HERMES_WORKSPACE + "/") or word.startswith(HERMES_ATTACH_DIR + "/"):
+        root, here = (HERMES_WORKSPACE, WORKSPACE_DIR) if word.startswith(HERMES_WORKSPACE + "/") else (HERMES_ATTACH_DIR, ATTACH_DIR)
+        local = (here / word[len(root) + 1:]).resolve()
+        if not local.is_relative_to(here.resolve()):
+            raise ValueError("that path is outside your workspace")
+        if not local.is_file():
+            raise ValueError(f"{word} doesn't exist")
+        st = local.stat()
+        out.update(local=local, label=local.name, again=word, id=f"file:{word}:{st.st_size}:{int(st.st_mtime)}")
+    return out
+
+
+def transcript_cues(s: dict[str, Any], source_id: str) -> list[list[Any]] | None:
+    """The cues of a transcript already made for this source in this chat (for `frames --shots`)."""
+    entry = (s.get("transcripts") or {}).get(source_id) or {}
+    try:
+        return json.loads((WORKSPACE_DIR / entry["json"]).read_text()).get("cues") if entry.get("json") else None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+async def transcript_tool(s: dict[str, Any], src: dict[str, Any], wait: int) -> str:
+    """Timestamped dialogue of a video: its audio goes to Vid's GPU Whisper (vocals split from music first). Waits up
+    to `wait` seconds; a transcript still in the GPU queue is picked up by running the same command again."""
+    source_id, local, url, label, again = src["id"], src["local"], src["url"], src["label"], src["again"]
+    book = s.setdefault("transcripts", {})
+    entry = book.get(source_id) or {}
+    if entry.get("json") and (WORKSPACE_DIR / entry["json"]).is_file():
+        status = {"state": "ready", **json.loads((WORKSPACE_DIR / entry["json"]).read_text())}
+    else:
+        status = {}
+        if entry.get("key"):
+            try:
+                status = await studios.transcribe_file_status(entry["key"])
+            except studios.StudioError:
+                status = {}
+        if status.get("state") not in ("ready", "transcribing"):
+            audio, info = await asyncio.to_thread(frames.audio_file, WORKSPACE_DIR, s["id"], local, url)
+            try:
+                status = await studios.transcribe_file(str(audio))
+            finally:
+                audio.unlink(missing_ok=True)
+            entry = {"key": status.get("id"), "title": info.get("title") or label or url}
+            book[source_id] = entry
+            sessions.save(s["id"])
+        deadline = now() + max(10, min(wait, 540))
+        while status.get("state") == "transcribing" and now() < deadline:
+            await asyncio.sleep(4)
+            status = await studios.transcribe_file_status(entry["key"])
+        if status.get("state") == "failed":
+            book.pop(source_id, None)
+            return f"error: Whisper failed: {status.get('error') or 'no reason given'}"
+        if status.get("state") != "ready":
+            return (f"Still transcribing on the GPU (it queues behind renders). Run `$R transcript {again}` again in a minute or two: "
+                    "it picks the same transcript up, nothing is redone.")
+        folder = WORKSPACE_DIR / s["id"] / "transcripts"
+        folder.mkdir(parents=True, exist_ok=True)
+        stem = re.sub(r"[^a-z0-9]+", "-", (entry.get("title") or label or "video").lower()).strip("-")[:40] or "video"
+        (folder / f"{stem}.json").write_text(json.dumps({k: status.get(k) for k in ("model", "language", "cues", "words")}, ensure_ascii=False))
+        (folder / f"{stem}.txt").write_text("\n".join(frames.transcript_lines(status.get("cues") or [])) + "\n")
+        entry.update(json=str((folder / f"{stem}.json").relative_to(WORKSPACE_DIR)), txt=str((folder / f"{stem}.txt").relative_to(WORKSPACE_DIR)))
+        book[source_id] = entry
+        sessions.save(s["id"])
+    lines = frames.transcript_lines(status.get("cues") or [])
+    path = f"{HERMES_WORKSPACE}/{entry['txt']}"
+    if not lines:
+        return f"No speech found in “{entry.get('title') or label}” (Whisper heard no words). File: {path}"
+    body = "\n".join(lines)
+    shown = body if len(body) <= 9000 else body[:9000].rsplit("\n", 1)[0] + f"\n… ({len(lines)} lines in all: read {path})"
+    return (f"Transcript of “{entry.get('title') or label}” ({status.get('language') or '?'}, {len(lines)} lines; word timings in "
+            f"{path[:-4]}.json):\n{shown}\nUse the times to find scenes (`$R frames {again} --at M:SS`, `--shots` now shows the lines per "
+            f"shot) and keep dialogue word for word in <d>[Language] ...</d>. Speakers aren't labelled: tell them apart from the scene.")
+
+
+def shots_text(got: dict[str, Any], again: str, with_lines: bool) -> str:
+    pages = "\n".join(f"  {HERMES_WORKSPACE}/{p['sheet'].relative_to(WORKSPACE_DIR)}  (S{p['first']}-S{p['last']})" for p in got["pages"])
+    listing = f"{HERMES_WORKSPACE}/{got['listing'].relative_to(WORKSPACE_DIR)}"
+    rows = "\n".join(got["rows"])
+    if len(rows) > 7000:
+        rows = rows[:7000].rsplit("\n", 1)[0] + f"\n… ({len(got['rows'])} shots in all: read {listing})"
+    return (f"{len(got['rows'])} shots in “{got['title'] or got['url']}” ({frames.clock(got['duration'])}).\n"
+            f"Shot sheets, 16 panels each (4 per row), every panel labelled S<number> start-end:\n{pages}\n"
+            f"Shot list ({listing}):\n{rows}\n"
+            + ("" if with_lines else f"Add the dialogue per shot: `$R transcript {again}` first, then run --shots again.\n")
+            + f"Look at the sheets with vision to find the scenes you need. `$R frames pick {got['slug']} S12` shares a shot's frame; "
+            f"`$R cut {again} START-END[,START-END]` makes H3 video references (5-15 s pieces) of the scenes you pick.")
+
+
+async def cut_tool(s: dict[str, Any], local: Path | None, url: str, label: str, ranges: str, audio: bool, name: str) -> str:
+    """Pieces of a video as attachments: H3 video references (5-15 s each; at most 3 per clip, 15 s in all)."""
+    got = await asyncio.to_thread(frames.make_cuts, WORKSPACE_DIR, s["id"], ranges, local, url, label, audio)
+    shared = []
+    for i, piece in enumerate(got["pieces"], 1):
+        nice = (f"{name}-{i}" if len(got["pieces"]) > 1 else name) if name else piece["path"].name
+        a = share_file(s, f"{HERMES_WORKSPACE}/{piece['path'].relative_to(WORKSPACE_DIR)}", nice if nice.endswith(".mp4") else nice + ".mp4")
+        shared.append((a, piece))
+    ev(s, "say", f"Cut {len(shared)} piece{'s' if len(shared) > 1 else ''} of “{got['title']}”: "
+       + ", ".join(f"{frames.clock1(p['start'])}-{frames.clock1(p['end'])}" for _, p in shared),
+       attachments=public_attachments([a for a, _ in shared]))
+    lines = "\n".join(f"  {a['ref']} = {frames.clock1(p['start'])}-{frames.clock1(p['end'])} ({p['end'] - p['start']:.1f} s)" for a, p in shared)
+    return (f"Cut {len(shared)} piece{'s' if len(shared) > 1 else ''} (shown to the user):\n{lines}\n"
+            "Each is a video reference: pass it with --ref and name it <Video N> in the clip (at most 3 video references, 15 s in all, "
+            "per clip; a piece shorter than 5 s was stretched to 5 s, a range over 15 s split into equal pieces). With the prompt "
+            "ledger, add them to `$R prompt refs` (videos are numbered video1, video2, ... in that table).")
+
+
+def attachment_path(s: dict[str, Any], value: str) -> str:
+    """"att14", "@att14", an attachment's file name, or a path whose file name is an attachment's: its file path as
+    Hermes sees it. "" when it isn't one."""
+    value = (value or "").strip().strip("'\"")
+    items = s.get("attachments") or []
+    if m := re.fullmatch(r"@?(att\d+)", value, re.I):
+        return next((a["hermes_path"] for a in items if a["ref"] == m.group(1).lower()), "")
+    if not value or value.startswith(("http://", "https://", "data:")):
+        return ""
+    if "/" in value and (value.startswith(HERMES_WORKSPACE + "/") or not value.startswith(HERMES_ATTACH_DIR + "/")):
+        return ""                                       # a workspace file or some other real path: left alone
+    name = value.rsplit("/", 1)[-1].casefold()
+    hits = [a for a in items if str(a.get("name", "")).casefold() == name]
+    return hits[-1]["hermes_path"] if hits else ""
 
 
 HOST_TIMEOUT = 1800       # seconds a host command or Claude Code turn may take
@@ -7071,6 +7679,14 @@ async def host_claude(s: dict[str, Any], args: dict[str, Any], timeout: int) -> 
 
 @app.post(p("/api/tool/{sid}/{name}"))
 async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
+    try:
+        return await run_tool(sid, name, request)
+    except (RuntimeError, studios.StudioError) as exc:
+        # The host helper, the queue or a studio is down: a readable answer for the agent, not HTTP 500.
+        return {"text": f"error: {exc}"}
+
+
+async def run_tool(sid: str, name: str, request: Request) -> dict[str, Any]:
     s = tool_session(sid)
     args = await request.json() if request.headers.get("content-length", "0") != "0" else {}
     args = args if isinstance(args, dict) else {}
@@ -7167,6 +7783,28 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
         return {"text": text}
     if name in ("video", "agentic"):
         prompt = str(args.get("prompt") or "").strip()
+        handover = None
+        if args.get("ledger"):
+            # Prompt ledger plugin: the clips go to Vid as the ledger itself, not as a pasted plan in the prompt.
+            if not ledger_on(s):
+                return {"text": "error: --ledger needs the Prompt ledger plugin (Project → Plugins)"}
+            handover, problem = plugins.handoff(s, str(args["ledger"]))
+            if problem:
+                return {"text": f"error: {problem}"}
+            book = plugins.ledger.ledger(s)
+            if args.get("ref"):              # the pictures this chat's clips are numbered by: kept as its picture table
+                book["refs"] = [r.strip().lower() for r in str(args["ref"]).split(",") if r.strip()][:32]
+            elif book.get("refs"):
+                args["ref"] = ",".join(book["refs"])
+            first, last = handover["clips"][0]["n"], handover["clips"][-1]["n"]
+            name = "agentic"
+            prompt = prompt or f"Render clips {first}-{last} handed over from the Master Agent's prompt ledger, exactly as written."
+        elif name == "agentic" and ledger_on(s) and "::VIDEO" in prompt and plugins.ledger.entries(s):
+            # With the ledger on, clips go over as ONE run from the ledger: no pasted plans, no one-clip-per-job splits.
+            total = len([e for e in plugins.ledger.entries(s) if e.get("prompt")])
+            return {"text": f"error: this chat's {total} clip prompts are in the prompt ledger: render them as ONE Agentic run with "
+                            f"`$R agentic --ledger 1-{min(total, 24)} --ref ...` (up to 24 clips per run; continue a longer video with "
+                            "--resume). Don't paste ::VIDEO plans or start one job per clip. Save changes with `$R prompt save` first."}
         if not prompt:
             return {"text": "error: give the request / prompt"}
         selected_refs = refs_arg(args)
@@ -7198,9 +7836,25 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
                     return {"text": f"error: {args['resume']} isn't one of your Agentic jobs"}
                 resume = prior["session_id"]
             mode = str(args.get("mode") or "text")
-            text = await submit(s, "Vid", prompt, lambda: studios.agentic_video(
+            ref_note = ""
+            if handover:
+                span = f"{handover['clips'][0]['n']}-{handover['clips'][-1]['n']}"
+                mode = mode if args.get("mode") else ("reference" if ids else "text")
+                if ids:
+                    try:
+                        known = await studios.vid_reference_aliases()
+                        notes = plugins.map_ref_names(handover, [known.get(i, "") for i in ids])
+                        ref_note = (" " + "; ".join(notes).capitalize() + ".") if notes else ""
+                    except ValueError as exc:
+                        return {"text": f"error: {exc}"}
+            text = await submit(s, "Vid", f"Prompt ledger clips {span}" if handover else prompt, lambda: studios.agentic_video(
                 prompt, guide, num("duration"), args.get("aspect") or None, mode, str(args.get("preset") or ""),
-                cfg["vid_preset"], ids, resume, model), kind="agentic", model=model)
+                cfg["vid_preset"], ids, resume, model, ledger=handover, direct=bool(handover) and args.get("review") != "1"),
+                kind="agentic", model=model)
+            if handover and text.startswith("started"):
+                return {"text": text + f" Clips {span} went over as the prompt ledger itself (Vid saves them as its own ledger and "
+                        + ("its planner reviews them" if args.get("review") == "1" else "renders them exactly as saved")
+                        + "); nothing was pasted or rewritten." + ref_note}
             return {"text": text + (" H3 Agentic mode plans the clips itself (how many, how long, continuations, reviews); "
                                     "if its staging approval is on, the user approves the previews in Vid, never you."
                                     if text.startswith("started") else "")}
@@ -7209,6 +7863,9 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
             cfg["vid_preset"], model, ids), model=model)}
     if name == "image":
         prompt = str(args.get("prompt") or "").strip()
+        image_model = str(args.get("model") or cfg["image_model"])
+        # How the prompt names reference N: MiniMax H3 Image reads <Picture N> (its own label), the others plain words.
+        ref_label = (lambda n: f"<Picture {n}>") if image_model == "h3_image" else (lambda n: f"reference image {n}")
         try:
             references = []
             ref_names = refs_arg(args)
@@ -7223,10 +7880,11 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
             for index, ref in enumerate(ref_names, 1):
                 record = await attachment_in(s, ref, "Krea")
                 references.append({"enabled": True, "image": record["image"], "strength": 1.0})
-                prompt = re.sub(r"\{\{\s*" + re.escape(ref) + r"\s*\}\}|\{\s*" + re.escape(ref) + r"\s*\}", f"reference image {index}", prompt, flags=re.I)
+                prompt = re.sub(r"\{\{\s*" + re.escape(ref) + r"\s*\}\}|\{\s*" + re.escape(ref) + r"\s*\}", ref_label(index), prompt, flags=re.I)
         except studios.StudioError as exc:
             return {"text": f"error: {exc}"}
-        image_model = str(args.get("model") or cfg["image_model"])
+        if image_model == "h3_image" and len(references) > 10:
+            return {"text": "error: MiniMax H3 Image takes at most 10 reference pictures"}
         text = await submit(s, "Krea", prompt, lambda: studios.image(
             prompt, image_model, num("width", int), num("height", int), num("count", int),
             references, bool(args.get("enhance"))), model=image_model)
@@ -7474,6 +8132,16 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
             sessions.save(s["id"])
         return {"text": text + "\nThe clean and modded game runs start when your turn ends (you hold the GPU while you think): run `$R wait`, then END "
                                "YOUR TURN. You are resumed with new errors vs baseline, shared errors, log paths and 3 screenshots (also shown to the user in chat)."}
+    if name == "plugin":
+        out = plugins.custom_tool(s, args, projects.items.get(s.get("project") or ""), WORKSPACE_DIR)
+        sessions.save(s["id"])
+        return out
+    if name == "prompt":
+        if not ledger_on(s):
+            return {"text": "error: the Prompt ledger plugin is off in this project (Project → Plugins); tell the user if they want it"}
+        out = plugins.tool(s, args, WORKSPACE_DIR, ledger_hermes_folder(s))
+        sessions.save(s["id"])
+        return {"text": out}
     if name == "share":
         if not perm(cfg, "files") or perm(cfg, "files") == "none":
             return {"text": "error: the Files permission is off (Settings → Agentic)"}
@@ -7520,6 +8188,59 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
         ev(s, "say", f"Grabbed {a['name']}" + (f": {str(args.get('caption'))[:300]}" if args.get("caption") else ""),
            attachments=public_attachments([a]))
         return {"text": text}
+    if name in ("frames", "transcript", "cut"):
+        if perm(cfg, "files") == "none":
+            return {"text": f"error: {name} needs the Files permission (Settings → Agentic)"}
+        query, url, local, label, again = str(args.get("query") or args.get("source") or "").strip(), str(args.get("url") or "").strip(), None, "", ""
+        if args.get("action") != "pick":
+            try:
+                src = await media_source(s, query, url)
+            except ValueError as exc:
+                return {"text": f"error: {exc}"}
+            url, local, label, again = src["url"], src["local"], src["label"], src["again"]
+            if local is not None or url:
+                query = ""
+            elif name != "frames" or args.get("shots"):
+                return {"text": f"error: {name}{' --shots' if name == 'frames' else ''} needs a video: a link, an upload (att3), "
+                                "a finished render (vid2) or a workspace video path"}
+            if local is None and not perm(cfg, "web"):
+                return {"text": "error: searching or downloading needs the Web permission (Settings → Agentic); "
+                                f"{name} still works on uploads (attN), your renders (vidN) and workspace videos"}
+        try:
+            if name == "transcript":
+                return {"text": await transcript_tool(s, src, int(num("wait", int) or 240))}
+            if name == "cut":
+                return {"text": await cut_tool(s, local, url, label, str(args.get("ranges") or ""), args.get("mute") != "1",
+                                               str(args.get("name") or ""))}
+            if args.get("action") == "pick":
+                path, meta = frames.frame_path(WORKSPACE_DIR, s["id"], str(args.get("slug") or ""), args.get("k"))
+                frame = next(f for f in meta["frames"] if f["file"] == path.name)
+                nice = str(args.get("name") or "").strip() or f"{meta['slug']}-{frame['n']}"
+                a = share_file(s, f"{HERMES_WORKSPACE}/{path.relative_to(WORKSPACE_DIR)}", nice if "." in nice else nice + ".jpg")
+                ev(s, "say", f"Shared {a['name']}" + (f": {str(args.get('caption'))[:300]}" if args.get("caption") else
+                                                     f" (frame {frame['n']} at {frames.clock(frame['time'])} of “{meta['title'] or meta['url']}”)"),
+                   attachments=public_attachments([a]))
+                return {"text": f"Shared frame {frame['n']} as {a['ref']} ({a['size'] // 1024} KB) · file {a['hermes_path']}. "
+                                f"The user sees it; pass it with --ref {a['ref']} (and add it to `$R prompt refs` if the ledger is on)."}
+            if args.get("shots"):
+                cues = transcript_cues(s, src["id"])
+                got = await asyncio.to_thread(frames.make_shots, WORKSPACE_DIR, s["id"], local, url, label, cues)
+                return {"text": shots_text(got, again, bool(cues))}
+            got = await asyncio.to_thread(frames.make_sheet, query, WORKSPACE_DIR, s["id"], int(num("n", int) or 6),
+                                          args.get("at"), url, local, label)
+        except (frames.FramesError, ValueError, StopIteration) as exc:
+            return {"text": f"error: {exc}"}
+        sheet = f"{HERMES_WORKSPACE}/{got['sheet'].relative_to(WORKSPACE_DIR)}"
+        times = ", ".join(f"{f['n']}={frames.clock(f['time'])}" for f in got["frames"])
+        others = "".join(f"\n  - {h['title']} ({frames.clock(h['duration']) if h.get('duration') else '?'}) {h['url']}" for h in got["others"])
+        again = again or f"\"{query[:60]}\" --url {got['url']}"
+        return {"text": f"Frames from “{got['title'] or got['url']}” ({frames.clock(got['duration'])}" + (f", {got['url']}" if got["url"] else "") + ").\n"
+                        f"Sheet (ready now): {sheet}: {len(got['frames'])} panels, {got['cols']} per row, left→right then top→bottom, "
+                        f"each labelled with its number and time ({times}).\n"
+                        f"Look at the sheet with your vision tool, then `$R frames pick {got['slug']} K --name NAME --caption \"what it's for\"` "
+                        f"shares the full-size frame K (an attachment for --ref). Closer look at one moment: `$R frames {again} --at M:SS` "
+                        "(more panels: --n 12). Every shot with its times: `$R frames " + again + " --shots`."
+                        + (f"\nNot the right video? Other results (use --url):{others}" if others else "")}
     if name == "images":
         if not perm(cfg, "web"):
             return {"text": "error: the Web permission is off (Settings → Agentic)"}
@@ -7558,6 +8279,8 @@ async def tool(sid: str, name: str, request: Request) -> dict[str, Any]:
         if not hits:
             return {"text": f"No pictures of at least {min_side}px for \"{query}\". Try other words for the subject (drop 'wiki'; a fuller name, "
                             "the work it is from) or a lower --min."}
+        if hits[0].get("fallback"):
+            ev(s, "system", f"Image search: {hits[0]['fallback']}, used Bing + Wikimedia Commons instead")
         if dropped:
             ev(s, "system", f"Image search: dropped {', '.join(dropped)} from the query (it pulls in clip art and low-quality pictures)")
         lines = [f"img{i}: {x['w']}x{x['h']} · {x['site']} · {x['title'][:90]}\n      {x['url'][:200]}"

@@ -1,0 +1,63 @@
+/* 3D model viewer (static/model3d.js) — uses the RAG & Cache page's dialog tokens. */
+.m3d-dlg.dlg { width: min(1180px, calc(100vw - 32px)); height: min(820px, calc(100dvh - 32px)); }
+.m3d-dlg .dlg-mark { color: var(--green, #82c45a); background: color-mix(in srgb, var(--green, #82c45a) 12%, transparent); }
+.m3d-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 300px; }
+.m3d-stage { position: relative; min-height: 0; min-width: 0; background: #4a4e52; }
+.m3d-stage canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.m3d-stage canvas:active { cursor: grabbing; }
+.m3d-status { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; color: var(--muted); font-size: 13px; text-align: center; pointer-events: none; }
+.m3d-status[hidden] { display: none; }
+.m3d-views { position: absolute; top: 10px; left: 10px; display: flex; gap: 4px; flex-wrap: wrap; }
+.m3d-views button, .m3d-transport select { padding: 4px 9px; border: 1px solid var(--border); border-radius: 7px; background: color-mix(in srgb, var(--panel) 85%, transparent); color: var(--text); font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; }
+.m3d-views button:hover { border-color: var(--border-strong); background: var(--raised); }
+.m3d-bone-tag { position: absolute; top: 10px; right: 10px; padding: 4px 9px; border-radius: 7px; background: #ffc04d22; color: #ffc04d; font: 12px var(--mono); }
+.m3d-bone-tag[hidden] { display: none; }
+.m3d-transport { position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--panel) 88%, transparent); }
+.m3d-transport[hidden] { display: none; }
+.m3d-transport input[type=range] { flex: 1; min-width: 60px; accent-color: var(--green, #82c45a); }
+.m3d-time { min-width: 92px; color: var(--muted); font: 12px var(--mono); text-align: right; }
+.m3d-side { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--border); background: var(--panel); }
+.m3d-tabs { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--border); }
+.m3d-tabs button { padding: 10px 4px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.m3d-tabs button[aria-selected=true] { color: var(--text); border-bottom-color: var(--green, #82c45a); }
+.m3d-pane { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px 16px; }
+.m3d-pane[hidden] { display: none; }
+.m3d-label { margin: 12px 0 6px; color: var(--muted); font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.m3d-label:first-child { margin-top: 0; }
+.m3d-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.m3d-chip { display: inline-flex; align-items: baseline; gap: 5px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--card); color: var(--text); font-size: 12.5px; cursor: pointer; }
+.m3d-chip small { color: var(--faint); font-size: 11px; }
+.m3d-chip:hover { border-color: var(--border-strong); }
+.m3d-chip[aria-pressed=true] { border-color: color-mix(in srgb, var(--green, #82c45a) 55%, transparent); background: color-mix(in srgb, var(--green, #82c45a) 14%, transparent); }
+.m3d-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 12.5px; }
+.m3d-toggles label { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; cursor: pointer; }
+.m3d-sliders { display: grid; gap: 6px; }
+.m3d-sliders label { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.m3d-sliders input[type=range] { width: 100%; accent-color: var(--green, #82c45a); }
+.m3d-sliders output { min-width: 38px; font: 11.5px var(--mono); color: var(--text); text-align: right; }
+.m3d-pose .m3d-sliders label { grid-template-columns: 16px minmax(0, 1fr) auto; }
+.m3d-none { color: var(--faint); font-size: 12.5px; }
+.m3d-hint { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.m3d-pane input[type=search] { width: 100%; margin-bottom: 6px; padding: 6px 9px; font-size: 13px; }
+.m3d-bones { max-height: 300px; overflow: auto; display: grid; gap: 1px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--field); }
+.m3d-bone { padding: 3px 6px 3px calc(6px + var(--d, 0) * 10px); border: 0; border-radius: 5px; background: none; color: var(--text); font: 12px var(--mono); text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m3d-bone:hover { background: var(--card); }
+.m3d-bone.posed::after { content: ' •'; color: #ffc04d; }
+.m3d-bone.on { background: #ffc04d22; color: #ffc04d; }
+.m3d-pose { margin-top: 10px; }
+.m3d-row { display: flex; gap: 6px; margin-top: 10px; }
+.m3d-info { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 12.5px; }
+.m3d-info dt { color: var(--muted); }
+.m3d-info dd { margin: 0; overflow-wrap: anywhere; }
+/* RAG list/gallery: model cards */
+.cache-body .card-preview .m3d-thumb { width: 100%; height: 100%; object-fit: contain; background: radial-gradient(circle at 50% 40%, #1a2730, #0d1419); }
+.cache-body .card-preview .m3d-open, .cache-body .row-action.m3d-open { cursor: pointer; }
+.cache-body .card-preview button.m3d-open { all: unset; display: grid; place-items: center; width: 100%; height: 100%; cursor: pointer; color: var(--muted); }
+.cache-body .card-preview .badge.m3d { top: auto; bottom: 8px; right: auto; left: 8px; background: color-mix(in srgb, var(--green, #82c45a) 18%, #000a); color: var(--green, #82c45a); }
+
+@media (max-width: 860px) {
+  .m3d-dlg.dlg { height: calc(100dvh - 16px); width: calc(100vw - 16px); }
+  .m3d-body { grid-template-columns: 1fr; grid-template-rows: minmax(260px, 1fr) minmax(0, 0.9fr); }
+  .m3d-side { border-left: 0; border-top: 1px solid var(--border); }
+  .m3d-time { min-width: 0; }
+}

@@ -21,6 +21,8 @@ RUN pip install --no-cache-dir fastapi==0.143.5 starlette==1.7.0 uvicorn==0.34.2
 # Gradio currently caps Pillow below the release with the image-decoder fixes.
 # Rocsy calls qwen-tts directly and does not use the Gradio UI.
 RUN pip install --no-cache-dir --no-deps Pillow==13.0.0
+# transformers/accelerate stay where qwen-tts 0.1.1 pins them exactly (==4.57.3 / ==1.12.0), and
+# setuptools where torch 2.11 pins it (<82): raising either breaks Qwen TTS / torch.
 RUN apt-get update && apt-get install -y --no-install-recommends sox ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 

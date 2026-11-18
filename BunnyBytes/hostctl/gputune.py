@@ -40,7 +40,7 @@ LLM_PROCESSES = re.compile(r"llama-server|strata|llama", re.I)
 LLM_BUSY_PERCENT = 10
 # H3 runs its Hermes (LLM) turns through the queue under app "Vid" with these job-id prefixes.
 VID_LLM_PREFIXES = ("enhance-", "repair-", "ground-", "plan-review-", "character-", "scene-", "lora-")
-APP_WORKLOADS = {"Vid": "video", "Trainer": "video", "Krea": "media", "Mus": "media",
+APP_WORKLOADS = {"Vid": "video", "Trainer": "video", "Krea": "media", "Mus": "media", "Model3D": "media",
                  "Voice": "media", "Agent": "llm", "Framework": "llm"}
 WORKLOADS = {"llm": "LLM", "video": "Video generation", "media": "Image · Voice · Music"}
 RESET_PATTERN = r"amdgpu.*(GPU reset|ring .* timeout|MODE1 reset|MES failed|GPU Hang|device wedged)"

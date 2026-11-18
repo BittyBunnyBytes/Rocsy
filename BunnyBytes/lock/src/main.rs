@@ -8,8 +8,10 @@
 
 mod config;
 mod core;
+mod gpu;
 mod llm;
 mod metrics;
+mod procvram;
 mod progress;
 mod routes;
 mod state;
@@ -129,8 +131,37 @@ fn open(cfg: &Config) -> Result<(Queue, Store), Box<dyn std::error::Error>> {
     Ok((queue, store))
 }
 
+/// `bunny-lock --health`: the container health check (the image has no shell,
+/// curl or Python to do it with). Exit 0 when GET /health answers 200.
+fn health_probe() -> i32 {
+    use std::io::{Read, Write};
+    let host = std::env::var("LOCK_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let port = std::env::var("LOCK_PORT").unwrap_or_else(|_| "8600".into());
+    let wait = Duration::from_secs(3);
+    let Ok(addr) = format!("{host}:{port}").parse::<SocketAddr>() else {
+        return 2;
+    };
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, wait) else {
+        return 1;
+    };
+    let _ = stream.set_read_timeout(Some(wait));
+    let _ = stream.set_write_timeout(Some(wait));
+    let request = format!("GET /health HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return 1;
+    }
+    let mut head = [0u8; 12];
+    match stream.read_exact(&mut head) {
+        Ok(()) if head.starts_with(b"HTTP/1.1 200") => 0,
+        _ => 1,
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--health") {
+        std::process::exit(health_probe());
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),

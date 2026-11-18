@@ -1037,6 +1037,25 @@ async def core_extras_view():
     return await hostctl_extras("GET")
 
 
+# Trainer tools, SillyTavern and Rocsy's own update (hostctl trainertools.py / sillytavern.py / selfupdate.py).
+# Registered before /api/core/extras/{job}/{version}, which would otherwise take these paths.
+CORE_EXTRA_GROUPS = re.compile(r"(trainer-tools|sillytavern|rocsy-update)(/[a-z0-9-]{1,40}){0,3}")
+
+
+@app.get(f"{PREFIX}/api/core/extras/group/{{route:path}}")
+async def core_extras_group_get(route: str):
+    if not CORE_EXTRA_GROUPS.fullmatch(route):
+        raise HTTPException(404, "Unknown Core Backend item")
+    return await hostctl_extras("GET", f"/{route}")
+
+
+@app.post(f"{PREFIX}/api/core/extras/group/{{route:path}}")
+async def core_extras_group_post(route: str):
+    if not CORE_EXTRA_GROUPS.fullmatch(route):
+        raise HTTPException(404, "Unknown Core Backend item")
+    return await hostctl_extras("POST", f"/{route}")
+
+
 @app.get(f"{PREFIX}/api/hermes/addons")
 async def hermes_addons_view():
     return await hostctl_extras("GET", "/hermes-addons")
@@ -1699,8 +1718,9 @@ async def library_olds():
 # ---- installed / uninstall ------------------------------------------------------------
 
 SUPPORT = {"text_encoders": "Text encoders & VAEs", "vae": "Text encoders & VAEs", "clip_vision": "Text encoders & VAEs",
-           "audio_encoders": "Text encoders & VAEs", "vae_approx": "Text encoders & VAEs"}
-GROUP_ORDER = ["LLMs", "MTP prediction heads", "Vision heads", "Decision & classification models", "Video models", "Image models", "Audio models", "LoRAs",
+           "audio_encoders": "Text encoders & VAEs", "vae_approx": "Text encoders & VAEs",
+           "magicarticulate": "3D models", "geometry_estimation": "3D models"}
+GROUP_ORDER = ["LLMs", "MTP prediction heads", "Vision heads", "Decision & classification models", "Video models", "Image models", "Audio models", "3D models", "LoRAs",
                "Trainer models", "Trainer LoRAs & epochs", "Text encoders & VAEs", "Upscalers & other", "Other models"]
 TRAINER_URL = os.getenv("TRAINER_UPSTREAM", "http://127.0.0.1:8500").rstrip("/") + "/Trainer"
 
@@ -1965,7 +1985,8 @@ async def installed(unused_days: int = 7):
             group, sub = SUPPORT[folder], folder.replace("_", " ")
         elif folder in ("diffusion_models", "checkpoints", "unet", "diffusers"):
             category = sources.civitai_category(base, "") if base else ""
-            group = {"video": "Video models", "image": "Image models", "audio": "Audio models"}.get(category, "Other models")
+            group = {"video": "Video models", "image": "Image models", "audio": "Audio models",
+                     "3d": "3D models"}.get(category, "Other models")
             sub = base or folder.replace("_", " ")
         else:
             group, sub = "Upscalers & other", folder.replace("_", " ")

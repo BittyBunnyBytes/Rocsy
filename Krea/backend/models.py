@@ -33,6 +33,13 @@ H3_IMAGE_DEFAULT_SIZE = 2048
 H3_IMAGE_MAX_SIDE = 6272
 H3_IMAGE_MAX_PIXELS = 5024 * 3360
 H3_IMAGE_REFERENCE_SLOT_COUNT = 10
+# Speedup: the pDMD distillation LoRA (pdmd2026/pdmd_2NFE_lora, arXiv 2609.35768; ComfyUI-layout file from
+# akhaliq/minimax-h3-image-pdmd-2step, Apache-2.0). Its verified ComfyUI recipe: LoraLoaderModelOnly at 1.0 (other
+# strengths scale the distillation), ModelSamplingMiniMaxH3 shift_video 12, euler / simple, no CFG; 2 steps, or
+# 3-4 for more detail. Works on the int8 / w4a8 files as a LoRA (they can't take a pre-merge).
+H3_IMAGE_PDMD_LORA = "minimax_h3_pdmd_2nfe_comfyui.safetensors"
+H3_IMAGE_PDMD_SHIFT = 12.0
+H3_IMAGE_FAST_STEPS = {"pdmd2": 2, "pdmd3": 3, "pdmd4": 4}
 ANIMA_VERSIONS = {
     "base": ("anima_baseV10.safetensors", "Base v1.0"),
     "aesthetic": ("anima_aestheticV11.safetensors", "Aesthetic v1.1"),
@@ -223,6 +230,8 @@ class GenerationRequest(BaseModel):
     # (condcache.py) and the attention backend (speedups.py; auto = fastest measured per model).
     te_cache: bool = True
     attention: Literal["auto", "flash", "pytorch", "sage", "kitchen"] = "auto"
+    # MiniMax H3 Image only: "" = its own 6 steps, pdmd2/3/4 = the pDMD speed LoRA at 2 / 3 / 4 steps.
+    h3_fast: Literal["", "pdmd2", "pdmd3", "pdmd4"] = ""
 
     @field_validator("test_lora")
     @classmethod

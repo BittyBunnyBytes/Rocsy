@@ -115,7 +115,7 @@ def quant_of(name: str, precision: str = "") -> dict:
 
 # ---- compatibility --------------------------------------------------------
 
-OVERHEAD = {"llm": (1.10, 1.5), "image": (1.0, 3.0), "video": (1.0, 7.0), "audio": (1.0, 2.0),
+OVERHEAD = {"llm": (1.10, 1.5), "image": (1.0, 3.0), "video": (1.0, 7.0), "audio": (1.0, 2.0), "3d": (1.0, 4.0),
             "encoder": (1.0, 0.5), "lora": (1.0, 0.0), "other": (1.0, 1.0)}
 
 

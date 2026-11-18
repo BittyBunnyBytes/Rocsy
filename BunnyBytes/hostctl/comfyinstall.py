@@ -233,7 +233,7 @@ STUDIO_PACKS = [
     ("YuE2-ComfyUI", "https://github.com/pytraveler/YuE2-ComfyUI",
      "408862db017878907c23e5b1a407ba89780dc2a1", "requirements.txt"),
 ]
-STUDIO_LOCAL_PACKS = [("Music", "RSP"), ("Krea", "bunny_cond_cache")]  # (app folder, pack)
+STUDIO_LOCAL_PACKS = [("Music", "RSP"), ("Krea", "bunny_cond_cache"), ("Model3D", "MagicArticulate")]  # (app folder, pack)
 # Made per machine inside a local pack (RSP's install.sh: .venv, vendor/seed-vc); never copied or compared.
 LOCAL_SKIP = {"__pycache__", ".venv", "vendor", ".gitignore"}
 

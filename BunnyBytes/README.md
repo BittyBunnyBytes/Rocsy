@@ -46,7 +46,7 @@ for the Trainer, a hand-made Cloudflare tunnel. REA's game folders are written i
 ## Verify locally
 
 - `curl -sI http://127.0.0.1:8080/` redirects to `/login` when you have no cookie.
-- After you log in, `/Video`, `/Image`, `/Music`, `/Voice`, `/Agent` and `/Models` each load with
+- After you log in, `/Video`, `/Image`, `/Music`, `/Model3D`, `/Voice`, `/Agent` and `/Models` each load with
   no 404s in the browser console.
 - Two GPU jobs from different studios queue one after the other: check `/Queue`.
 - `ss -tlnp`: every Rocsy port is bound to `127.0.0.1`, never `0.0.0.0`.

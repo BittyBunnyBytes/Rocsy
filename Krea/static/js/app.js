@@ -671,7 +671,7 @@ function speedKey(model, request) {
     ? [isQwenTurboCheckpoint(request.checkpoint) ? "turbo" : request.steps, Boolean(refs && request.match_reference_size)]
     : [];
   const turbo = [request.speed || "standard", model === MOSS ? request.moss_steps || 50 : model === QWEN ? "" : request.krea_steps || "",
-    model === MOSS && refs ? request.moss_denoise ?? 0.6 : ""];
+    model === MOSS && refs ? request.moss_denoise ?? 0.6 : "", model === H3 ? request.h3_fast || "" : ""];
   const enhancer = [Boolean(request.prompt_enhancer), Boolean(request.prompt_enhancer && request.enhancer_thinking)];
   return JSON.stringify([model, request.width, request.height, Boolean(request.enhance), refs, ...enhancer, ...qwen, ...turbo]);
 }
@@ -860,6 +860,7 @@ const SPEED_OPTIONS = {
   [QWEN]: [["standard", "Standard"], ["viggle", "Viggle · 6 steps"]],
 };
 const SPEED_STEPS = { standard: 8, turbo4: 4, turbo2: 2 };
+const H3_FAST_STEPS = { pdmd2: 2, pdmd3: 3, pdmd4: 4 };   // MiniMax H3 Image's pDMD speed LoRA (Speedup & Saves)
 const SPEED_DESCRIPTIONS = {
   standard: "Balanced quality with adjustable sampling steps.",
   turbo4: "Faster render using a 4-step turbo LoRA.",
@@ -971,6 +972,15 @@ function renderSpeedups() {
   select.disabled = Boolean(fixed);
   select.closest(".speedup-row").classList.toggle("is-locked", Boolean(fixed));
   $("#attention-why").textContent = fixed || ATTENTION_WHY[chosen] || "";
+  // MiniMax H3 Image: the pDMD speed LoRA (backend/h3image.py).
+  const fastTier = $("#h3-fast-tier");
+  fastTier.hidden = state.model !== H3;
+  const fast = $("#h3-fast").value;
+  $("#h3-fast-why").textContent = !fast
+    ? "The model's own distilled 6 steps. Pick the pDMD LoRA for 2-4 steps: sampling about 3x faster at 2 steps, a little softer."
+    : fast === "pdmd2" ? "2 steps: about a third of the sampling time. Softer detail; good for trying prompts and seeds."
+    : fast === "pdmd3" ? "3 steps: half the sampling time, more detail than 2."
+    : "4 steps: two thirds of the sampling time, closest to the standard 6 steps.";
   const cacheRow = $("#te-cache-row");
   const cacheMissing = info.te_cache_available === false;
   cacheRow.classList.toggle("is-locked", cacheMissing);
@@ -1035,6 +1045,7 @@ function collectSettings() {
   } else if (state.model === H3) {
     settings.match_reference_size = $("#match-reference-size").checked;
     settings.enhance = false;
+    settings.h3_fast = $("#h3-fast").value;
   } else {
     settings.turbo_strength = Number($("#turbo-strength").value) || 1;
     const steps = Number($("#krea-steps").value);
@@ -1075,6 +1086,7 @@ function applySettings(settings, { withModel = false } = {}) {
   if (settings.moss_steps !== undefined) $("#moss-steps").value = settings.moss_steps;
   if (settings.moss_cfg !== undefined) $("#moss-cfg").value = settings.moss_cfg;
   if (settings.moss_denoise !== undefined) $("#moss-denoise").value = settings.moss_denoise;
+  if (settings.model === H3) { $("#h3-fast").value = settings.h3_fast || ""; renderSpeedups(); }
   if (settings.model === MOSS) $("#moss-negative-prompt").value = settings.negative_prompt || "";
   if (settings.model === ANIMA || settings.anima_version) $("#anima-negative-prompt").value = settings.negative_prompt || "";
   updateSpeedFields();
@@ -1316,6 +1328,7 @@ function bindForm() {
   $("#use-references").addEventListener("change", updateReferenceHint);
   $("#speed").addEventListener("change", updateSpeedFields);
   $("#attention").addEventListener("change", renderSpeedups);
+  $("#h3-fast").addEventListener("change", () => { renderSpeedups(); scheduleEstimate(); });
   $("#use-references").addEventListener("change", updateSizeNote);
   $("#match-reference-size").addEventListener("change", updateSizeNote);
 
@@ -1465,7 +1478,7 @@ function jobCard(job) {
         ${multi ? `<span class="job-count">${(job.images || []).length}/${job.batch_count} images</span>` : ""}
         ${job.model === QWEN && isQwenTurboCheckpoint(job.request?.checkpoint) ? `<span>Turbo 8 steps</span>`
           : job.request?.speed === "viggle" ? `<span>Viggle 6 steps</span>`
-          : job.model === H3 ? `<span>6 steps</span>`
+          : job.model === H3 ? `<span>${H3_FAST_STEPS[job.request?.h3_fast] ? `pDMD ${H3_FAST_STEPS[job.request.h3_fast]} steps` : "6 steps"}</span>`
           : job.model === MOSS && job.request?.speed === "dmd8" ? `<span>DMD 8 steps</span>`
           : job.model === MOSS && job.request?.speed === "dmad4" ? `<span>DMAD 4 steps</span>`
           : job.request?.speed && job.request.speed !== "standard" && job.model !== QWEN ? `<span>Turbo ${job.request.krea_steps || SPEED_STEPS[job.request.speed]} steps</span>` : ""}
@@ -1640,7 +1653,7 @@ function openJobInfo(job) {
           : request.speed === "viggle" ? "Viggle turbo LoRA, 6 steps"
           : job.model === MOSS ? (request.speed === "dmd8" ? "DMD, 8 steps" : request.speed === "dmad4" ? "DMAD, 4 steps" : `Standard, ${request.moss_steps ?? 50} steps`)
           : job.model === QWEN ? `Standard, ${request.steps ?? 25} steps`
-          : job.model === H3 ? "Distilled, 6 steps, CFG 1"
+          : job.model === H3 ? (H3_FAST_STEPS[request.h3_fast] ? `pDMD speed LoRA, ${H3_FAST_STEPS[request.h3_fast]} steps, CFG 1` : "Distilled, 6 steps, CFG 1")
           : `${!request.speed || request.speed === "standard" ? "Standard" : `Turbo LoRA (strength ${request.turbo_strength ?? 1})`}, ${request.krea_steps || SPEED_STEPS[request.speed || "standard"]} steps`)}
         ${row("4× upscale", job.enhance ? "on" : "off")}
         ${job.model === QWEN ? row("Transparent", request.transparent ? "on" : "off") : ""}
@@ -2340,8 +2353,19 @@ function bindLoraGallery() {
 
 /* --------------------------------------------------------------- sse -- */
 
-function bindEvents() {
+// Live updates. A phone that locks its screen or switches apps freezes the page and drops (or silently kills) the
+// stream; the server only sends changes, never what happened while the page was away. So: coming back to the page
+// (visible / pageshow / online) opens a fresh stream and reloads the job list, a stream that closes reconnects by
+// itself, and every (re)connect catches up with one /api/jobs read.
+let eventSource = null;
+let reconnectTimer = 0;
+
+function connectEvents() {
+  clearTimeout(reconnectTimer);
+  try { eventSource?.close(); } catch { /* already gone */ }
   const source = new EventSource(`${API_BASE}/api/events`);
+  eventSource = source;
+  source.addEventListener("open", () => { if (eventSource === source) refreshJobsOnce({quiet: true}); });
   source.addEventListener("jobs", (event) => {
     state.jobs = JSON.parse(event.data);
     renderJobs();
@@ -2359,16 +2383,42 @@ function bindEvents() {
     label.textContent = state.comfyOnline ? "Online" : "Offline";
   });
   source.onerror = () => {
-    // EventSource retries automatically; nothing else to do here.
+    // EventSource retries by itself while CONNECTING; once CLOSED (gateway login, network change) it gives up.
+    if (eventSource === source && source.readyState === EventSource.CLOSED && document.visibilityState === "visible") {
+      reconnectTimer = setTimeout(connectEvents, 3000);
+    }
   };
 }
 
-async function refreshJobsOnce() {
+let lastResume = 0;
+let hiddenAt = 0;
+function resumeLiveUpdates({force = false} = {}) {
+  if (document.visibilityState !== "visible") { hiddenAt = hiddenAt || Date.now(); return; }
+  const away = hiddenAt ? Date.now() - hiddenAt : 0;
+  hiddenAt = 0;
+  const closed = !eventSource || eventSource.readyState === EventSource.CLOSED;
+  // A quick window switch keeps a healthy stream; a few seconds in the background (phone lock, app switch) may not.
+  if (!force && !closed && away < 4000) return;
+  const now = Date.now();
+  if (now - lastResume < 1500) return;   // visibilitychange + pageshow + online arrive together
+  lastResume = now;
+  connectEvents();                       // the old stream may look open but be dead after a sleep
+}
+
+function bindEvents() {
+  connectEvents();
+  document.addEventListener("visibilitychange", () => resumeLiveUpdates());
+  window.addEventListener("pageshow", (event) => { if (event.persisted) resumeLiveUpdates({force: true}); });
+  window.addEventListener("online", () => resumeLiveUpdates({force: true}));
+  window.addEventListener("focus", () => resumeLiveUpdates());
+}
+
+async function refreshJobsOnce({quiet = false} = {}) {
   try {
     state.jobs = await Api.request("/api/jobs");
     renderJobs();
   } catch (error) {
-    toast(error.message, "error");
+    if (!quiet) toast(error.message, "error");
   }
 }
 

@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="/Voice/static/voice.css?v=13">
   <script defer src="/Voice/static/h3-studio.js?v=8"></script>
   <script defer src="/Voice/static/voice.js?v=11"></script>
+  <script defer src="/Voice/static/realtime.js?v=1"></script>
   <link rel="stylesheet" href="/Voice/static/agentic-ui.css?v=5">
   <script defer src="/Voice/static/agentic-ui.js?v=5"></script>
 </head>
@@ -22,6 +23,7 @@
       <button type="button" class="view-tab is-active" role="tab" aria-selected="true" data-view="studio">Studio</button>
       <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="characters">Characters <span class="view-tab-count" id="character-count"></span></button>
       <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="add">Add character</button>
+      <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="live">Live voice</button>
       <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="settings">Settings</button>
     </nav>
     <div class="service-state" id="service-state"><span class="status-dot"></span><span>Voice service</span><strong id="service-label">Checking</strong></div>
@@ -116,6 +118,214 @@
         <div class="jobs-filter category-chips" id="category-chips" role="group" aria-label="Filter by category"></div>
       </div>
       <div class="character-grid" id="character-grid" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <!-- ───────────────────────────── Live voice ───────────────────────────── -->
+  <main class="view-page live-page" data-view-page="live" hidden>
+    <section class="page-panel" id="live-panel" aria-labelledby="live-heading" data-state="off">
+      <div class="page-toolbar">
+        <div>
+          <h1 id="live-heading">Live voice</h1>
+          <p class="field-hint">Talk into your microphone and come out in a character's voice, live. Try it here, then use it in games and
+            voice chat with the Rocsy Voice microphone (<a href="#live-help" id="live-help-link">how</a>).</p>
+        </div>
+      </div>
+
+      <!-- Live bar: who you sound like, what's happening, the big button -->
+      <div class="live-bar" aria-live="polite">
+        <div class="live-bar-voice">
+          <div class="live-avatar" id="live-avatar" aria-hidden="true">?</div>
+          <div class="live-bar-text">
+            <span class="live-bar-label">Speaking as</span>
+            <strong id="live-voice-name">Pick a voice</strong>
+            <span class="live-bar-sub" id="live-voice-sub"></span>
+          </div>
+        </div>
+        <div class="live-bar-state">
+          <span class="live-pill" id="live-pill">Off</span>
+          <span class="live-bar-numbers"><span id="live-timer"></span><span id="live-stats"></span></span>
+        </div>
+        <div class="live-bar-actions">
+          <button type="button" class="secondary-button live-mute" id="live-mute" aria-pressed="false" disabled title="Mute the microphone (M)">Mute</button>
+          <button type="button" class="primary-button live-start" id="live-start" disabled>Start</button>
+        </div>
+      </div>
+      <p id="live-status" class="live-status" role="status" aria-live="polite">Pick a voice and press Start.</p>
+
+      <div class="live-layout">
+        <div class="live-main">
+        <!-- 1. Voice -->
+        <div class="card live-voices-card">
+          <div class="card-head is-static"><span class="card-title"><span class="step-num">1</span> Voice</span>
+            <button type="button" class="secondary-button live-small" id="live-voice-refresh" title="Reload the voices">Reload</button></div>
+          <div class="card-body">
+            <div class="live-voice-tools">
+              <label class="jobs-search"><input id="live-voice-search" type="search" placeholder="Search voices…" aria-label="Search voices"></label>
+              <div class="jobs-filter" role="group" aria-label="Voice kind">
+                <button type="button" class="chip" data-live-kind="all" aria-pressed="true">All</button>
+                <button type="button" class="chip" data-live-kind="voice" aria-pressed="false">Characters</button>
+                <button type="button" class="chip" data-live-kind="music" aria-pressed="false">Music voices</button>
+              </div>
+            </div>
+            <div class="live-voice-grid" id="live-voice-grid" role="listbox" aria-label="Voices"></div>
+            <p class="field-hint">Switch voices any time, even while live. Longer, clean samples sound closer
+              (Advanced → Voice match).</p>
+          </div>
+        </div>
+
+        <!-- Advanced -->
+        <details class="card live-advanced" id="live-advanced">
+          <summary class="card-head"><span class="card-title">Advanced: speed and voice match</span></summary>
+          <div class="card-body live-advanced-grid">
+            <div class="field-row live-wide"><span class="live-label" id="live-quality-label">Preset</span>
+              <div class="jobs-filter" role="group" aria-labelledby="live-quality-label">
+                <button type="button" class="chip" data-live-quality="fast" aria-pressed="false">Fastest</button>
+                <button type="button" class="chip" data-live-quality="balanced" aria-pressed="true">Balanced</button>
+                <button type="button" class="chip" data-live-quality="best" aria-pressed="false">Best voice</button>
+                <button type="button" class="chip" data-live-quality="custom" aria-pressed="false" disabled>Custom</button>
+              </div>
+              <span class="field-hint" id="live-quality-hint"></span></div>
+            <div class="field-row live-wide" id="live-adaptive-row" hidden>
+              <label class="check"><input type="checkbox" id="live-adaptive"> Adaptive: lower these settings when the GPU falls behind</label>
+              <span class="field-hint" id="live-adaptive-hint">Your values below are the most it uses. When the GPU can't keep up it lowers quality steps, then voice match, and goes back up once the GPU has room.</span></div>
+            <div class="field-row"><label for="live-block">Block size <output id="live-block-value">200 ms</output></label>
+              <input id="live-block" type="range" min="100" max="500" step="50" value="200">
+              <span class="field-hint">Smaller = less delay but more GPU. Changes apply when you start again.</span></div>
+            <div class="field-row"><label for="live-steps">Quality steps <output id="live-steps-value">6</output></label>
+              <input id="live-steps" type="range" min="2" max="20" step="1" value="6">
+              <span class="field-hint">More = closer to the voice, slower. Applies live.</span></div>
+            <div class="field-row"><label for="live-prompt">Voice match <output id="live-prompt-value">3 s</output></label>
+              <input id="live-prompt" type="range" min="1" max="10" step="0.5" value="3">
+              <span class="field-hint">How much of the voice's sample guides it. Longer can sound closer, costs GPU time. Applies live.</span></div>
+            <div class="field-row"><label for="live-cfg">Voice strength <output id="live-cfg-value">0.70</output></label>
+              <input id="live-cfg" type="range" min="0" max="1" step="0.05" value="0.7">
+              <span class="field-hint">Higher follows the voice more strongly. Applies live.</span></div>
+            <div class="live-wide live-inline"><button type="button" class="secondary-button live-small" id="live-reset">Back to Balanced</button>
+              <span class="field-hint" id="live-gpu-warning"></span></div>
+          </div>
+        </details>
+
+        </div>
+
+        <div class="live-side">
+          <!-- 2. Microphone -->
+          <div class="card">
+            <div class="card-head is-static"><span class="card-title"><span class="step-num">2</span> Microphone</span>
+              <button type="button" class="secondary-button live-small" id="live-mic-test" aria-pressed="false">Test mic</button></div>
+            <div class="card-body live-fields">
+              <div class="field-row"><label for="live-mic">Microphone</label>
+                <select id="live-mic"><option value="">Default microphone</option></select>
+                <span class="field-hint">Names appear after you allow the microphone once.</span></div>
+              <div class="field-row"><label for="live-silence">Ignore sounds quieter than <output id="live-silence-value">-50 dB</output></label>
+                <div class="live-meter live-meter-db" title="Your level; the line is the threshold">
+                  <i id="live-in-meter"></i><b id="live-threshold-mark"></b></div>
+                <input id="live-silence" type="range" min="-80" max="-20" step="1" value="-50">
+                <div class="live-inline">
+                  <button type="button" class="secondary-button live-small" id="live-calibrate">Set from background noise</button>
+                  <span class="field-hint" id="live-calibrate-hint">Stay quiet for 2 seconds.</span>
+                </div></div>
+              <label class="check"><input type="checkbox" id="live-ns" checked> Browser noise suppression</label>
+            </div>
+          </div>
+
+          <!-- 3. Output -->
+          <div class="card">
+            <div class="card-head is-static"><span class="card-title"><span class="step-num">3</span> Output</span></div>
+            <div class="card-body live-fields">
+              <div class="field-row"><span class="live-label" id="live-route-label">Send the converted voice to</span>
+                <div class="jobs-filter live-route" role="group" aria-labelledby="live-route-label">
+                  <button type="button" class="chip" data-live-route="off" aria-pressed="true">Nowhere</button>
+                  <button type="button" class="chip" data-live-route="mic" aria-pressed="false">🎙 My microphone</button>
+                  <button type="button" class="chip" data-live-route="ears" aria-pressed="false">🎧 My headphones</button>
+                  <span class="live-route-sep" aria-hidden="true"></span>
+                  <button type="button" class="chip live-api-chip" id="live-api" aria-pressed="false"
+                    title="Also publish the converted voice for other programs (works with any of the choices)">📡 API</button>
+                </div>
+                <span class="field-hint" id="live-route-hint"></span></div>
+
+              <div class="live-hear" id="live-hear-row">
+                <label class="check"><input type="checkbox" id="live-hear"> 🎧 Let me hear my converted voice</label>
+                <div class="field-row" id="live-hear-volume-row" hidden><label for="live-hear-volume">What I hear <output id="live-hear-volume-value">80%</output></label>
+                  <input id="live-hear-volume" type="range" min="0" max="150" step="5" value="80"></div>
+              </div>
+
+              <div class="live-apibox" id="live-apibox" hidden>
+                <div class="live-inline live-api-head">
+                  <label for="live-channel" class="live-label">Channel</label>
+                  <input id="live-channel" maxlength="40" spellcheck="false" autocomplete="off" pattern="[A-Za-z0-9_-]{1,40}">
+                  <span class="live-api-listeners" id="live-listeners">Not live</span>
+                </div>
+                <div class="live-api-url"><code id="live-api-url"></code>
+                  <button type="button" class="secondary-button live-small" id="live-api-copy">Copy</button></div>
+                <span class="field-hint">Any program can connect to this WebSocket and receive the converted voice as you speak:
+                  16-bit mono PCM blocks after a JSON <code>hello</code> with the sample rate. From other programs or computers add a key
+                  (Llama API → Keys for other apps, "Real-time voice conversion"): <code>Authorization: Bearer rk-…</code> or <code>&amp;key=rk-…</code>.</span>
+                <details class="live-api-example"><summary>Python example</summary>
+<pre><code id="live-api-snippet"></code></pre></details>
+              </div>
+
+              <div class="live-micbox" id="live-micbox" hidden>
+                <p class="live-micbox-state" id="live-mic-state">Checking the Rocsy Voice microphone…</p>
+                <ol class="live-steps">
+                  <li>Press <strong>Start</strong> above and speak.</li>
+                  <li>In Discord, the game or Signal, choose <strong>Rocsy Voice</strong> as the microphone,
+                    or tick the box below to switch every app that uses your default microphone.</li>
+                </ol>
+                <label class="check"><input type="checkbox" id="live-default-mic"> Make Rocsy Voice my default microphone while I'm live</label>
+                <span class="field-hint">Your real microphone comes back when you press Stop, leave this tab, or close the browser (within 30 s).</span>
+                <div class="live-inline"><button type="button" class="secondary-button live-small" id="live-mic-remove">Remove the Rocsy Voice microphone</button></div>
+              </div>
+
+              <div class="field-row" id="live-output-row" hidden><label for="live-output">Your headphones</label>
+                <select id="live-output"><option value="">Default output</option></select>
+                <span class="field-hint">Use headphones: from speakers your microphone picks it up again.</span></div>
+              <div class="live-meter" title="Converted level"><i id="live-out-meter" class="is-out"></i></div>
+              <div class="field-row"><label for="live-volume" id="live-volume-label">Volume <output id="live-volume-value">100%</output></label>
+                <input id="live-volume" type="range" min="0" max="150" step="5" value="100"></div>
+              <div class="live-record">
+                <button type="button" class="secondary-button" id="live-record" disabled title="Record (R)">Record</button>
+                <select id="live-record-mode" aria-label="What to record">
+                  <option value="converted">Converted voice</option>
+                  <option value="both">Converted + original</option>
+                </select>
+                <span id="live-record-time" class="field-hint"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recordings -->
+      <div class="card live-recordings-card" id="live-recordings-card" hidden>
+        <div class="card-head is-static"><span class="card-title">Recordings</span>
+          <button type="button" class="secondary-button live-small" id="live-recordings-clear">Clear all</button></div>
+        <div class="card-body"><div id="live-recordings" class="live-recordings"></div>
+          <p class="field-hint">Kept in this tab only; download what you want to keep.</p></div>
+      </div>
+
+      <details class="card live-help" id="live-help">
+        <summary class="card-head"><span class="card-title">Use it in games, Discord and other programs</span></summary>
+        <div class="card-body">
+          <p><strong>Easiest:</strong> Output → <em>My microphone</em>, press Start, and pick <em>Rocsy Voice</em> as the microphone in the
+            other program (this computer only). Keep this tab open while you talk.</p>
+          <p><strong>Your own program:</strong> Output → <em>📡 API</em> publishes the converted voice on a channel; connect to the
+            listen URL shown there to receive it live (bots, overlays, game mods, another PC).</p>
+          <p><strong>Without the browser (Linux):</strong> on this PC run
+            <code>python3 BunnyBytes/voice/realtime/rocsy_vc_client.py --voice "Name" --virtual-mic</code>
+            (once: <code>pip install -r BunnyBytes/voice/realtime/requirements-client.txt</code>), then pick
+            <em>Rocsy Voice</em> as the microphone in the game. It never plays through your speakers.</p>
+          <p><strong>Windows:</strong> install a virtual audio cable, pick it under "Play it on" above (or run the client with
+            <code>--output "CABLE Input"</code>) and choose the cable as the game's microphone.</p>
+          <p><strong>Another computer / your own app:</strong> WebSocket <code>/Voice/v1/realtime</code> on this site with a key from
+            Llama API → Keys for other apps (tick "Real-time voice conversion"). Send 16-bit mono PCM, get the converted voice back.
+            Details: <code>BunnyBytes/voice/realtime/README.md</code>.</p>
+          <p class="field-hint">Shortcuts on this tab: <kbd>M</kbd> mute, <kbd>R</kbd> record. A live session takes a turn in the GPU
+            queue; with jobs running one at a time, renders wait while you talk (Queue → Queue settings → "Run jobs together when they fit").</p>
+        </div>
+      </details>
+      <audio id="live-preview" preload="none" hidden></audio>
+      <audio id="live-monitor-audio" hidden></audio>
     </section>
   </main>
 

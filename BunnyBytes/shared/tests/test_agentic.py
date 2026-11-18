@@ -192,7 +192,7 @@ class ParityTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             agentic = self.fresh(tmp)
             for studio, key, needle in (('image', 'krea2', 'expansion.txt'), ('image', 'anima', '@artist'),
-                                        ('image', 'qwen_image_21', '<image1>'), ('music', 'yue2', '[Verse]'),
+                                        ('image', 'qwen_image_21', '<image1>'), ('image', 'h3_image', '<Picture 1>'), ('music', 'yue2', '[Verse]'),
                                         ('music', 'minimax_music3', 'Global Metadata'), ('voice', 'fish_s2', '[long-break]')):
                 field = agentic.MODEL_FIELD[studio]
                 system = agentic.system_prompt(studio, agentic.SETTINGS[studio], {field: key})
@@ -207,6 +207,19 @@ class ParityTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(agentic.model_key('image', {'model': 'nope'}), 'krea2')
             agentic.update_settings('image', {'use_model_guide': False})
             self.assertNotIn('MODEL GUIDE —', agentic.system_prompt('image', agentic.SETTINGS['image'], {'model': 'anima'}))
+
+    async def test_h3_image_request_is_one_image_accepts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agentic = self.fresh(tmp)
+            settings = {'model': 'h3_image', 'checkpoint': 'minimax_h3_image_pruned_w4a8.safetensors', 'width': 2048, 'height': 2048,
+                        'speed': 'turbo4', 'enhance': True, 'turbo_strength': 1, 'krea_steps': 8, 'match_reference_size': True,
+                        'use_references': True, 'references': [{'enabled': True, 'strength': 1, 'image': 'a.png'}]}
+            body = agentic.validate('image', {'prompt': 'The woman in <Picture 1> is <Subject 1>.', 'negative_prompt': 'blurry', 'lora': None}, settings)
+            self.assertEqual((body['model'], body['speed'], body['enhance'], body['match_reference_size']), ('h3_image', 'standard', False, True))
+            for field in ('turbo_strength', 'krea_steps', 'negative_prompt'):
+                self.assertNotIn(field, body)
+            self.assertEqual(agentic.LORA_FAMILY['h3_image'], 'h3image')
+            self.assertEqual(agentic.guides('image')['models']['h3_image']['label'], 'MiniMax H3 Image')
 
     async def test_settings_validation_guide_override_and_persistence(self):
         with tempfile.TemporaryDirectory() as tmp:

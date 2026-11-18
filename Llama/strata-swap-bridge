@@ -20,10 +20,21 @@ esac
 curl -fsS --max-time 480 -X POST -H "X-Hostctl-Secret: $HOSTCTL_SECRET" -H 'Content-Type: application/json' \
   -d "$body" "$url/strata-start" >/dev/null
 ready=0
+gone=0
 while :; do
   if curl -fsS --max-time 2 "http://127.0.0.1:9101/health" >/dev/null 2>&1; then
     ready=1
-  elif [ "$ready" = 1 ]; then
+  elif [ "$ready" = 0 ]; then
+    # Stopped before this loop saw it healthy (an Agent session cancelled mid-load stopped it the second it came up,
+    # 2026-11-15 23:04): without this the bridge waited forever and llama-swap showed Strata "starting" for good.
+    if curl -fsS --max-time 10 -H "X-Hostctl-Secret: $HOSTCTL_SECRET" "$url" 2>/dev/null \
+        | grep -q '"serving": false'; then
+      gone=$((gone + 1))
+      [ "$gone" -ge 2 ] && exit 1
+    else
+      gone=0
+    fi
+  else
     # The server stops answering at the start of a stop, while the engine still holds the GPU. llama-swap calls the
     # model unloaded when this script exits, and the next job then starts (2026-10-31): stay until it is really gone.
     curl -fsS --max-time 200 -X POST -H "X-Hostctl-Secret: $HOSTCTL_SECRET" -H 'Content-Type: application/json' \

@@ -12,7 +12,7 @@ import os
 import re
 import time
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 import uvicorn
@@ -47,6 +47,7 @@ import llama_params
 import llama_keys
 import restyle
 import themes
+import vscode_themes
 import favicons
 import topbar
 import cache_service
@@ -58,6 +59,7 @@ import datasaver
 import honeypot
 import plugins
 import plugin_updates
+import sillytavern as sillytavern_service
 from notify import CATALOG as NOTIFY_CATALOG, NotificationHub, watch_services
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -277,6 +279,7 @@ templates.env.globals["data_saver_script"] = lambda: Markup(data_saver_script())
 UPSTREAMS = {
     "Vid": settings.vid_upstream,
     "Mus": settings.mus_upstream,
+    "Model3D": settings.m3d_upstream,
     "Krea": settings.krea_upstream,
     "Trainer": settings.trainer_upstream,
     "Queue": settings.queue_upstream,
@@ -368,8 +371,8 @@ async def theme_css(preview: str = "", accent: str = "", app: str = "home") -> R
     (the login page uses it too) - it's only colours. ?preview= renders an
     unsaved theme for the Settings page's live preview."""
     current = site_settings.load()
-    values = themes.clean({"theme": preview, "accent": accent}) if preview else current
-    return Response(themes.build_css(values["theme"], values["accent"], app), media_type="text/css",
+    values = themes.clean({"theme": preview, "accent": accent, "custom_themes": current["custom_themes"]}) if preview else current
+    return Response(themes.build_css(values["theme"], values["accent"], app, current["custom_themes"]), media_type="text/css",
                     headers={"Cache-Control": "no-cache"})
 
 
@@ -784,6 +787,160 @@ async def unpin_cache_file(request: Request, file_id: str):
     return JSONResponse(await asyncio.to_thread(upload_cache.unpin, file_id), headers={"Cache-Control": "no-store"})
 
 
+# "Send to my microphone" (Voice → Live voice): the Rocsy Voice virtual mic on THIS computer
+# (hostctl/voicemic.py). Only for a logged-in visitor on this machine: from another device it would make
+# a microphone on the wrong computer. Actions need the X-BB-Action header (no cross-site forms).
+def _local_visitor(request: Request) -> bool:
+    ip, local = _visitor_ip({k.lower(): v for k, v in request.headers.items()}, request.client.host if request.client else "")
+    return local and ip in ("127.0.0.1", "::1", "localhost")
+
+
+@app.get("/voice-mic")
+async def voice_mic_status(request: Request):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if not _local_visitor(request):
+        return JSONResponse({"available": False, "remote": True,
+                             "error": "The Rocsy Voice microphone is made on the Rocsy computer; you're on another device."})
+    return await _hostctl("GET", "/voice/mic")
+
+
+@app.post("/voice-mic/{action}")
+async def voice_mic_action(request: Request, action: str):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1" or action not in ("create", "remove", "default", "heartbeat"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    if not _local_visitor(request):
+        return JSONResponse({"error": "Only on the Rocsy computer itself."}, status_code=403)
+    try:
+        body = await request.json() if action == "default" else {}
+    except ValueError:
+        body = {}
+    return await _hostctl("POST", f"/voice/mic/{action}", {"on": bool((body or {}).get("on"))} if action == "default" else {})
+
+
+# Real-time voice conversion: registered before the /Voice/{path} catch-all so it isn't proxied there.
+REALTIME_VOICE_URL = os.getenv("REALTIME_VOICE_URL", "http://127.0.0.1:8953")
+
+
+def _realtime_voice_key(headers, query) -> "llama_keys.LlamaKey | None":
+    """A scoped key allowed real-time voice: Authorization: Bearer rk-..., or ?key=rk-... for clients
+    whose WebSocket library can't set headers (browsers)."""
+    auth = headers.get("authorization", "")
+    token = auth[7:].strip() if auth.lower().startswith("bearer ") else str(query.get("key") or "")
+    key = llama_keys.lookup(token) if token else None
+    return key if key and key.allow_realtime_voice else None
+
+
+def _realtime_voice_allowed(scope_headers, cookies, query) -> tuple[bool, "llama_keys.LlamaKey | None"]:
+    key = _realtime_voice_key(scope_headers, query)
+    if key:
+        return True, key
+    return bool(verify_session_cookie(cookies.get(settings.cookie_name))), None
+
+
+@app.get("/Voice/v1/realtime/voices")
+async def realtime_voice_list(request: Request):
+    """The voices real-time conversion can use (login session or a key with real-time voice)."""
+    allowed, _key = _realtime_voice_allowed(request.headers, request.cookies, request.query_params)
+    if not allowed:
+        return JSONResponse({"error": "unauthorized", "message": "Log in, or use a key with real-time voice."}, status_code=401)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            upstream = await client.get(REALTIME_VOICE_URL + "/v1/realtime/voices")
+        return JSONResponse(upstream.json(), status_code=upstream.status_code)
+    except (httpx.HTTPError, ValueError):
+        return JSONResponse({"error": "unavailable", "message": "Real-time voice isn't running (rocsy-voice-realtime)."}, status_code=503)
+
+
+@app.get("/Voice/v1/realtime/channels")
+async def realtime_voice_channels(request: Request):
+    """Published live voices (Live voice → API) and how many listen to each."""
+    allowed, _key = _realtime_voice_allowed(request.headers, request.cookies, request.query_params)
+    if not allowed:
+        return JSONResponse({"error": "unauthorized", "message": "Log in, or use a key with real-time voice."}, status_code=401)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            upstream = await client.get(REALTIME_VOICE_URL + "/v1/realtime/channels")
+        return JSONResponse(upstream.json(), status_code=upstream.status_code)
+    except (httpx.HTTPError, ValueError):
+        return JSONResponse({"error": "unavailable", "message": "Real-time voice isn't running (rocsy-voice-realtime)."}, status_code=503)
+
+
+@app.websocket("/Voice/v1/realtime")
+async def realtime_voice_socket(client: WebSocket):
+    """Bridge a real-time voice conversion stream (voice/realtime/rt_server.py) through the gateway:
+    logged-in Rocsy pages (same-origin) or a scoped key with "Real-time voice conversion"."""
+    await _bridge_realtime(client, "/v1/realtime")
+
+
+@app.websocket("/Voice/v1/realtime/listen")
+async def realtime_voice_listen(client: WebSocket):
+    """Receive a published live voice (?channel=NAME): same access as the stream itself."""
+    await _bridge_realtime(client, "/v1/realtime/listen")
+
+
+async def _bridge_realtime(client: WebSocket, upstream_path: str):
+    allowed, key = _realtime_voice_allowed(client.headers, client.cookies, client.query_params)
+    if not allowed:
+        await client.close(code=4401, reason="Unauthorized")
+        return
+    if key is None:
+        # Cookie login: only our own pages may open it (a browser always sends Origin here).
+        origin = urlsplit(client.headers.get("origin", ""))
+        if origin.netloc.lower() != client.headers.get("host", "").lower() or origin.scheme not in ("http", "https"):
+            await client.close(code=4403, reason="Forbidden")
+            return
+    else:
+        try:
+            llama_keys.take(key)          # counts the session against the key's per-minute / per-day limits
+        except llama_keys.Refused as error:
+            await client.close(code=4429, reason=str(error)[:120])
+            return
+
+    import websockets
+
+    query = [(k, v) for k, v in client.query_params.multi_items() if k != "key"]
+    upstream_url = REALTIME_VOICE_URL.replace("http://", "ws://", 1) + upstream_path
+    if query:
+        upstream_url += "?" + urlencode(query)
+    try:
+        async with websockets.connect(upstream_url, max_size=4 * 1024 * 1024, ping_interval=20) as upstream:
+            await client.accept()
+
+            async def client_to_voice() -> None:
+                while True:
+                    message = await client.receive()
+                    if message.get("type") == "websocket.disconnect":
+                        return
+                    if message.get("bytes") is not None:
+                        await upstream.send(message["bytes"])
+                    elif message.get("text") is not None:
+                        await upstream.send(message["text"])
+
+            async def voice_to_client() -> None:
+                async for message in upstream:
+                    if isinstance(message, bytes):
+                        await client.send_bytes(message)
+                    else:
+                        await client.send_text(message)
+
+            tasks = [asyncio.create_task(client_to_voice()), asyncio.create_task(voice_to_client())]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*done, *pending, return_exceptions=True)
+        with contextlib.suppress(RuntimeError):
+            await client.close()
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        log.warning("real-time voice WebSocket closed: %s", exc)
+        with contextlib.suppress(RuntimeError):
+            await client.close(code=1011, reason="Real-time voice unavailable")
+
+
 @app.get("/Voice")
 async def voice_page(request: Request):
     if not _has_valid_session(request):
@@ -974,7 +1131,8 @@ async def plugin_apply(request: Request):
 async def get_site_settings(request: Request):
     if not _has_valid_session(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    return {**site_settings.load(), "themes": themes.catalog(), "modules": themes.module_catalog()}
+    values = site_settings.load()
+    return {**values, "themes": themes.catalog(values["custom_themes"]), "modules": themes.module_catalog()}
 
 
 @app.get("/api/password")
@@ -1471,7 +1629,69 @@ async def put_site_settings(request: Request):
     if not isinstance(body, dict):
         return JSONResponse({"error": "invalid_json"}, status_code=400)
     saved = site_settings.save({key: body[key] for key in ("theme", "accent", "hidden", "order", "groups", "scanner_block", "data_saver", "trainer_art_exclude") if key in body})
-    return {**saved, "themes": themes.catalog(), "modules": themes.module_catalog()}
+    return {**saved, "themes": themes.catalog(saved["custom_themes"]), "modules": themes.module_catalog()}
+
+
+@app.post("/api/settings/vscode-themes")
+async def import_vscode_themes(request: Request, filename: str = ""):
+    """Settings -> Appearance -> VS Code themes. JSON {"extension": "publisher.name" | Marketplace/Open VSX link}
+    downloads the extension; any other body is an uploaded theme .json/.jsonc or .vsix (?filename=)."""
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1":
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    try:
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = await request.json()
+            ref = body.get("extension") if isinstance(body, dict) else None
+            if not isinstance(ref, str) or not ref.strip():
+                return JSONResponse({"error": "Give an extension ID or link"}, status_code=400)
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=15),
+                                         headers={"User-Agent": "Rocsy theme import"}) as client:
+                found = await vscode_themes.fetch_extension(client, ref)
+        else:
+            raw = bytearray()
+            async for chunk in request.stream():
+                raw += chunk
+                if len(raw) > vscode_themes.MAX_VSIX_BYTES:
+                    return JSONResponse({"error": "That file is too big"}, status_code=413)
+            if not raw:
+                return JSONResponse({"error": "Choose a theme file"}, status_code=400)
+            found = vscode_themes.from_upload(bytes(raw), filename[:200])
+    except vscode_themes.ThemeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    except ValueError:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+    current = site_settings.load()
+    custom = dict(current["custom_themes"])
+    added = [theme["id"] for theme in found if theme["id"] not in custom]
+    room = themes.MAX_CUSTOM_THEMES - len(custom)
+    if len(added) > room:
+        if room <= 0:
+            return JSONResponse({"error": f"You have {themes.MAX_CUSTOM_THEMES} imported themes; remove some first"},
+                                status_code=409)
+        keep = set(added[:room])
+        found = [theme for theme in found if theme["id"] in custom or theme["id"] in keep]
+    for theme in found:
+        custom[theme["id"]] = {key: theme[key] for key in ("name", "note", "palette", "light")}
+    saved = site_settings.save({"custom_themes": custom})
+    return {**saved, "imported": [theme["id"] for theme in found],
+            "themes": themes.catalog(saved["custom_themes"]), "modules": themes.module_catalog()}
+
+
+@app.delete("/api/settings/vscode-themes/{theme_id}")
+async def delete_vscode_theme(request: Request, theme_id: str):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1":
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    current = site_settings.load()
+    custom = {key: value for key, value in current["custom_themes"].items() if key != theme_id}
+    changes: dict = {"custom_themes": custom}
+    if current["theme"] == theme_id:
+        changes["theme"] = "default"
+    saved = site_settings.save(changes)
+    return {**saved, "themes": themes.catalog(saved["custom_themes"]), "modules": themes.module_catalog()}
 
 
 async def _json_body(request: Request) -> dict | None:
@@ -1495,10 +1715,11 @@ async def home_status(request: Request):
 
 
 @app.get("/api/home/thumb")
-async def home_thumb(request: Request, src: str = ""):
+async def home_thumb(request: Request, src: str = "", size: str = ""):
     if not _has_valid_session(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    data = await home_data.thumbnail(UPSTREAMS, src, lite=datasaver.wants_lite(request.headers, request.cookies))
+    data = await home_data.thumbnail(UPSTREAMS, src, lite=datasaver.wants_lite(request.headers, request.cookies),
+                                     big=size == "big")
     if data is None:
         return Response(status_code=404)
     # Outputs never change under the same job id + index.
@@ -1697,6 +1918,29 @@ async def put_load_priority(request: Request):
     if body is None:
         return JSONResponse({"error": "json_required"}, status_code=415)
     return await _hostctl("PUT", "/load-priority", body)
+
+
+@app.get("/api/maintenance")
+async def get_maintenance(request: Request):
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return await _hostctl("GET", "/maintenance")
+
+
+@app.api_route("/api/maintenance", methods=["PUT"])
+@app.post("/api/maintenance/check")
+async def change_maintenance(request: Request):
+    """Settings -> Maintenance: automatic restarts of this computer, so JSON + X-BB-Action."""
+    if not _has_valid_session(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if request.headers.get("x-bb-action") != "1":
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    if request.method == "POST":
+        return await _hostctl("POST", "/maintenance/check", {})
+    body = await _json_body(request)
+    if body is None:
+        return JSONResponse({"error": "json_required"}, status_code=415)
+    return await _hostctl("PUT", "/maintenance", body)
 
 
 @app.get("/api/gpu-tune")
@@ -1956,6 +2200,57 @@ def _has_valid_llama_bearer(request: Request) -> bool:
 
 
 ROOT_APPS: dict[str, str] = {}   # root_app plugin id -> its path (see _root_app_shim)
+STATIC_CACHE: dict[str, dict] = {}   # plugin id -> its static_cache setting (see proxy_request)
+
+
+_APP_VERSIONS: dict[str, tuple[float, str]] = {}
+
+
+async def _app_version(app_name: str) -> str:
+    """The app's own version (static_cache.version_url), asked at most every 15 s; "" when it can't say."""
+    rule = STATIC_CACHE.get(app_name) or {}
+    if not rule.get("version_url"):
+        return ""
+    hit = _APP_VERSIONS.get(app_name)
+    if hit and time.monotonic() - hit[0] < 15:
+        return hit[1]
+    version = ""
+    try:
+        async with httpx.AsyncClient(timeout=2) as client:
+            reply = await client.get(UPSTREAMS[app_name].rstrip("/") + rule["version_url"])
+        if reply.status_code == 200:
+            version = str(reply.json().get(rule["version_key"]) or "")[:60]
+    except (httpx.HTTPError, ValueError, AttributeError):
+        version = hit[1] if hit else ""
+    _APP_VERSIONS[app_name] = (time.monotonic(), version)
+    return version
+
+
+def _static_refresher(prefix: str, rule: dict, version: str) -> str:
+    """With static_cache the browser keeps the app's scripts for a day. When the app's version changed since this
+    browser's last visit, the page stops before any of them runs, re-downloads the ones it had cached (their list is
+    kept after each load) and reloads, so an update never runs old scripts against the new app."""
+    data = json.dumps({"P": prefix, "V": version, "R": list(rule["paths"]), "X": list(rule.get("exclude") or ())})
+    return (
+        "<script>(function(){"
+        f"var D={data},P=D.P,V=D.V,K='rocsy-static:'+P;"
+        "function ok(u){try{var x=new URL(u,location.href);if(x.origin!==location.origin||x.pathname.indexOf(P+'/')!==0)return false;"
+        "var p=x.pathname.slice(P.length);return D.R.some(function(a){return p.indexOf(a)===0})&&"
+        "!D.X.some(function(a){return p.indexOf(a)===0})}catch(e){return false}}"
+        "var old;try{old=localStorage.getItem(K)}catch(e){return}"
+        # Once per tab and version: if the new version can't be stored, it never reloads in a loop.
+        "var T;try{T=sessionStorage.getItem(K+':tried')}catch(e){}"
+        "if(V&&old&&old!==V&&T!==V){try{sessionStorage.setItem(K+':tried',V)}catch(e){}"
+        "window.stop();var L=[];try{L=JSON.parse(localStorage.getItem(K+':urls')||'[]')}catch(e){}"
+        "document.documentElement.innerHTML='<body style=\"margin:0;height:100vh;display:grid;place-items:center;"
+        "background:#0f1519;color:#eef3f6;font:15px system-ui\">Loading the updated app…</body>';"
+        "Promise.all(L.filter(ok).map(function(u){return fetch(u,{cache:'reload'}).catch(function(){})}))"
+        ".then(function(){try{localStorage.setItem(K,V)}catch(e){}location.reload()});return}"
+        "if(V&&!old){try{localStorage.setItem(K,V)}catch(e){}}"
+        "addEventListener('load',function(){setTimeout(function(){try{var u=performance.getEntriesByType('resource')"
+        ".map(function(e){return e.name}).filter(ok);localStorage.setItem(K+':urls',JSON.stringify(u.slice(0,1500)))}catch(e){}},8000)});"
+        "})();</script>"
+    )
 
 
 def _root_app_shim(prefix: str) -> str:
@@ -2044,6 +2339,12 @@ async def _handle_app_proxy(request: Request, app_name: str, path: str, *, strip
         # know this same value to get past _has_valid_llama_bearer.
         extra_headers = {"authorization": f"Bearer {settings.llama_api_key}"}
     root_prefix = ROOT_APPS.get(app_name, "")
+    head_start = ""
+    if root_prefix:
+        head_start = _root_app_shim(root_prefix)
+        rule = STATIC_CACHE.get(app_name)
+        if rule and request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+            head_start += _static_refresher(root_prefix, rule, await _app_version(app_name))
     return await proxy_request(
         request, upstream_base, APP_PATHS.get(app_name, f"/{app_name}"), extra_headers=extra_headers, strip_prefix=strip_prefix,
         head_inject=theme_link(app_name) + rocsy_bar_link() + data_saver_script() if app_name in THEMED_APPS else "",
@@ -2052,8 +2353,9 @@ async def _handle_app_proxy(request: Request, app_name: str, path: str, *, strip
         html_transform=lambda html: favicons.apply(
             topbar.decorate(html, app_name) if app_name in topbar.APPS and app_name in THEMED_APPS
             else _root_app_html(root_prefix)(html) if root_prefix else html, app_name),
-        head_start_inject=_root_app_shim(root_prefix) if root_prefix else "",
+        head_start_inject=head_start,
         location_prefix=root_prefix,
+        static_cache=STATIC_CACHE.get(app_name),
         adapt_reasoning=app_name == "Llama",
         lite_images=app_name != "Llama" and datasaver.wants_lite(request.headers, request.cookies),
     )
@@ -2083,6 +2385,8 @@ async def _scoped_llama_proxy(request: Request, key: "llama_keys.LlamaKey", *, s
     path = request.url.path
     if path.startswith("/Llama/"):
         path = path[len("/Llama"):]
+    if not key.allow_chat:
+        return _llama_refusal(llama_keys.Refused(403, "not_allowed", "This key is not allowed to chat."))
     if request.method in ("GET", "HEAD") and path.rstrip("/") in llama_keys.MODEL_PATHS:
         if key.models:
             return JSONResponse(llama_keys.models_response(key))
@@ -2135,6 +2439,7 @@ async def legacy_app_redirect(request: Request, path: str = ""):
 @app.get("/Video", include_in_schema=False)
 @app.get("/Image", include_in_schema=False)
 @app.get("/Music", include_in_schema=False)
+@app.get("/Model3D", include_in_schema=False)
 async def app_root_redirect(request: Request):
     return RedirectResponse(url=f"{request.url.path}/", status_code=308)
 
@@ -2147,6 +2452,11 @@ async def proxy_vid(request: Request, path: str):
 @app.api_route("/Music/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
 async def proxy_mus(request: Request, path: str):
     return await _handle_app_proxy(request, "Mus", path)
+
+
+@app.api_route("/Model3D/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+async def proxy_model3d(request: Request, path: str):
+    return await _handle_app_proxy(request, "Model3D", path)
 
 
 @app.api_route("/Image/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
@@ -2610,7 +2920,7 @@ async def proxy_llama_api(request: Request, path: str):
 # Custom services from core-backend-extras/plugins/ (plugins.py; the manifest is documented in
 # plugins/README.md). Registered after every built-in route, and a plugin may not reuse a
 # path or name Rocsy already has, so a plugin can never take over a Rocsy page.
-def _register_plugin(plugin: plugins.Plugin) -> None:
+def _register_plugin(plugin: plugins.Plugin, builtin: bool = False) -> None:
     UPSTREAMS[plugin.id] = plugin.upstream
     APP_PATHS[plugin.id] = plugin.path
     if plugin.themed:
@@ -2624,10 +2934,12 @@ def _register_plugin(plugin: plugins.Plugin) -> None:
         home_data.PLUGIN_ART[plugin.id] = {
             "background": plugin.home["background"], "path": plugin.path, "slideshow": plugin.home["slideshow"],
             "url": f"{plugin.upstream}{plugin.home['background_url']}" if plugin.home["background"] == "plugin" else ""}
+        if plugin.home["background"] == "plugin":
+            home_data.PLUGIN_THUMBS[plugin.path] = (plugin.upstream, plugin.strip_prefix)
     if plugin.home:
         themes.MODULES[plugin.id] = {"group": plugin.home["group"], "label": plugin.name,
-                                     "note": plugin.note or plugin.home["desc"], "tag": "Plugin"}
-        PLUGIN_CARDS[plugin.id] = plugins.home_card(plugin)
+                                     "note": plugin.note or plugin.home["desc"], **({} if builtin else {"tag": "Plugin"})}
+        PLUGIN_CARDS[plugin.id] = {**plugins.home_card(plugin), **({"plugin": False} if builtin else {})}
 
     async def plugin_root(request: Request):
         query = f"?{request.url.query}" if request.url.query else ""
@@ -2641,6 +2953,8 @@ def _register_plugin(plugin: plugins.Plugin) -> None:
                       methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
     if plugin.root_app:
         ROOT_APPS[plugin.id] = plugin.path
+    if plugin.static_cache:
+        STATIC_CACHE[plugin.id] = plugin.static_cache
         security_headers.ROOT_APP_PATHS.add(plugin.path)
 
 
@@ -2677,6 +2991,12 @@ PLUGIN_RESERVED = (
     set(UPSTREAMS) | set(themes.MODULES) | set(topbar.APPS) | set(favicons.COLORS) | {"Settings", "Framework", "Strata", "Code", "Cache"},
     _ROCSY_PATHS | set(APP_PATHS.values()) | set(LEGACY_APP_PATHS) | {"/static", "/login", "/logout", "/Settings"},
 )
+# SillyTavern is one of Rocsy's own optional services (sillytavern.py): its name and path stay Rocsy's
+# even while it is off, and it uses the root_app machinery above when its compose profile is on.
+PLUGIN_RESERVED[0].add(sillytavern_service.ID)
+PLUGIN_RESERVED[1].add(sillytavern_service.PATH)
+if sillytavern_service.enabled():
+    _register_plugin(sillytavern_service.service(), builtin=True)
 PLUGIN_SNAPSHOT = plugins.snapshot(settings.plugins_dir)
 PLUGINS, PLUGIN_ERRORS = plugins.load(settings.plugins_dir, *PLUGIN_RESERVED)
 for _plugin in PLUGINS:

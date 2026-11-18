@@ -84,7 +84,7 @@
     const labels = {
       minimax_h3: "MiniMax H3", ltx_2_5: "LTX 2.5",
       qwen3: "Qwen3-TTS 1.7B", indextts2: "IndexTTS2", fish_s2: "Fish Audio S2 Pro", fish_drama3: "Fish Audio Drama 3",
-      krea2: "Krea 2", lustify: "Lustify", qwen_image_21: "Qwen Image 2.1", moss: "MOSS-Image",
+      krea2: "Krea 2", lustify: "Lustify", qwen_image_21: "Qwen Image 2.1", moss: "MOSS-Image", h3_image: "MiniMax H3 Image",
       yue2: "YuE2", minimax_music3: "MiniMax Music 3"
     };
     for (const kind of ["video", "voice", "image", "music"]) {
@@ -206,6 +206,7 @@
   function renderImageSearch() {
     const mode = cfg.image_mode || "headless", engines = cfg.image_engines || [];
     $("agent-image-mode").value = mode;
+    $("agent-browser-auto").checked = cfg.browser_autoconnect !== false;
     $("agent-image-engine").replaceChildren(...engines.map((x) => {
       const o = new Option(x.label + (x.headless ? "" : " (live browser only)"), x.id);
       o.disabled = mode === "headless" && !x.headless;
@@ -222,6 +223,7 @@
   }
   $("agent-image-engine").addEventListener("change", async (e) => { await save({ image_engine: e.target.value }); renderImageSearch(); });
   $("agent-image-mode").addEventListener("change", async (e) => { await save({ image_mode: e.target.value }); renderImageSearch(); });
+  $("agent-browser-auto").addEventListener("change", (e) => save({ browser_autoconnect: e.target.checked }));
   $("agent-limit-restarts").addEventListener("change", (e) => {
     $("agent-limit-restarts-note").textContent = limitNote(e.target.value);
     save({ limit_restarts: +e.target.value });

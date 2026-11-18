@@ -12,6 +12,7 @@
   const isImage = (f) => /\.(png|jpg|jpeg|webp|gif|bmp|svg)$/i.test(f.name);
   const isVideo = (f) => /\.(mp4|mov|webm|mkv)$/i.test(f.name);
   const isAudio = (f) => /\.(mp3|wav|flac|ogg|m4a|opus)$/i.test(f.name);
+  const isModel = (f) => /\.(glb|gltf|vrm|fbx|obj|stl|ply)$/i.test(f.name);
   const isText = (f) => /\.(txt|md|markdown|json|csv|log|py|js|ts|css|html|yaml|yml|xml|srt|vtt)$/i.test(f.name);
   const content = (f) => `/Cache/api/files/${f.id}/content`;
   const thumbOf = (f) => /\.svg$/i.test(f.name) ? content(f) : `/Cache/api/files/${f.id}/thumb?v=${f.version}`;
@@ -25,10 +26,29 @@
     spark: '<path d="M12 3l1.9 4.6 4.6 1.9-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/><path d="M19 15v6M16 18h6"/>',
     edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     note: '<path d="M5 4h14v12l-4 4H5z"/><path d="M9 9h6M9 13h4"/>',
+    model: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',
     download: '<path d="M12 4v11M7 10.5l5 5 5-5"/><path d="M5 20h14"/>',
   };
-  const kindIcon = (f) => f && isImage(f) ? ICON.image : f && isVideo(f) ? ICON.video : f && isAudio(f) ? ICON.audio : f && isText(f) ? ICON.text : ICON.file;
-  const thumbHtml = (f) => `<span class="thumb">${f && isImage(f) ? `<img src="${thumbOf(f)}" alt="" loading="lazy" decoding="async">` : svg(kindIcon(f))}</span>`;
+  const kindIcon = (f) => f && isModel(f) ? ICON.model : f && isImage(f) ? ICON.image : f && isVideo(f) ? ICON.video : f && isAudio(f) ? ICON.audio : f && isText(f) ? ICON.text : ICON.file;
+  const thumbHtml = (f) => `<span class="thumb">${f && isImage(f) ? `<img src="${thumbOf(f)}" alt="" loading="lazy" decoding="async">` : f && isModel(f) ? `<img data-m3d="${f.id}" alt="" hidden>${svg(ICON.model)}` : svg(kindIcon(f))}</span>`;
+  // 3D models: the viewer (three.js) loads only when a model is on screen.
+  const m3dUrl = document.body.dataset.m3d || '/static/model3d.js';
+  let m3dModule = null;
+  const m3d = () => (m3dModule ||= import(m3dUrl));
+  async function openModel(f) {
+    try { (await m3d()).openViewer(content(f), f.name, {title: f.pinned && f.alias ? f.alias : f.name, size: f.size}); }
+    catch { toast('Could not open the 3D viewer'); }
+  }
+  async function modelThumbs() {
+    const imgs = [...document.querySelectorAll('img[data-m3d]')]; if (!imgs.length) return;
+    let mod; try { mod = await m3d(); } catch { return; }
+    for (const img of imgs) {
+      const f = files.find(x => x.id === img.dataset.m3d); if (!f) continue;
+      mod.thumbnail(`${content(f)}?v=${f.version}`, f.name).then(src => {
+        img.src = src; img.hidden = false; img.nextElementSibling?.remove?.();
+      }).catch(() => {});
+    }
+  }
   const ragTerms = (selector) => $(selector).value.split(/[\n,]+/).map(term => term.trim().replace(/\s+/g, ' ')).filter(Boolean);
   const ragProblem = (terms) => terms.length > 30 ? 'Use up to 30 trigger terms.' : terms.some(term => term.length > 80) ? 'Each trigger term must be 80 characters or less.' : '';
   const termChips = (terms, max = 3) => !terms?.length ? '<span class="no-terms">@ only</span>' : terms.slice(0, max).map(t => `<span class="term" title="${esc(t)}">${esc(t)}</span>`).join('') + (terms.length > max ? `<span class="term more" title="${esc(terms.slice(max).join(', '))}">+${terms.length - max}</span>` : '');
@@ -39,7 +59,7 @@
   const matchesQuery = (f, q) => !q || [f.name, f.alias, f.note, ...(f.rag_terms || [])].some(v => (v || '').toLowerCase().includes(q));
   const lifeHtml = (f) => `<span class="life ${f.pinned ? 'kept' : soon(f) ? 'soon' : ''}" data-timer="${f.id}">${left(f.deletes_at)}</span>`;
   const downloadUrl = (f) => `${content(f)}?download=1`;
-  const actionHtml = (f) => `<span class="row-actions"><a class="row-action" href="${downloadUrl(f)}" download="${esc(f.name)}" data-download title="Download" aria-label="Download ${esc(f.name)}">${svg(ICON.download)}</a>${f.editable
+  const actionHtml = (f) => `<span class="row-actions">${isModel(f) ? `<button type="button" class="row-action m3d-open" data-m3d-open="${f.id}" title="View in 3D: animations, expressions, bones" aria-label="View ${esc(f.alias || f.name)} in 3D">${svg(ICON.model)}</button>` : ''}<a class="row-action" href="${downloadUrl(f)}" download="${esc(f.name)}" data-download title="Download" aria-label="Download ${esc(f.name)}">${svg(ICON.download)}</a>${f.editable
     ? `<button type="button" class="row-action ${f.pinned ? '' : 'add'}" data-doc="${f.id}" title="Edit text${f.pinned ? ', trigger terms and note' : ' · add to RAG'}" aria-label="Edit ${esc(f.alias || f.name)}">${svg(ICON.edit)}</button>`
     : f.pinned
     ? `<button type="button" class="row-action" data-pin="${f.id}" title="Edit alias, trigger terms and note" aria-label="Edit ${esc(f.alias || f.name)}">${svg(ICON.edit)}</button>`
@@ -52,6 +72,7 @@
   const checkHtml = (f) => `<input class="cache-check" type="checkbox" data-check="${f.id}" ${selected.has(f.id) ? 'checked' : ''} aria-label="Select ${esc(f.name)}">`;
   const preview = (f) => isImage(f) ? `<img src="${thumbOf(f)}" alt="${esc(f.name)}" loading="lazy" decoding="async">`
     : isVideo(f) ? `<video src="${content(f)}#t=1" controls preload="metadata"></video>`
+    : isModel(f) ? `<button type="button" class="m3d-open" data-m3d-open="${f.id}" aria-label="Open ${esc(f.name)} in the 3D viewer"><img class="m3d-thumb" data-m3d="${f.id}" alt="" hidden>${svg(ICON.model, 34)}</button>`
     : isText(f) ? `<pre data-text="${f.id}">Loading preview…</pre>` : svg(kindIcon(f), 34);
 
   const TABS = {rag: 1, cache: 1, all: 1};
@@ -61,12 +82,13 @@
     const q = $('#search').value.trim().toLowerCase();
     const list = base.filter(f => inTab(f) && matchesQuery(f, q));
     $('#files').innerHTML = list.map(f => `<div class="file-row ${selected.has(f.id) ? 'is-selected' : ''}" data-card="${f.id}">${checkHtml(f)}<span class="file-main">${thumbHtml(f)}${namesHtml(f)}</span><span class="terms">${f.pinned ? termChips(f.rag_terms) : '<span class="badge cache">Cache</span>'}</span><span class="meta" title="${time(f.uploaded_at)}">${time(f.uploaded_at)}</span><span class="meta">${fmt(f.size)}</span>${lifeHtml(f)}${actionHtml(f)}</div>`).join('');
-    $('#gallery-view').innerHTML = list.map(f => `<article class="card ${f.pinned ? 'rag' : ''} ${selected.has(f.id) ? 'is-selected' : ''}" data-card="${f.id}"><div class="card-preview">${preview(f)}<label class="card-check">${checkHtml(f)}</label>${f.pinned ? '<span class="badge rag">RAG</span>' : ''}</div><div class="card-body">${namesHtml(f)}${f.pinned ? `<div class="terms">${termChips(f.rag_terms, 2)}</div>` : ''}<div class="card-foot">${lifeHtml(f)}<span class="meta">${fmt(f.size)}</span>${actionHtml(f)}</div></div></article>`).join('');
+    $('#gallery-view').innerHTML = list.map(f => `<article class="card ${f.pinned ? 'rag' : ''} ${selected.has(f.id) ? 'is-selected' : ''}" data-card="${f.id}"><div class="card-preview">${preview(f)}<label class="card-check">${checkHtml(f)}</label>${f.pinned ? '<span class="badge rag">RAG</span>' : ''}${isModel(f) ? '<span class="badge m3d">3D</span>' : ''}</div><div class="card-body">${namesHtml(f)}${f.pinned ? `<div class="terms">${termChips(f.rag_terms, 2)}</div>` : ''}<div class="card-foot">${lifeHtml(f)}<span class="meta">${fmt(f.size)}</span>${actionHtml(f)}</div></div></article>`).join('');
     // Text previews are fetched once per file version, and only when the gallery is showing.
     if (view === 'gallery') document.querySelectorAll('[data-text]').forEach(async el => { const f = files.find(x => x.id === el.dataset.text); const key = `${f.id}:${f.version}`; try { if (!texts.has(key)) texts.set(key, fetch(content(f)).then(r => r.ok ? r.text() : Promise.reject()).then(text => text.slice(0, 5000) + (text.length > 5000 ? '\n…' : ''))); el.textContent = await texts.get(key); } catch { texts.delete(key); el.textContent = 'Preview unavailable'; } });
     $('#list-view').hidden = view !== 'list' || !list.length; $('#gallery-view').hidden = view !== 'gallery' || !list.length;
     $('#groups-block').hidden = tab === 'cache' || !groups.length;
     $('#new-group').hidden = tab === 'cache';
+    modelThumbs();
     renderEmpty(list, base, q);
     renderStats(base);
     shownIds = list.map(f => f.id); syncSelection();
@@ -131,6 +153,8 @@
   function cardClick(e) {
     if (e.target.closest('[data-download]')) return; // plain link: the browser downloads it
     const pinButton = e.target.closest('[data-pin]'); if (pinButton) { openPin([pinButton.dataset.pin]); return; }
+    const modelButton = e.target.closest('[data-m3d-open]');
+    if (modelButton && !selecting()) { openModel(files.find(f => f.id === modelButton.dataset.m3dOpen)); return; }
     const docButton = e.target.closest('[data-doc]'); if (docButton) { openDoc(files.find(f => f.id === docButton.dataset.doc)); return; }
     const check = e.target.closest('[data-check]');
     if (check) { pick(check.dataset.check, check.checked, e.shiftKey); return; }

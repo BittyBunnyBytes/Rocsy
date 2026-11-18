@@ -466,7 +466,7 @@ def run_config(config: Path, text_only: bool, ngram_bf16: bool) -> Path:
         if isinstance(vision, dict) and vision.get("gpu") and "--vram-reserve-mib" in args:
             index = args.index("--vram-reserve-mib") + 1
             if index < len(args) and args[index].isdigit():
-                args[index] = str(max(0, int(args[index]) - VISION_VRAM_MIB))
+                args[index] = str(max(1024, int(args[index]) - VISION_VRAM_MIB))   # keep headroom: the reserve is tuned low (2026-11-16)
     if ngram_bf16:
         if "--ple-gguf" in args[:-1]:
             args[args.index("--ple-gguf") + 1] = str(NGRAM_FILE)

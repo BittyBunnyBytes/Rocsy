@@ -1,0 +1,6 @@
+# SillyTavern's own folders on this machine (bind-mounted by the sillytavern service): settings,
+# chats, characters, API keys, server plugins and installed extensions. Never published.
+/config/
+/data/
+/plugins/
+/extensions/

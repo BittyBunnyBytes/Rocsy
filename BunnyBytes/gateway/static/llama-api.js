@@ -188,6 +188,8 @@ function renderKeys(keys) {
       `${limitText(key.per_minute, 'minute')}, ${limitText(key.per_day, 'day')}`,
       key.allow_images ? `vision (up to ${key.max_images} picture${key.max_images === 1 ? '' : 's'})` : 'no vision',
       key.allow_audio ? 'audio' : 'no audio',
+      ...(key.allow_chat === false ? ['no chat'] : []),
+      ...(key.allow_realtime_voice ? ['real-time voice'] : []),
       key.require_loaded ? 'only when already loaded' : 'may load the model',
       ...(key.character ? [`character ${key.character} (live card)`] : []),
       ...(key.thinking === false ? ['thinking off'] : []),
@@ -239,6 +241,8 @@ function openKeyForm(key = null) {
   el('kf-images').checked = !!key?.allow_images;
   el('kf-maximg').value = key?.max_images ?? 4;
   el('kf-audio').checked = !!key?.allow_audio;
+  el('kf-chat').checked = key ? key.allow_chat !== false : true;
+  el('kf-rtvoice').checked = !!key?.allow_realtime_voice;
   el('kf-loaded').checked = !!key?.require_loaded;
   const pick = el('kf-character');
   const names = [...new Set([...stCharacters, ...(key?.character ? [key.character] : [])])];
@@ -267,6 +271,8 @@ el('key-form').addEventListener('submit', async event => {
     allow_images: el('kf-images').checked,
     max_images: Number(el('kf-maximg').value),
     allow_audio: el('kf-audio').checked,
+    allow_chat: el('kf-chat').checked,
+    allow_realtime_voice: el('kf-rtvoice').checked,
     require_loaded: el('kf-loaded').checked,
     character: el('kf-character').value,
     thinking: el('kf-thinking').checked,

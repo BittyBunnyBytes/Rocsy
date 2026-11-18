@@ -9,8 +9,9 @@
 use std::{convert::Infallible, net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
-    extract::{ConnectInfo, Path, Query, State},
-    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
+    extract::{ConnectInfo, Path, Query, Request, State},
+    http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
+    middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive, Sse},
         Html, IntoResponse, Response,
@@ -91,6 +92,8 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v2/reply", post(reply))
         .route("/v2/adopt", post(adopt))
         .route("/health", get(health))
+        .route("/v2/gpus", get(gpus_internal))
+        .route("/v2/gpus/visible", get(gpus_visible))
         .route(
             "/metrics",
             get(|| async {
@@ -109,9 +112,11 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/api/queue/{entry_id}/cancel", post(cancel))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/vram", get(get_vram))
+        .route("/api/gpus", get(get_gpus))
         .route("/api/vram/forget", post(forget_vram))
         .route("/api/comfyui/restart", post(restart_comfyui))
-        .nest_service("/static", ServeDir::new(&shared.cfg.static_dir));
+        .nest_service("/static", ServeDir::new(&shared.cfg.static_dir))
+        .layer(middleware::from_fn(same_site_only));
     // axum's nest() doesn't match "{prefix}/": the gateway proxies the page there.
     let internal = if prefix.is_empty() {
         internal
@@ -125,6 +130,29 @@ pub fn router(shared: Arc<Shared>) -> Router {
     };
     app.layer(RequestBodyLimitLayer::new(256 * 1024))
         .with_state(shared)
+}
+
+/// Queue page actions (reorder, lock, cancel, settings, VRAM, ComfyUI restart)
+/// change things: refuse ones a browser marks as coming from another site, so
+/// a web page can't trigger them through the user's browser. The gateway
+/// forwards the browser's Sec-Fetch-Site; requests without one (local tools)
+/// pass, as before.
+async fn same_site_only(request: Request, next: Next) -> Response {
+    let changes = !matches!(*request.method(), Method::GET | Method::HEAD | Method::OPTIONS);
+    let site = request
+        .headers()
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_ascii_lowercase);
+    if changes && site.as_deref().is_some_and(|s| s != "same-origin" && s != "none") {
+        return ApiError(
+            StatusCode::FORBIDDEN,
+            "cross_site",
+            "Queue changes are only accepted from the Queue page itself.".into(),
+        )
+        .into_response();
+    }
+    next.run(request).await
 }
 
 // ------------------------------------------------------------------ internal
@@ -230,6 +258,9 @@ struct EnqueueBody {
     config: Option<String>,
     #[serde(default)]
     vram_mb: Option<u64>,
+    /// The job runs on another GPU role than its app's usual one (gpu.rs).
+    #[serde(default)]
+    gpu_role: Option<String>,
 }
 
 async fn enqueue(
@@ -271,6 +302,7 @@ async fn enqueue(
         model: body.model,
         config: body.config,
         vram_mb: body.vram_mb,
+        gpu_role: body.gpu_role,
     };
     let done = shared.with_queue(|q, now| q.enqueue(new, now));
     let e = &done.entry;
@@ -724,6 +756,14 @@ struct SettingsPatch {
     /// key -> MiB to set, or null to go back to the recorded peak.
     #[serde(default)]
     vram_overrides: Option<std::collections::BTreeMap<String, Option<u64>>>,
+    /// role -> card ids in order, or null / [] for the role's default.
+    #[serde(default)]
+    gpu_roles: Option<std::collections::BTreeMap<String, Option<Vec<String>>>>,
+    #[serde(default)]
+    prefer_multi_gpu: Option<bool>,
+    /// A card id to make primary, or "" for automatic.
+    #[serde(default)]
+    primary_gpu: Option<String>,
 }
 
 async fn put_settings(
@@ -749,6 +789,28 @@ async fn put_settings(
         }
         if let Some(v) = patch.vram_total_mb {
             s.vram_total_mb = v.min(1 << 22);
+        }
+        if let Some(v) = patch.prefer_multi_gpu {
+            s.prefer_multi_gpu = v;
+        }
+        if let Some(id) = patch.primary_gpu {
+            s.primary_gpu = Some(id).filter(|id| !id.is_empty() && id.len() <= 80);
+        }
+        for (role, cards) in patch.gpu_roles.unwrap_or_default() {
+            if !crate::gpu::ROLES.contains(&role.as_str()) {
+                continue;
+            }
+            let cards: Vec<String> = cards
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|id| !id.is_empty() && id.len() <= 80)
+                .take(16)
+                .collect();
+            if cards.is_empty() {
+                s.gpu_roles.remove(&role);
+            } else {
+                s.gpu_roles.insert(role, cards);
+            }
         }
         for (key, value) in patch.vram_overrides.unwrap_or_default() {
             if key.is_empty() || key.chars().count() > 300 {
@@ -781,6 +843,54 @@ async fn put_settings(
 
 async fn get_vram(State(shared): S) -> Json<Value> {
     Json(shared.vram_status())
+}
+
+async fn get_gpus(State(shared): S) -> Json<Value> {
+    let settings = shared.settings_now();
+    Json(lock(&shared.vram).layout(&settings))
+}
+
+fn loopback(addr: SocketAddr) -> Result<(), ApiError> {
+    if addr.ip().is_loopback() {
+        Ok(())
+    } else {
+        Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "This endpoint is only reachable from localhost.".into(),
+        ))
+    }
+}
+
+/// The GPU layout for launchers on this machine (no secret: nothing in it is
+/// private, and llama-launch / the ComfyUI supervisor don't hold one).
+async fn gpus_internal(
+    State(shared): S,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> Result<Json<Value>, ApiError> {
+    loopback(addr)?;
+    let settings = shared.settings_now();
+    Ok(Json(lock(&shared.vram).layout(&settings)))
+}
+
+#[derive(Deserialize)]
+struct RoleQuery {
+    role: String,
+}
+
+/// ROCR_VISIBLE_DEVICES for one role, as plain text ("" = leave it unset).
+async fn gpus_visible(
+    State(shared): S,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Query(q): Query<RoleQuery>,
+) -> Result<Response, ApiError> {
+    loopback(addr)?;
+    if !crate::gpu::ROLES.contains(&q.role.as_str()) {
+        return Err(invalid(format!("unknown GPU role {:?}", q.role)));
+    }
+    let settings = shared.settings_now();
+    let value = lock(&shared.vram).visible(&q.role, &settings);
+    Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], value).into_response())
 }
 
 #[derive(Deserialize)]

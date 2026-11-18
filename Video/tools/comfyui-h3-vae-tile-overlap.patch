@@ -1,16 +1,16 @@
 diff --git a/comfy/ldm/minimax/vae.py b/comfy/ldm/minimax/vae.py
-index 9f17dad5..8aab23ea 100644
+index 84cc2569..84ab9d25 100644
 --- a/comfy/ldm/minimax/vae.py
 +++ b/comfy/ldm/minimax/vae.py
 @@ -1,6 +1,7 @@
- # MiniMax H3 video VAE: 3D causal CNN encoder + ViT3D decoder.
+ # MiniMax H3 video VAE: 3D causal CNN encoder + ViT3D decoder. The image VAEs pair the encoder with a single-frame ViT decoder.
  
  import math
 +import os
  
  import torch
  import torch.nn as nn
-@@ -460,7 +461,10 @@ class MiniMaxH3VideoVAE(nn.Module):
+@@ -609,7 +610,10 @@ class MiniMaxH3VideoVAE(nn.Module):
          # spatial tiling parameters
          self.tiling = tiling
          self.tile_size = tile_size

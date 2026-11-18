@@ -206,6 +206,12 @@ def _upstream_error(request: Request, prefix: str, status: int, code: str, messa
                     media_type="text/html", headers={"Cache-Control": "no-store"})
 
 
+def _static_cacheable(path: str, rule: dict) -> bool:
+    """A static file under one of the rule's path prefixes and none of its exclusions."""
+    return path.startswith(rule["paths"]) and not path.startswith(rule["exclude"]) if rule.get("exclude") \
+        else path.startswith(rule["paths"])
+
+
 async def proxy_request(
     request: Request,
     upstream_base: str,
@@ -220,8 +226,12 @@ async def proxy_request(
     head_start_inject: str = "",
     location_prefix: str = "",
     body_override: bytes | None = None,
+    static_cache: dict | None = None,
 ) -> Response:
     """Generic streaming reverse-proxy for one upstream app.
+
+    `static_cache` ({"seconds", "paths", "exclude"}, a plugin.json option) lets browsers keep the app's own
+    static files (path prefixes after `prefix`) for `seconds` instead of re-checking each on every visit.
 
     `prefix` (e.g. "/Video") is NOT stripped from the forwarded path by default
     -- downstream apps are built prefix-aware (root_path / APP_PREFIX) and
@@ -375,6 +385,11 @@ async def proxy_request(
         rest = ", ".join(word.strip() for word in cache_control.split(",")
                          if word.strip() and word.strip().lower() != "public")
         _set_header_ci(response_headers, "Cache-Control", f"private, {rest}" if rest else "private")
+    if (static_cache and request.method == "GET" and upstream_response.status_code == 200
+            and _static_cacheable(request.url.path[len(prefix):] if request.url.path.startswith(prefix) else request.url.path,
+                                  static_cache)):
+        _set_header_ci(response_headers, "Cache-Control",
+                       f"private, max-age={static_cache['seconds']}, stale-while-revalidate=604800")
     if is_sse:
         # Never buffer SSE: force no-cache and preserve/assert the
         # X-Accel-Buffering: no hint so nothing downstream (Cloudflare, any

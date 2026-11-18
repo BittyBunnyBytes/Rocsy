@@ -924,3 +924,33 @@ button.bb-conn-stat:focus-visible { outline: 2px solid var(--bb-blue); outline-o
 .bb-loc-addholds { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 8px 12px; border: 1px solid var(--bb-border); border-radius: 9px; }
 .bb-loc-addholds legend { padding: 0 4px; color: var(--bb-muted); font-size: 0.8rem; }
 @media (max-width: 640px) { .bb-loc-holds { grid-template-columns: 1fr 1fr; gap: 6px 12px; } }
+
+/* Settings -> Appearance -> VS Code themes */
+.bb-section-note code { font-size: 0.85em; padding: 1px 5px; border-radius: 4px; background: var(--bb-panel-alt); border: 1px solid var(--bb-border); overflow-wrap: anywhere; }
+.bb-vsc-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; }
+.bb-vsc-input {
+  flex: 1 1 240px; min-width: 0; min-height: 40px; padding: 8px 10px;
+  border: 1px solid var(--bb-border); border-radius: 8px; background: var(--bb-panel-alt); color: var(--bb-text); font: inherit; font-size: 0.9rem;
+}
+.bb-vsc-input:focus { outline: none; border-color: var(--bb-blue); }
+.bb-vsc-upload { display: inline-flex; align-items: center; }
+.bb-vsc-upload:focus-within { outline: 2px solid var(--bb-blue); outline-offset: 2px; }
+.bb-vsc-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bb-vsc-list:empty { display: none; }
+.bb-vsc-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--bb-border); border-radius: 10px; background: var(--bb-panel-alt); }
+.bb-vsc-item.is-selected { border-color: var(--bb-blue); }
+.bb-vsc-swatch { display: inline-flex; flex: none; border-radius: 5px; overflow: hidden; border: 1px solid rgba(127, 127, 127, 0.3); }
+.bb-vsc-swatch span { width: 12px; height: 22px; }
+.bb-vsc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9rem; }
+.bb-vsc-name small { color: var(--bb-muted); margin-left: 6px; }
+.bb-vsc-item .bb-button { padding: 6px 12px; font-size: 0.8rem; }
+.bb-theme-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; font-size: 0.7rem; font-weight: 600; vertical-align: 1px; color: var(--bb-blue); border: 1px solid color-mix(in srgb, var(--bb-blue) 45%, transparent); }
+
+/* Settings -> Maintenance */
+.mt-body { border: 0; margin: 0; padding: 0; min-width: 0; display: contents; }
+.mt-body:disabled .bb-section { opacity: 0.5; }
+.mt-body:disabled .bb-section * { cursor: not-allowed; }
+.mt-warn { color: var(--bb-red); }
+.mt-inline span { display: flex; align-items: center; gap: 8px; color: var(--bb-text); min-height: 40px; }
+.mt-inline small { color: var(--bb-muted); }
+.gt-log-network, .gt-log-daily { color: var(--bb-text); }

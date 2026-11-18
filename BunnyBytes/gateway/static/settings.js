@@ -7,6 +7,13 @@
   const custom = document.getElementById("accent-custom");
   const chips = [...document.querySelectorAll(".bb-accent-chip")];
   let current = { theme: "default", accent: "" };
+  const vscForm = document.getElementById("vsc-form");
+  const vscInput = document.getElementById("vsc-extension");
+  const vscFile = document.getElementById("vsc-file");
+  const vscInstall = document.getElementById("vsc-install");
+  const vscList = document.getElementById("vsc-list");
+  const vscStatus = document.getElementById("vsc-status");
+  let vscBusy = false;
   let saveTimer = null;
   let statusTimer = null;
 
@@ -25,6 +32,7 @@
   }
 
   function renderSelection() {
+    vscList.querySelectorAll(".bb-vsc-item").forEach((item) => item.classList.toggle("is-selected", item.dataset.theme === current.theme));
     grid.querySelectorAll(".bb-theme-card").forEach((card) => {
       const on = card.dataset.theme === current.theme;
       card.classList.toggle("is-selected", on);
@@ -83,9 +91,15 @@
     const name = document.createElement("span");
     name.className = "bb-theme-name";
     name.textContent = theme.name;
+    if (theme.custom) {
+      const tag = document.createElement("span");
+      tag.className = "bb-theme-tag";
+      tag.textContent = theme.light ? "VS Code · light" : "VS Code";
+      name.append(tag);
+    }
     const note = document.createElement("span");
     note.className = "bb-theme-note";
-    note.textContent = theme.note;
+    note.textContent = theme.custom ? theme.note.replace(/^VS Code( · )?/, "").replace(/ · light$/, "") || "Imported theme" : theme.note;
     card.append(mock, name, note);
     card.addEventListener("click", () => change({ theme: theme.id }));
     return card;
@@ -103,6 +117,104 @@
     next.focus();
   });
 
+  function showThemes(data) {
+    current = { theme: data.theme, accent: data.accent };
+    grid.replaceChildren(...data.themes.map(themeCard));
+    vscList.replaceChildren(...data.themes.filter((theme) => theme.custom).map(vscItem));
+    renderSelection();
+  }
+
+  function vscItem(theme) {
+    const item = document.createElement("li");
+    item.className = "bb-vsc-item";
+    item.dataset.theme = theme.id;
+    const swatch = document.createElement("span");
+    swatch.className = "bb-vsc-swatch";
+    swatch.setAttribute("aria-hidden", "true");
+    theme.swatch.forEach((colour) => {
+      const part = document.createElement("span");
+      part.style.background = colour;
+      swatch.append(part);
+    });
+    const name = document.createElement("span");
+    name.className = "bb-vsc-name";
+    name.textContent = theme.name;
+    const source = theme.note.replace(/^VS Code( · )?/, "");
+    if (source) {
+      const small = document.createElement("small");
+      small.textContent = source;
+      name.append(small);
+    }
+    const use = document.createElement("button");
+    use.type = "button";
+    use.className = "bb-button";
+    use.textContent = "Use";
+    use.addEventListener("click", () => change({ theme: theme.id }));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "bb-button bb-button-danger";
+    remove.textContent = "Remove";
+    remove.setAttribute("aria-label", `Remove ${theme.name}`);
+    remove.addEventListener("click", () => vscRequest(`/api/settings/vscode-themes/${encodeURIComponent(theme.id)}`,
+      { method: "DELETE" }, `Removed ${theme.name}`));
+    item.append(swatch, name, use, remove);
+    return item;
+  }
+
+  function setVscStatus(text, kind = "") {
+    vscStatus.textContent = text;
+    vscStatus.dataset.kind = kind;
+  }
+
+  async function vscRequest(url, options, doneText) {
+    if (vscBusy) return;
+    vscBusy = true;
+    vscInstall.disabled = true;
+    vscFile.disabled = true;
+    try {
+      const response = await fetch(url, { ...options, headers: { "X-BB-Action": "1", ...(options.headers || {}) } });
+      if (response.status === 401) { location.href = "/login?next=/Settings"; return; }
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      const before = current.theme;
+      showThemes(data);
+      if (data.imported && data.imported.length) {
+        const names = data.themes.filter((theme) => data.imported.includes(theme.id)).map((theme) => theme.name);
+        setVscStatus(names.length === 1 ? `Added ${names[0]}` : `Added ${names.length} themes`, "ok");
+        // One theme: switch to it straight away (a pack of several: pick one above).
+        if (data.imported.length === 1) change({ theme: data.imported[0] });
+      } else {
+        setVscStatus(doneText, "ok");
+        if (before !== current.theme) preview();
+      }
+    } catch (error) {
+      setVscStatus(error.message, "error");
+    } finally {
+      vscBusy = false;
+      vscInstall.disabled = false;
+      vscFile.disabled = false;
+    }
+  }
+
+  vscForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const extension = vscInput.value.trim();
+    if (!extension) { vscInput.focus(); return; }
+    setVscStatus("Downloading…");
+    vscRequest("/api/settings/vscode-themes", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ extension }),
+    }).then(() => { if (vscStatus.dataset.kind === "ok") vscInput.value = ""; });
+  });
+
+  vscFile.addEventListener("change", () => {
+    const file = vscFile.files[0];
+    if (!file) return;
+    setVscStatus(`Reading ${file.name}…`);
+    vscRequest(`/api/settings/vscode-themes?filename=${encodeURIComponent(file.name)}`, {
+      method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file,
+    }).finally(() => { vscFile.value = ""; });
+  });
+
   chips.forEach((chip) => chip.addEventListener("click", () => change({ accent: chip.dataset.accent })));
   custom.addEventListener("input", () => change({ accent: custom.value }, 400));
 
@@ -112,9 +224,7 @@
       return response.json();
     })
     .then((data) => {
-      current = { theme: data.theme, accent: data.accent };
-      grid.replaceChildren(...data.themes.map(themeCard));
-      renderSelection();
+      showThemes(data);
     })
     .catch((error) => { if (error.message !== "login") setStatus("Couldn't load settings", "error"); });
 })();

@@ -26,4 +26,5 @@ hostctl/storage.json
 # Local Rocsy Voice engine preferences
 /voice/engine_config.json
 hostctl/gputune.json
+hostctl/maintenance.json
 cloudflared/config.yml

@@ -32,6 +32,7 @@ button, input { font: inherit; }
 [data-app="Vid"] { --accent: #8fb8f2; --accent-ink: #0f1c2e; --accent-soft: rgb(143 184 242 / 12%); }
 [data-app="Krea"] { --accent: #f0bf71; --accent-ink: #2a1d08; --accent-soft: rgb(240 191 113 / 12%); }
 [data-app="Mus"] { --accent: #f09ac0; --accent-ink: #2d1220; --accent-soft: rgb(240 154 192 / 12%); }
+[data-app="Model3D"] { --accent: #e79a4f; --accent-ink: #2a1806; --accent-soft: rgb(231 154 79 / 12%); }
 [data-app="Trainer"] { --accent: #7fd6de; --accent-ink: #0b2528; --accent-soft: rgb(127 214 222 / 12%); }
 [data-app="Hermes"] { --accent: #c4a8e8; --accent-ink: #221833; --accent-soft: rgb(196 168 232 / 12%); }
 [data-app="Agent"] { --accent: #a3e5c5; --accent-ink: #10251d; --accent-soft: rgb(163 229 197 / 12%); }
@@ -190,6 +191,7 @@ h1 { margin: 0; font-size: clamp(22px, 3vw, 28px); line-height: 1.2; letter-spac
 .gpu-bar { position: relative; display: flex; height: 14px; border: 1px solid var(--border); border-radius: 999px; background: #0c1317; overflow: hidden; }
 .gpu-bar span { height: 100%; min-width: 2px; transition: width .6s ease; }
 .gpu-bar .seg-floor { background: #3a4a52; }
+.gpu-bar .seg-outside { background: #5a4660; }
 .gpu-bar .seg-job { background: var(--accent); border-right: 1px solid #0c1317; }
 .gpu-bar .seg-extra { background: repeating-linear-gradient(45deg, #5b4a2a 0 4px, #43381f 4px 8px); }
 .gpu-bar .seg-reserve { margin-left: auto; background: repeating-linear-gradient(45deg, #2a2236 0 4px, #1d1826 4px 8px); }
@@ -197,9 +199,25 @@ h1 { margin: 0; font-size: clamp(22px, 3vw, 28px); line-height: 1.2; letter-spac
 .gpu-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--muted); font-size: 11px; }
 .gpu-legend i { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 3px; vertical-align: -1px; background: var(--accent, #3a4a52); }
 .gpu-legend i.k-floor { background: #3a4a52; }
+.gpu-legend i.k-outside { background: #5a4660; }
 .gpu-legend i.k-extra { background: #5b4a2a; }
 .gpu-legend i.k-reserve { background: #2a2236; border: 1px solid #5a4b70; }
 .gpu-legend i.k-used { width: 2px; background: var(--text); }
+.gpu-cards { display: grid; gap: 12px; }
+.gpu-card-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; margin-bottom: 6px; font-size: 12px; color: var(--muted); }
+.gpu-card-head strong { color: var(--text); font-weight: 600; }
+.gpu-card-head .gpu-numbers { font-size: 11.5px; }
+.gpu-list { display: grid; gap: 6px; margin-top: 8px; }
+.gpu-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 12.5px; }
+.gpu-row .muted { color: var(--faint); font-size: 11.5px; overflow-wrap: anywhere; }
+.link-limited { color: #e0b45c; }
+.gpu-roles { display: grid; gap: 8px; margin-top: 8px; }
+.gpu-role { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 240px); align-items: center; gap: 4px 12px; font-size: 12.5px; }
+.gpu-role small { display: block; color: var(--faint); font-size: 11.5px; }
+.gpu-row .make-primary { margin-left: auto; }
+.primary-select { flex: 0 0 auto; max-width: 100%; width: 270px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; font-size: 12.5px; }
+.gpu-role select { width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; }
+@media (max-width: 640px) { .gpu-role { grid-template-columns: minmax(0, 1fr); } }
 .badge-vram { border-color: var(--border); color: var(--muted); font-variant-numeric: tabular-nums; }
 .badge-vram.is-unknown { border-style: dashed; color: var(--faint); }
 

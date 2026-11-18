@@ -299,14 +299,20 @@ def _detect_ltx(h: Header, name: str):
     return (ver, UNTESTED, "AI Toolkit trains LTX from the Hugging Face release (Lightricks/LTX-2.5), not this ComfyUI file; it confirms LTX is set up")
 
 
-# Recognised, but nothing here can train them.
 def _detect_h3_image(h: Header, name: str):
+    """MiniMax H3 Image: Fizgig 9.6+ trains it on the pruned int8 ConvRot file (or the pruned bf16 one, as 4-bit)."""
     if not _is_h3_image(h):
         return None
-    return ("MiniMax H3 Image", UNSUPPORTED,
-            "MiniMax H3 Image (released 2026-11-10): no trainer supports it yet (Fizgig, AI Toolkit, musubi-tuner and "
-            "diffusion-pipe train the H3 video model only; Fizgig's author has published an H3 Image training adapter, so "
-            "update Fizgig when its release adds the model). It renders in Image; H3 Image LoRAs from Models load there")
+    lower = name.lower()
+    if re.search(r"w4a8|w6a8|nvfp4|gguf|w4a4|int4", lower):
+        return ("MiniMax H3 Image · low-bit", UNSUPPORTED,
+                "Fizgig's H3 Image loader takes the int8 ConvRot or a 16-bit file, not w4a8/fp4 (the Image studio's "
+                "render file): download minimax_h3_image_pruned_int8_convrot.safetensors to train")
+    if h.int8:
+        return ("MiniMax H3 Image · ComfyUI int8", READY, "")
+    if h.fp8:
+        return ("MiniMax H3 Image · fp8", UNSUPPORTED, "fp8 file: Fizgig needs the int8 ConvRot or the bf16 pruned file")
+    return ("MiniMax H3 Image · bf16", UNTESTED, "bf16 pruned file: loads as 4-bit (NF4/HQQ); the int8 ConvRot file is the tested base")
 
 
 def _detect_other(h: Header, name: str):
@@ -459,6 +465,26 @@ FAMILIES: list[Family] = [
         "under 50 pictures it can take longer. Write long, detailed captions. A NaN/Inf gradient step is skipped; 25 in a row stop the run.",
         _detect_moss_image, name_hint=r"moss.?image", extra={"finetune": {"lr": "1e-5", "fizgig": "moss_image", "gb": 10.2}}),
     Family(
+        "h3_image", "MiniMax H3 Image", FIZGIG, "Image", IMG,
+        [S("dit", "Base model (pruned int8 DiT)", BASE_FOLDERS, base=True,
+           get={"repo": "Comfy-Org/MiniMax-H3-Image", "path": "diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors", "dest": "diffusion_models", "gb": 21.0}),
+         S("vae", "VAE (H3 Image's own)", ("vae",), suggest=r"h3_image_vae|minimax_h3_image.*vae",
+           get={"repo": "Comfy-Org/MiniMax-H3-Image", "path": "vae/minimax_h3_image_vae_fp16.safetensors", "dest": "vae", "gb": 1.2}),
+         S("text_encoder", "Text encoder (Qwen3-VL 32B, shared with H3)", ("text_encoders", "clip"), suggest=r"qwen3vl_32b.*minimax.*nvfp4|qwen3vl_32b.*minimax",
+           get={"repo": "Comfy-Org/MiniMax-H3", "path": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "dest": "text_encoders", "gb": 15.7}),
+         S("training_adapter", "Fizgig training adapter (recommended)", ("training_adapters", "loras"), required=False,
+           suggest=r"h3_image_training_adapter|fizgig_minimax_h3_image",
+           get={"repo": "ShootTheSound/Fizgig-MiniMax-H3-Image-Training-Adapter", "path": "fizgig_minimax_h3_image_training_adapter.safetensors", "dest": "training_adapters", "gb": 0.15})],
+        ("rank", "epochs", "max_pixels", "learning_rate", "trigger", "save_every"),
+        {"rank": 32, "epochs": 30, "max_pixels": 262144, "learning_rate": "2.5e-4", "save_every": 1},
+        "MiniMax H3 Image uses Fizgig 9.7.3's family trainer (vendor/Fizgig-v9, the same venv). Standard: rank 32, "
+        "Automagic v4 from 2.5e-4, Likeness optimization (more steps at the clean end, on Fizgig's tuned schedule), EMA "
+        "0.98, Fizgig's training adapter (without it people turn into caricatures), 0.25 MP, 30 epochs; Style: rank 16, "
+        "Automagic v3 2.8e-4, 64 epochs. It trains on the pruned int8 ConvRot DiT (21 GB), not the w4a8 file Image "
+        "renders with; the LoRA works on both. H3 Image learns fast: if hands or faces break, try an earlier epoch. "
+        "H3 video LoRAs and adapters don't carry over. Not yet run on this machine (ROCm).",
+        _detect_h3_image, name_hint=r"h3.?image"),
+    Family(
         "anima", "Anima", SDS, "Image", IMG,
         [S("dit", "Base model (Anima DiT)", BASE_FOLDERS, base=True,
            get={"repo": "circlestone-labs/Anima", "path": "", "dest": "diffusion_models", "manual": True}),
@@ -571,7 +597,7 @@ FAMILIES: list[Family] = [
 ]
 
 # Families detected only so the Trainer can say "recognised, but not trainable here".
-_OTHER_DETECTORS = [_detect_h3_image, _detect_other]
+_OTHER_DETECTORS = [_detect_other]
 
 _BY_ID = {f.id: f for f in FAMILIES}
 
@@ -650,8 +676,8 @@ def backend_python(backend: str) -> Path:
 
 
 BACKENDS = {
-    FIZGIG: {"title": "Fizgig", "install": "fizgig", "covers": "Krea 2 · MiniMax H3 · Qwen Image 2.1 · Flux.2 Klein · MOSS-Image",
-             "note": "Qwen Image 2.1 and MOSS-Image run from vendor/Fizgig-latest (v8.7.9) with the same venv."},
+    FIZGIG: {"title": "Fizgig", "install": "fizgig", "covers": "Krea 2 · MiniMax H3 · MiniMax H3 Image · Qwen Image 2.1 · Flux.2 Klein · MOSS-Image",
+             "note": "Qwen Image 2.1 and MOSS-Image run from vendor/Fizgig-latest (v8.7.9), MiniMax H3 Image from vendor/Fizgig-v9 (v9.7.3), with the same venv."},
     SDS: {"title": "kohya sd-scripts", "install": None,
           "covers": "Anima · SDXL · SD 1.5 · Flux.1/Chroma · SD3 · Lumina 2 · HunyuanImage",
           "note": "Uses the checkout and ROCm venv in TRAINER_SDSCRIPTS_DIR (docker-compose.override.yml)."},

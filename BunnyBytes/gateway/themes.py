@@ -16,6 +16,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import vscode_themes
+
 # Palette keys: bg, panel (cards/sidebars), soft (inputs, insets), raised
 # (buttons, hovers), border, text, muted, faint, accent, accent2 (gradient
 # end), violet, green, amber, red.
@@ -70,6 +72,7 @@ MODULES: dict[str, dict[str, str]] = {
     "Vid": {"group": "Create", "label": "Video", "note": "Video generation (MiniMax H3, LTX 2.5, Wan 2.2)"},
     "Krea": {"group": "Create", "label": "Image", "note": "Images with Krea 2, MOSS-Image and Qwen Image"},
     "Mus": {"group": "Create", "label": "Music", "note": "Music generation"},
+    "Model3D": {"group": "Create", "label": "3D Models", "note": "Pictures to 3D models (Hunyuan3D)", "tag": "Experimental"},
     "Voice": {"group": "Create", "note": "Local text to speech"},
     "Code": {"group": "Create", "label": "Vibe Coding", "note": "Coding projects", "tag": "Experimental"},
     "Trainer": {"group": "Create", "note": "LoRA training"},
@@ -85,7 +88,10 @@ DEFAULT_HIDDEN: list[str] = []
 GROUPS = ("Create", "Tools")
 DATASET_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}")  # Trainer's dataset folder names
 DEFAULTS = {"theme": "default", "accent": "", "hidden": DEFAULT_HIDDEN, "order": list(MODULES), "groups": {},
-            "scanner_block": True, "data_saver": "auto", "trainer_art_exclude": []}
+            "scanner_block": True, "data_saver": "auto", "trainer_art_exclude": [],
+            # Settings -> Appearance -> VS Code themes: imported palettes ({id: {name, note, palette, light}}).
+            "custom_themes": {}}
+MAX_CUSTOM_THEMES = 40
 
 
 def _rgba(hex_color: str, alpha: float) -> str:
@@ -100,7 +106,7 @@ def _mix(a: str, b: str, t: float) -> str:
     return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(ca, cb))
 
 
-STUDIO_APPS = {"Vid", "Mus", "Krea", "Trainer", "Queue", "Connections", "Agent", "Voice", "Models", "Cache", "REA"}
+STUDIO_APPS = {"Vid", "Mus", "Model3D", "Krea", "Trainer", "Queue", "Connections", "Agent", "Voice", "Models", "Cache", "REA"}
 APPS = STUDIO_APPS | {"home", "Llama", "Hermes"}
 
 
@@ -150,10 +156,12 @@ def _hermes_vars(p: dict[str, str]) -> dict[str, str]:
     return {"--background": p["bg"], "--background-base": p["bg"], "--midground": p["text"], "--midground-base": p["text"]}
 
 
-def build_css(theme_id: str, accent: str = "", app: str = "home") -> str:
+def build_css(theme_id: str, accent: str = "", app: str = "home", custom: dict[str, Any] | None = None) -> str:
     """The stylesheet for one theme (+ optional accent override) as one app
-    sees it. Studio default with no accent overrides nothing."""
-    theme = THEMES.get(theme_id) or THEMES["default"]
+    sees it. Studio default with no accent overrides nothing. `custom` = the
+    imported VS Code themes (settings' custom_themes)."""
+    theme = THEMES.get(theme_id) or (custom or {}).get(theme_id) or THEMES["default"]
+    scheme = "light" if theme.get("light") else "dark"
     app = app if app in APPS else "home"
     palette = dict(theme["palette"] or {})
     if accent and HEX.match(accent):
@@ -181,7 +189,7 @@ def build_css(theme_id: str, accent: str = "", app: str = "home") -> str:
         "--accent-gradient": f"linear-gradient(135deg, {_mix(palette['accent'], '#ffffff', 0.1)} 0%, {palette['accent2']} 100%)"})}
     body = "\n".join(f"  {key}: {value};" for key, value in variables.items())
     # :root:root outranks each studio's own :root block wherever the link lands.
-    return (head + f":root:root {{\n  color-scheme: dark;\n{body}\n}}\n"
+    return (head + f":root:root {{\n  color-scheme: {scheme};\n{body}\n}}\n"
             + (f"html, body {{ background-color: {palette['bg']}; }}\n" if "bg" in palette else "")
             # Krea hard-codes its Generate button / ETA gradient instead of using a variable.
             + ":root .primary-button, :root .eta-value { background-image: var(--accent-gradient); }\n"
@@ -233,7 +241,8 @@ def clean(values: dict[str, Any]) -> dict[str, Any]:
             group = groups.get(name, MODULES[name]["group"])
             first = next((i for i, other in enumerate(order) if groups.get(other, MODULES[other]["group"]) == group), len(order))
             order.insert(first, name)
-    return {"theme": theme if theme in THEMES else "default", "accent": accent.lower() if HEX.match(accent) else "",
+    custom = vscode_themes.clean_custom(values.get("custom_themes"), MAX_CUSTOM_THEMES)
+    return {"theme": theme if theme in THEMES or theme in custom else "default", "custom_themes": custom, "accent": accent.lower() if HEX.match(accent) else "",
             "hidden": hidden, "order": order, "groups": groups,
             # Settings -> Security -> Connections: auto-block vulnerability scanners.
             "scanner_block": values.get("scanner_block") is not False,
@@ -256,6 +265,10 @@ def module_catalog() -> list[dict[str, str]]:
     return [{"id": name, **spec} for name, spec in MODULES.items()]
 
 
-def catalog() -> list[dict[str, Any]]:
-    return [{"id": key, "name": theme["name"], "note": theme["note"], "swatch": theme["swatch"]}
-            for key, theme in THEMES.items()]
+def catalog(custom: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    built_in = [{"id": key, "name": theme["name"], "note": theme["note"], "swatch": theme["swatch"]}
+                for key, theme in THEMES.items()]
+    imported = [{"id": key, "name": theme["name"], "note": theme["note"], "custom": True, "light": theme["light"],
+                 "swatch": [theme["palette"][k] for k in ("bg", "panel", "accent", "green")]}
+                for key, theme in (custom or {}).items()]
+    return built_in + imported

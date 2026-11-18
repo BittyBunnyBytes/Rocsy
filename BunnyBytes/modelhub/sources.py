@@ -45,7 +45,7 @@ def civitai_category(base: str, model_type: str) -> str:
     if base in AUDIO_BASES:
         return "audio"
     if base in THREE_D_BASES:
-        return "other"
+        return "3d"
     return "image"
 
 
@@ -54,6 +54,8 @@ def all_bases_for(category: str, enum_bases: list[str]) -> list[str]:
         return [b for b in enum_bases if b in VIDEO_BASES or b.startswith("Wan Video")]
     if category == "audio":
         return [b for b in enum_bases if b in AUDIO_BASES]
+    if category == "3d":
+        return [b for b in enum_bases if b in THREE_D_BASES]
     if category == "image":
         return [b for b in enum_bases if b not in VIDEO_BASES and b not in AUDIO_BASES
                 and b not in THREE_D_BASES and not b.startswith("Wan Video")]
@@ -76,8 +78,16 @@ def suggest_dest(kind: str, category: str, model_type: str, base: str, filename:
         return "upscale_models"
     if model_type == "Controlnet":
         return "controlnet"
-    if model_type == "CLIPVision":
+    if model_type == "CLIPVision" or re.search(r"dino.?v[23]|siglip.*vision|clip.?vision", lower):
         return "clip_vision"
+    if category == "3d" or base in THREE_D_BASES:
+        # Hunyuan3D single files bundle their image encoder + VAE: ComfyUI's ImageOnlyCheckpointLoader reads
+        # models/checkpoints (not diffusion_models, even though "Hunyuan" is a UNet base for Image/Video).
+        # TRELLIS.2 / Pixal3D models load with UNETLoader (their VAEs/encoders were sorted above).
+        if "hunyuan" in lower or base == "Hunyuan3D":
+            return "checkpoints"
+        if re.search(r"trellis|pixal", lower) or base in ("Trellis.2", "Pixal3D"):
+            return "diffusion_models"
     if model_type == "UNet" or (model_type in ("Checkpoint", "") and any(base.startswith(b) for b in UNET_BASES)):
         return "diffusion_models"
     if category in ("video",) or lower.endswith(".gguf"):
@@ -108,6 +118,11 @@ HF_BASE_REPOS = {
     "ZImageTurbo": ["Tongyi-MAI/Z-Image-Turbo"], "ZImageBase": ["Tongyi-MAI/Z-Image"],
     "SDXL 1.0": ["stabilityai/stable-diffusion-xl-base-1.0"], "SD 1.5": ["runwayml/stable-diffusion-v1-5"],
     "HiDream": ["HiDream-ai/HiDream-I1-Full", "HiDream-ai/HiDream-I1-Dev"],
+    # 3D (Models -> 3D, the 3D Models studio)
+    "Hunyuan3D": ["tencent/Hunyuan3D-2.1", "tencent/Hunyuan3D-2", "tencent/Hunyuan3D-2mv", "tencent/Hunyuan3D-2mini",
+                  "Comfy-Org/Hunyuan-3D-2.1"],
+    "Trellis.2": ["microsoft/TRELLIS.2-4B", "Comfy-Org/TRELLIS.2"],
+    "Pixal3D": ["TencentARC/Pixal3D", "Comfy-Org/Pixal3D"],
 }
 # LoRAs that load on a newer base too (checked: LTX 2.3 LoRAs fit LTX 2.5's 48 blocks / 4096 dim).
 ALSO_WORKS_ON = {"LTXV 2.5": ["LTXV 2.3"],
@@ -126,6 +141,42 @@ def base_name(base: str) -> str:
 
 def base_family(base: str) -> list[str]:
     return [base] + ALSO_WORKS_ON.get(base, [])
+
+
+def civitai_bases(base: str) -> list[str]:
+    """Civitai's baseModels for a base filter: H3 Image has no base of its own there (see below)."""
+    return ["MiniMax H3"] if base == H3_IMAGE else base_family(base)
+
+
+# MiniMax H3 Image (2026-11) has no base model on Civitai: its LoRAs are filed under the video model's
+# "MiniMax H3" and told apart by name ("MiniMax H3 Image v1.0", "h3 image generator" tag...). Searching
+# baseModels="MiniMax H3 Image" returns nothing, so the H3 Image filter asks for "MiniMax H3" and keeps the
+# ones that say H3 Image; those are then labelled "MiniMax H3 Image" (category image, Image's LoRA gallery).
+# H3 video LoRAs don't load on H3 Image (Fizgig: the weights moved too far), so the split matters.
+H3_IMAGE = "MiniMax H3 Image"
+_H3_IMAGE_TEXT = re.compile(r"h3[\s_.-]*image|h3img|minimax[\s_.-]*image", re.I)
+_H3_VIDEO_TEXT = re.compile(r"\b(\d+[\s_-]*frames?|video|fl2va?|ref2va?|t2va?|i2va?|r2v|clip|motion)\b", re.I)
+
+
+def _h3_image_version(model: dict, version: dict) -> bool:
+    """A "MiniMax H3" Civitai version that is really for MiniMax H3 Image."""
+    if (version.get("baseModel") or "") not in ("MiniMax H3", H3_IMAGE):
+        return False
+    if (version.get("baseModel") or "") == H3_IMAGE:
+        return True
+    own = " ".join([version.get("name") or "", *[(f.get("name") or "") for f in version.get("files") or []]])
+    if _H3_VIDEO_TEXT.search(own):   # e.g. "Minimax H3 Image Upscaler", version "24 Frame Version": a video LoRA
+        return False
+    named = " ".join([model.get("name") or "", own])
+    if _H3_IMAGE_TEXT.search(named):
+        return True
+    # Only a tag says so: trust it when nothing in the name says video ("t2va (T2V) – …" LoRAs carry image tags too).
+    return bool(_H3_IMAGE_TEXT.search(" ".join(model.get("tags") or []))) and not _H3_VIDEO_TEXT.search(named)
+
+
+def civitai_base(model: dict, version: dict) -> str:
+    base = version.get("baseModel") or ""
+    return H3_IMAGE if base == "MiniMax H3" and _h3_image_version(model, version) else base
 
 
 # ---- Civitai -----------------------------------------------------------------
@@ -158,7 +209,7 @@ def _civitai_item(model: dict, source: str) -> dict:
     # The list API often leaves the newest version's images empty (2-7 models per page of 24)
     # while older versions have plenty: use the first version that has one.
     preview, level, media = next((found for found in map(_civitai_preview, versions) if found[0]), ("", 0, "image"))
-    base = first.get("baseModel") or ""
+    base = civitai_base(model, first)
     model_type = model.get("type") or ""
     return {
         "source": source, "id": str(model["id"]), "name": model.get("name") or "",
@@ -212,7 +263,7 @@ def _civitai_versions(model: dict) -> list[dict]:
     model_type = model.get("type") or ""
     out = []
     for version in model.get("modelVersions") or []:
-        base = version.get("baseModel") or ""
+        base = civitai_base(model, version)
         category = civitai_category(base, model_type)
         kind = "lora" if model_type in LORA_TYPES else "model"
         variants = []
@@ -257,6 +308,9 @@ SPARSE_SEARCH_CALLS = 12  # Civitai keyword search: requests per page while resu
 
 async def civitai_search(client: httpx.AsyncClient, source: str, kind: str, category: str, query: str,
                          sort: str, cursor: str, enum_bases: list[str], key: str, base: str = "") -> dict:
+    h3_image = base == H3_IMAGE
+    if h3_image and not query:
+        query = "H3 Image"    # most "MiniMax H3" LoRAs are for video: look among the ones that say H3 Image
     params: list[tuple[str, str]] = [("limit", "24"), ("nsfw", "true" if source == "civitai_red" else "false")]
     if query:
         params.append(("query", query))
@@ -271,15 +325,16 @@ async def civitai_search(client: httpx.AsyncClient, source: str, kind: str, cate
     else:
         params += [("types", t) for t in MODEL_TYPES if t not in ("LLM", "VisionLanguage")]
     if base:
-        params += [("baseModels", b) for b in base_family(base)]
-    elif category in ("image", "video", "audio"):
+        params += [("baseModels", b) for b in civitai_bases(base)]
+    elif category in ("image", "video", "audio", "3d"):
         params += [("baseModels", b) for b in all_bases_for(category, enum_bases)]
     headers = {**UA, **({"Authorization": f"Bearer {key}"} if key else {})}
     url = f"{CIVITAI_HOSTS[source]}/api/v1/models"
     response = await client.get(url, params=params, headers=headers, timeout=30)
     response.raise_for_status()
     data = response.json()
-    models = list(data.get("items") or [])
+    keep = (lambda m: _h3_image_version(m, (m.get("modelVersions") or [{}])[0])) if h3_image else (lambda m: True)
+    models = [m for m in data.get("items") or [] if keep(m)]
     next_cursor = (data.get("metadata") or {}).get("nextCursor") or ""
     # Keyword search filters types/base models AFTER paging the raw hits, so pages come back
     # short or empty with a next cursor anyway ("femboy" + Qwen 2.1 = ~40 empty pages). Read on
@@ -290,7 +345,7 @@ async def civitai_search(client: httpx.AsyncClient, source: str, kind: str, cate
         response = await client.get(url, params=more, headers=headers, timeout=30)
         response.raise_for_status()
         data = response.json()
-        models += data.get("items") or []
+        models += [m for m in data.get("items") or [] if keep(m)]
         next_cursor = (data.get("metadata") or {}).get("nextCursor") or ""
         calls += 1
     items = [_civitai_item(model, source) for model in models]
@@ -365,7 +420,8 @@ async def civitai_by_hash(client: httpx.AsyncClient, sha256: str, key: str) -> d
 # ---- Hugging Face -------------------------------------------------------------
 
 HF_PIPELINES = {"llm": ["text-generation", "image-text-to-text"], "image": ["text-to-image", "image-to-image"],
-                "video": ["text-to-video", "image-to-video"], "audio": ["text-to-audio", "text-to-speech"]}
+                "video": ["text-to-video", "image-to-video"], "audio": ["text-to-audio", "text-to-speech"],
+                "3d": ["image-to-3d", "text-to-3d"]}
 WEIGHT_EXT = (".safetensors", ".gguf", ".ckpt", ".pt", ".pth", ".bin", ".sft")
 PICKLE_EXT = (".bin", ".pt", ".pth")
 # Trainer leftovers that share the weight extensions but aren't models.

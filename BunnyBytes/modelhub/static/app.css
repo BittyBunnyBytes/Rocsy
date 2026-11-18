@@ -812,3 +812,14 @@ a.primary-button:hover { filter: brightness(1.08); }
 .inst-drives { margin-top: 2px; }
 .drive-chip.is-offline { border-style: dashed; }
 .drive-chip .drive-dl { color: var(--kind); font-size: 11px; }
+
+/* Installed: one storage bar per drive (drivebars 2026-11-14). */
+.inst-storage:has(.storage-drive) { display: grid; gap: 14px; }
+.storage-drive { transition: opacity .15s; }
+.storage-drive.is-dim { opacity: .45; }
+.storage-drive.is-offline .storage-bar { border-style: dashed; }
+.storage-drive-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin: 0 0 6px; padding: 0; border: 0; background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.storage-drive-head .kind-dot { align-self: center; flex: none; }
+.storage-drive-head .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.storage-drive-head:hover strong { text-decoration: underline; }
+.secondary-button.is-moving:disabled { opacity: .75; cursor: progress; color: var(--blue); }
